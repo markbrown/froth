@@ -198,6 +198,7 @@ Evaluation maintains three pieces of state:
 | `idToBinder` | `( int -- 'binder )` | Create quoted binder from intern id |
 | `isOperator` | `( 'ident -- int )` | 0 if identifier is an operator, else 1 |
 | `arity` | `( 'ident -- int )` | Get arity (input count) of an operator |
+| `stack` | `( ... -- array )` | Convert entire stack to an array |
 
 ## Library
 

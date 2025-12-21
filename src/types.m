@@ -61,7 +61,8 @@
     ;       op_id_to_ident  % idToIdent  ( int -- 'ident )
     ;       op_id_to_binder % idToBinder ( int -- 'binder )
     ;       op_is_operator  % isOperator ( 'ident -- int )
-    ;       op_arity.       % arity      ( 'ident -- int )
+    ;       op_arity        % arity      ( 'ident -- int )
+    ;       op_stack.       % stack      ( ... -- array )
 
 :- type operator_info
     --->    operator_info(

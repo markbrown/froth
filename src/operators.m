@@ -76,6 +76,7 @@
 :- pred operator_id_to_binder(stack::in, stack::out) is det.
 :- pred operator_is_operator(intern_table::in, stack::in, stack::out) is det.
 :- pred operator_arity_op(intern_table::in, stack::in, stack::out) is det.
+:- pred operator_stack(stack::in, stack::out) is det.
 
 %-----------------------------------------------------------------------%
 
@@ -138,6 +139,7 @@ operator("idToIdent", op_id_to_ident).
 operator("idToBinder", op_id_to_binder).
 operator("isOperator", op_is_operator).
 operator("arity", op_arity).
+operator("stack", op_stack).
 
 %-----------------------------------------------------------------------%
 % Operator arity (number of values popped from stack)
@@ -189,6 +191,7 @@ operator_arity(op_id_to_ident) = 1.
 operator_arity(op_id_to_binder) = 1.
 operator_arity(op_is_operator) = 1.
 operator_arity(op_arity) = 1.
+operator_arity(op_stack) = 0.
 
 %-----------------------------------------------------------------------%
 % init_operators: intern all operator names and build the operator table
@@ -206,7 +209,8 @@ init_operators(!IT) :-
         "isInt", "isString", "isArray", "isMap", "isNil", "isCons",
         "isIdent", "isBinder", "isFunc", "isGen", "isQuote", "isApply",
         "isValue", "unwrap", "intern",
-        "idToString", "idToIdent", "idToBinder", "isOperator", "arity"
+        "idToString", "idToIdent", "idToBinder", "isOperator", "arity",
+        "stack"
     ],
     list.foldl2(intern_operator, OpNames, map.init, OpTable, !IT),
     !:IT = !.IT ^ it_operators := OpTable.
@@ -362,6 +366,9 @@ eval_operator(IT, Op, Env, !Stack, !IO) :-
     ;
         Op = op_arity,
         operator_arity_op(IT, !Stack)
+    ;
+        Op = op_stack,
+        operator_stack(!Stack)
     ).
 
 %-----------------------------------------------------------------------%
@@ -1087,6 +1094,15 @@ operator_arity_op(IT, !Stack) :-
     else
         throw(type_error("identifier", V))
     ).
+
+%-----------------------------------------------------------------------%
+% stack: ( ... -- array ) Convert entire stack to an array
+%-----------------------------------------------------------------------%
+
+operator_stack(!Stack) :-
+    % Stack is LIFO (top first), reverse to get push order (bottom first)
+    Array = array.from_reverse_list(!.Stack),
+    !:Stack = [arrayval(Array)].
 
 %-----------------------------------------------------------------------%
 :- end_module operators.
