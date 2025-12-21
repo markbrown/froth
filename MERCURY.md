@@ -1,0 +1,3 @@
+- compile single Mercury modules with `mmc --make foo.c`
+- ensure all required modules are imported rather than trying to use module qualifiers
+- convert `map` to `assoc_list` to perform bulk operations

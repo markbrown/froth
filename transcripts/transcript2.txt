@@ -1,0 +1,1864 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.74
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+
+> Let's update the REPL to catch exceptions such as stack underflow. 
+
+● Looking at the code, I see the issue. The REPL in froth.m catches eval_error exceptions, but builtins.m has its own local builtin_error type that throws different exceptions. These won't be caught.
+
+  The cleanest fix is to move the error types and stack operations to types.m so both eval.m and builtins.m can use them.
+
+● Read(types.m)
+  ⎿  Read 41 lines
+
+● Update(types.m)
+  ⎿  Added 53 lines                                                      
+      32  :- type stack == list(value).
+      33  
+      34  %--------------------------------------------------------------
+          ---------%
+      35 +% Runtime errors                                               
+      36 +%--------------------------------------------------------------
+         +---------%                                                     
+      37  
+      38 +:- type eval_error                                             
+      39 +    --->    stack_underflow(string)         % Operation that ca
+         +used it                                                        
+      40 +    ;       type_error(string, value)       % Expected type, ac
+         +tual value                                                     
+      41 +    ;       undefined_name(name).                              
+      42 +                                                               
+      43 +    % format_error(Error) = Message:                           
+      44 +    % Convert an eval_error to a human-readable message.       
+      45 +    %                                                          
+      46 +:- func format_error(eval_error) = string.                     
+      47 +                                                               
+      48 +%--------------------------------------------------------------
+         +---------%                                                     
+      49 +% Stack operations                                             
+      50 +%--------------------------------------------------------------
+         +---------%                                                     
+      51 +                                                               
+      52 +:- pred push(value::in, stack::in, stack::out) is det.         
+      53 +:- pred pop(string::in, value::out, stack::in, stack::out) is d
+         +et.                                                            
+      54 +                                                               
+      55 +%--------------------------------------------------------------
+         +---------%                                                     
+      56 +                                                               
+      57  :- implementation.
+      58  
+      59 +:- import_module exception.                                    
+      60 +:- import_module string.                                       
+      61 +                                                               
+      62  %--------------------------------------------------------------
+          ---------%
+      63 +                                                               
+      64 +format_error(stack_underflow(Op)) =                            
+      65 +    string.format("stack underflow in '%s'", [s(Op)]).         
+      66 +format_error(type_error(Expected, Actual)) =                   
+      67 +    string.format("type error: expected %s, got %s",           
+      68 +        [s(Expected), s(value_type_name(Actual))]).            
+      69 +format_error(undefined_name(Name)) =                           
+      70 +    string.format("undefined name: %s", [s(Name)]).            
+      71 +                                                               
+      72 +:- func value_type_name(value) = string.                       
+      73 +                                                               
+      74 +value_type_name(intval(_)) = "int".                            
+      75 +value_type_name(stringval(_)) = "string".                      
+      76 +value_type_name(arrayval(_)) = "array".                        
+      77 +value_type_name(closure(_, _)) = "closure".                    
+      78 +                                                               
+      79 +%--------------------------------------------------------------
+         +---------%                                                     
+      80 +                                                               
+      81 +push(V, Stack, [V | Stack]).                                   
+      82 +                                                               
+      83 +pop(Op, V, Stack0, Stack) :-                                   
+      84 +    (                                                          
+      85 +        Stack0 = [V | Stack]                                   
+      86 +    ;                                                          
+      87 +        Stack0 = [],                                           
+      88 +        throw(stack_underflow(Op))                             
+      89 +    ).                                                         
+      90 +                                                               
+      91 +%--------------------------------------------------------------
+         +---------%                                                     
+      92  :- end_module types.
+      93  %--------------------------------------------------------------
+          ---------%
+
+● Now I'll update eval.m to remove the duplicate definitions and use the ones from types.m.
+
+● Update(eval.m)
+  ⎿  Removed 15 lines                                                    
+      12  
+      13  %--------------------------------------------------------------
+          ---------%
+      14  
+      15 -:- type eval_error                                             
+      16 -    --->    stack_underflow(string)         % Operation that ca
+         -used it                                                        
+      17 -    ;       type_error(string, value)       % Expected type, ac
+         -tual value                                                     
+      18 -    ;       undefined_name(name).                              
+      19 -                                                               
+      15      % eval_terms(Terms, !Env, !Stack, !IO):
+      16      % Evaluate a list of terms, updating the environment and st
+          ack.
+      17      % Throws eval_error on failure.
+     ...
+      19  :- pred eval_terms(list(term)::in, env::in, env::out,
+      20      stack::in, stack::out, io::di, io::uo) is det.
+      21  
+      27 -    % format_error(Error) = Message:                           
+      28 -    % Convert an eval_error to a human-readable message.       
+      29 -    %                                                          
+      30 -:- func format_error(eval_error) = string.                     
+      31 -                                                               
+      32 -    % Stack operations.                                        
+      33 -    %                                                          
+      34 -:- pred push(value::in, stack::in, stack::out) is det.         
+      35 -:- pred pop(string::in, value::out, stack::in, stack::out) is d
+         -et.                                                            
+      36 -                                                               
+      22      % Environment operations.
+      23      %
+      24  :- pred get_env(name::in, value::out, env::in) is semidet.
+
+● Update(eval.m)
+  ⎿  Removed 32 lines                                                    
+      32  :- import_module builtins.
+      33  :- import_module exception.
+      34  :- import_module map.
+      35 -:- import_module string.                                       
+      35  
+      36  %--------------------------------------------------------------
+          ---------%
+      38 -                                                               
+      39 -format_error(stack_underflow(Op)) =                            
+      40 -    string.format("stack underflow in '%s'", [s(Op)]).         
+      41 -format_error(type_error(Expected, Actual)) =                   
+      42 -    string.format("type error: expected %s, got %s",           
+      43 -        [s(Expected), s(value_type_name(Actual))]).            
+      44 -format_error(undefined_name(Name)) =                           
+      45 -    string.format("undefined name: %s", [s(Name)]).            
+      46 -                                                               
+      47 -:- func value_type_name(value) = string.                       
+      48 -                                                               
+      49 -value_type_name(intval(_)) = "int".                            
+      50 -value_type_name(stringval(_)) = "string".                      
+      51 -value_type_name(arrayval(_)) = "array".                        
+      52 -value_type_name(closure(_, _)) = "closure".                    
+      53 -                                                               
+      54 -%--------------------------------------------------------------
+         ----------%                                                     
+      55 -% Stack operations                                             
+      56 -%--------------------------------------------------------------
+         ----------%                                                     
+      57 -                                                               
+      58 -push(V, Stack, [V | Stack]).                                   
+      59 -                                                               
+      60 -pop(Op, V, Stack0, Stack) :-                                   
+      61 -    (                                                          
+      62 -        Stack0 = [V | Stack]                                   
+      63 -    ;                                                          
+      64 -        Stack0 = [],                                           
+      65 -        throw(stack_underflow(Op))                             
+      66 -    ).                                                         
+      67 -                                                               
+      68 -%--------------------------------------------------------------
+         ----------%                                                     
+      37  % Environment operations
+      38  %--------------------------------------------------------------
+          ---------%
+      39  
+
+● Read(eval.m)
+  ⎿  Read 172 lines
+
+● Now I'll update builtins.m to use the shared types from types.m.
+
+● Update(builtins.m)
+  ⎿  Error editing file
+
+● Read(builtins.m)
+  ⎿  Read 165 lines
+
+● Update(builtins.m)
+  ⎿  Removed 6 lines                                                     
+      43  
+      44  %--------------------------------------------------------------
+          ---------%
+      45  
+      46 -:- type builtin_error                                          
+      47 -    --->    stack_underflow(string)                            
+      48 -    ;       type_error(string, value).                         
+      49 -                                                               
+      50 -%--------------------------------------------------------------
+         ----------%                                                     
+      51 -                                                               
+      46  builtin("print", bi_print).
+      47  builtin("stack", bi_stack).
+      48  builtin("env", bi_env).
+
+● Update(builtins.m)
+  ⎿  Removed 18 lines                                                    
+      50  builtin("add", bi_add).
+      51  
+      52  %--------------------------------------------------------------
+          ---------%
+      53 -% Stack operations                                             
+      54 -%--------------------------------------------------------------
+         ----------%                                                     
+      55 -                                                               
+      56 -:- pred push(value::in, stack::in, stack::out) is det.         
+      57 -                                                               
+      58 -push(V, Stack, [V | Stack]).                                   
+      59 -                                                               
+      60 -:- pred pop(string::in, value::out, stack::in, stack::out) is d
+         -et.                                                            
+      61 -                                                               
+      62 -pop(Op, V, Stack0, Stack) :-                                   
+      63 -    (                                                          
+      64 -        Stack0 = [V | Stack]                                   
+      65 -    ;                                                          
+      66 -        Stack0 = [],                                           
+      67 -        throw(stack_underflow(Op))                             
+      68 -    ).                                                         
+      69 -                                                               
+      70 -%--------------------------------------------------------------
+         ----------%                                                     
+      53  % print: pop and print a value
+      54  %--------------------------------------------------------------
+          ---------%
+      55  
+
+● Now I need to update froth.m to use types.format_error instead of eval.format_error.
+
+● Update(froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      128          Result = exception(Exn),
+      129          ( if univ_to_type(Exn, EvalError) then
+      130              io.format("Runtime error: %s\n",
+      131 -                [s(eval.format_error(EvalError))], !IO),      
+      131 +                [s(types.format_error(EvalError))], !IO),     
+      132              Env = Env0,
+      133              Stack = Stack0
+      134          else
+
+● Update(froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      187          Result = exception(Exn),
+      188          ( if univ_to_type(Exn, EvalError) then
+      189              io.format("Runtime error: %s\n",
+      190 -                [s(eval.format_error(EvalError))], !IO),      
+      190 +                [s(types.format_error(EvalError))], !IO),     
+      191              io.set_exit_status(1, !IO)
+      192          else
+      193              rethrow(Result)
+
+● Bash(mmc --make froth 2>&1)
+  ⎿  Making Mercury/int3s/froth.int3
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/types.int3
+     … +17 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh)
+  ⎿  PASS: add                    
+     PASS: binder
+     PASS: closure
+     … +8 lines (ctrl+o to expand)
+
+● All tests pass. Let me add a test for stack underflow to verify the exception is being caught.
+
+● Write(tests/stack_underflow.froth)
+  ⎿  Wrote 3 lines to tests/stack_underflow.froth
+      1 # Test stack underflow error
+      2 add
+
+● Bash(./froth tests/stack_underflow.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Runtime error: stack underflow in 'add'
+
+● Write(tests/stack_underflow.expected)
+  ⎿  Wrote 1 lines to tests/stack_underflow.expected
+      1 Runtime error: stack underflow in 'add'
+
+● Write(tests/type_error.froth)
+  ⎿  Wrote 3 lines to tests/type_error.froth
+      1 # Test type error
+      2 1 "hello" add
+
+● Bash(./froth tests/type_error.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Runtime error: type error: expected int, got string
+
+● Write(tests/type_error.expected)
+  ⎿  Wrote 1 lines to tests/type_error.expected            
+      1 Runtime error: type error: expected int, got string
+
+● Bash(./run_tests.sh)
+  ⎿  PASS: add                     
+     PASS: binder
+     PASS: closure
+     … +10 lines (ctrl+o to expand)
+
+● Done. The REPL now properly catches stack underflow and type error exceptions.
+
+  Changes made:
+
+  1. types.m - Added shared error type and stack operations:
+    - eval_error type (stack_underflow, type_error, undefined_name)
+    - format_error/1 function
+    - push/3 and pop/4 predicates
+  2. eval.m - Removed duplicate definitions, now uses types from types.m
+  3. builtins.m - Removed local builtin_error type and push/pop predicates, now uses shared ones from types.m
+  4. froth.m - Updated to use types.format_error instead of eval.format_error
+  5. Added tests for stack_underflow and type_error
+
+  All 11 tests pass. The REPL now catches and displays runtime errors gracefully instead of crashing.
+
+> Let's write a FROTH.md file that documents the lexical syntax, grammar, 
+evaluation rules, and builtins. 
+
+● Write(FROTH.md)
+  ⎿  Wrote 126 lines to FROTH.md                                         
+      1 # Froth Language Reference
+      2 Froth is a stack-based programming language with lexical scoping.
+      3 ## Lexical Syntax
+      4 ### Tokens
+      5 | Token | Pattern | Description |
+      6 |-------|---------|-------------|
+     … +116 lines (ctrl+o to expand)
+
+● Created FROTH.md with documentation covering:
+
+  - Lexical syntax: tokens, comments, whitespace
+  - Grammar: BNF for the term structure
+  - Values: the four value types
+  - Evaluation rules: how each term type is evaluated, including lexical scoping
+  - Builtins: all five builtins with stack effects
+  - Examples: hello world, arithmetic, variables, functions, arrays
+  - Runtime errors: the three error types
+
+> If we have some sort of quoting mechanism then we will be able to 
+represent terms as data. How would you recommend we support that in the 
+syntax? 
+
+● Good question. A few options to consider:
+
+  Option 1: Single quote prefix (')
+  'foo           # quoted identifier
+  '/x            # quoted binder
+  '{ 1 2 add }   # quoted function (terms, not a closure)
+  '[ 1 2 3 ]     # quoted generator
+  '42            # quoted literal
+  Pros: Concise, familiar from Lisp. Quote applies to exactly one term.
+
+  Option 2: Backtick prefix (`)
+  Same as above but uses backtick. Leaves single quote available for character literals if you ever want those.
+
+  Option 3: quote keyword
+  quote foo
+  quote { 1 2 add }
+  Pros: No new syntax, just a builtin that affects parsing. Cons: More verbose.
+
+  ---
+  My recommendation: Single quote prefix
+
+  It's concise and the semantics are clear - quote the immediately following term. Implementation:
+
+  1. Lexer: Add quote token for '
+  2. Parser: When quote is seen, parse the next term and wrap it: quoted(term)
+  3. Types: Add a new value type:
+  value ::= ... | termval(term)
+  4. Evaluation: quoted(T) pushes termval(T) onto the stack (no evaluation of T)
+  5. New builtin: eval pops a termval and evaluates it in the current context
+
+  This would enable metaprogramming:
+  '{ 1 2 add } /code
+  code eval print        # prints 3
+
+  # Building terms dynamically
+  [ 'print '/ 'x ] print  # prints the terms themselves
+
+  Do you want single quote, backtick, or something else?
+
+> Yes, let's use a single quote as you have recommended. 
+
+● Read(lexer.m)
+  ⎿  Read 494 lines
+
+● I see that single quote is currently used as an alternative string delimiter. I'll change it to be the quote token instead.
+
+● Update(lexer.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      14      --->    name(string)
+      15      ;       slash_name(string)      % The string excludes the l
+          eading /
+      16      ;       number(int)
+      17 -    ;       quoted(string)          % The string excludes the d
+         -elimiters                                                      
+      17 +    ;       string(string)          % The string excludes the d
+         +elimiters                                                      
+      18 +    ;       quote                   % The ' character          
+      19      ;       open_curly
+      20      ;       close_curly
+      21      ;       open_square
+
+● Update(lexer.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      201              Result = ok({close_square, State1})
+      202          else if Char = '"' then
+      203              advance(State0, State1),
+      204 -            read_quoted_string(State1, '"', Pos, Result)      
+      204 +            read_string(State1, Pos, Result)                  
+      205          else if Char = '''' then
+      206              advance(State0, State1),
+      207 -            read_quoted_string(State1, '''', Pos, Result)     
+      207 +            Result = ok({quote, State1})                      
+      208          else if Char = ('/') then
+      209              advance(State0, State1),
+      210              read_slash_name(State1, Result)
+
+● Update(lexer.m)
+  ⎿  Added 9 lines, removed 9 lines                                      
+      368      ).
+      369  
+      370  %-------------------------------------------------------------
+           ----------%
+      371 -% Quoted string tokens                                        
+      371 +% String tokens                                               
+      372  %-------------------------------------------------------------
+           ----------%
+      373  
+      374 -:- pred read_quoted_string(lex_state::in, char::in, position::
+          -in,                                                           
+      374 +:- pred read_string(lex_state::in, position::in,              
+      375      maybe_result({token, lex_state}, lex_error)::out) is det.
+      376  
+      377 -read_quoted_string(State0, Delim, StartPos, Result) :-        
+      378 -    read_string_chars(State0, Delim, StartPos, Chars, StringRe
+          -sult),                                                        
+      377 +read_string(State0, StartPos, Result) :-                      
+      378 +    read_string_chars(State0, StartPos, Chars, StringResult), 
+      379      (
+      380          StringResult = ok(State1),
+      381          String = string.from_char_list(Chars),
+      382 -        Result = ok({quoted(String), State1})                 
+      382 +        Result = ok({string(String), State1})                 
+      383      ;
+      384          StringResult = error(Error),
+      385          Result = error(Error)
+      386      ).
+      387  
+      388 -:- pred read_string_chars(lex_state::in, char::in, position::i
+          -n,                                                            
+      388 +:- pred read_string_chars(lex_state::in, position::in,        
+      389      list(char)::out, maybe_result(lex_state, lex_error)::out) 
+           is det.
+      390  
+      391 -read_string_chars(State0, Delim, StartPos, Chars, Result) :-  
+      391 +read_string_chars(State0, StartPos, Chars, Result) :-         
+      392      ( if at_end(State0) then
+      393          Chars = [],
+      394          Result = error(unterminated_string(StartPos))
+      395      else if peek_char(State0, Char) then
+      396 -        ( if Char = Delim then                                
+      396 +        ( if Char = '"' then                                  
+      397              advance(State0, State1),
+      398              Chars = [],
+      399              Result = ok(State1)
+     ...
+      402              Result = error(unterminated_string(StartPos))
+      403          else
+      404              advance(State0, State1),
+      405 -            read_string_chars(State1, Delim, StartPos, RestCha
+          -rs, Result),                                                  
+      405 +            read_string_chars(State1, StartPos, RestChars, Res
+          +ult),                                                         
+      406              Chars = [Char | RestChars]
+      407          )
+      408      else
+
+● Update(types.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      18      --->    intval(int)
+      19      ;       stringval(string)
+      20      ;       arrayval(array(value))
+      21 -    ;       closure(env, list(term)).                          
+      21 +    ;       closure(env, list(term))                           
+      22 +    ;       termval(term).                                     
+      23  
+      24  :- type term
+      25      --->    identifier(name)
+
+● Update(types.m)
+  ⎿  Added 1 line                                                        
+      26      ;       binder(name)
+      27      ;       function(list(term))
+      28      ;       generator(list(term))
+      29 +    ;       quoted(term)                                       
+      30      ;       value(value).
+      31  
+      32  :- type env == map(name, value).
+
+● Update(types.m)
+  ⎿  Added 1 line                                                        
+      77  value_type_name(stringval(_)) = "string".
+      78  value_type_name(arrayval(_)) = "array".
+      79  value_type_name(closure(_, _)) = "closure".
+      80 +value_type_name(termval(_)) = "term".                          
+      81  
+      82  %--------------------------------------------------------------
+          ---------%
+      83  
+
+● Read(parser.m)
+  ⎿  Read 149 lines
+
+● Update(parser.m)
+  ⎿  Added 1 line                                                        
+      19      ;       unexpected_close_square(position)
+      20      ;       unclosed_curly(position)
+      21      ;       unclosed_square(position)
+      22 +    ;       quote_at_end(position)                             
+      23      ;       junk_token(position, string).
+      24  
+      25  :- type parse_result
+
+● Update(parser.m)
+  ⎿  Added 4 lines, removed 1 line                                       
+       90          Term = value(intval(I)),
+       91          parse_terms(Rest, [Term | RevTerms], Expecting, Result
+           )
+       92      ;
+       93 -        Token = quoted(S),                                    
+       93 +        Token = string(S),                                    
+       94          Term = value(stringval(S)),
+       95          parse_terms(Rest, [Term | RevTerms], Expecting, Result
+           )
+       96      ;
+       97 +        Token = quote,                                        
+       98 +        parse_quoted(Pos, Rest, RevTerms, Expecting, Result)  
+       99 +    ;                                                         
+      100          Token = open_curly,
+      101          parse_terms(Rest, [], curly(Pos), InnerResult),
+      102          (
+
+● Update(parser.m)
+  ⎿  Added 76 lines                                                      
+      148      ).
+      149  
+      150  %-------------------------------------------------------------
+           ----------%
+      151 +% Quote handling: parse one term and wrap it in quoted()      
+      152 +%-------------------------------------------------------------
+          +----------%                                                   
+      153 +                                                              
+      154 +:- pred parse_quoted(position::in, list(located(token))::in, l
+          +ist(term)::in,                                                
+      155 +    expecting::in,                                            
+      156 +    maybe_result({list(term), list(located(token))}, parse_err
+          +or)::out) is det.                                             
+      157 +                                                              
+      158 +parse_quoted(QuotePos, [], _RevTerms, _Expecting, Result) :-  
+      159 +    Result = error(quote_at_end(QuotePos)).                   
+      160 +parse_quoted(_QuotePos, [located(Pos, Token) | Rest], RevTerms
+          +, Expecting,                                                  
+      161 +        Result) :-                                            
+      162 +    parse_single_term(Pos, Token, Rest, SingleResult),        
+      163 +    (                                                         
+      164 +        SingleResult = ok({InnerTerm, Rest2}),                
+      165 +        Term = quoted(InnerTerm),                             
+      166 +        parse_terms(Rest2, [Term | RevTerms], Expecting, Resul
+          +t)                                                            
+      167 +    ;                                                         
+      168 +        SingleResult = error(Error),                          
+      169 +        Result = error(Error)                                 
+      170 +    ).                                                        
+      171 +                                                              
+      172 +    % Parse a single term (not a sequence).                   
+      173 +    %                                                         
+      174 +:- pred parse_single_term(position::in, token::in, list(locate
+          +d(token))::in,                                                
+      175 +    maybe_result({term, list(located(token))}, parse_error)::o
+          +ut) is det.                                                   
+      176 +                                                              
+      177 +parse_single_term(_Pos, name(N), Rest, Result) :-             
+      178 +    Result = ok({identifier(N), Rest}).                       
+      179 +parse_single_term(_Pos, slash_name(N), Rest, Result) :-       
+      180 +    Result = ok({binder(N), Rest}).                           
+      181 +parse_single_term(_Pos, number(I), Rest, Result) :-           
+      182 +    Result = ok({value(intval(I)), Rest}).                    
+      183 +parse_single_term(_Pos, string(S), Rest, Result) :-           
+      184 +    Result = ok({value(stringval(S)), Rest}).                 
+      185 +parse_single_term(Pos, quote, Rest, Result) :-                
+      186 +    % Nested quote: 'foo                                      
+      187 +    (                                                         
+      188 +        Rest = [],                                            
+      189 +        Result = error(quote_at_end(Pos))                     
+      190 +    ;                                                         
+      191 +        Rest = [located(Pos2, Token2) | Rest2],               
+      192 +        parse_single_term(Pos2, Token2, Rest2, InnerResult),  
+      193 +        (                                                     
+      194 +            InnerResult = ok({InnerTerm, Rest3}),             
+      195 +            Result = ok({quoted(InnerTerm), Rest3})           
+      196 +        ;                                                     
+      197 +            InnerResult = error(Error),                       
+      198 +            Result = error(Error)                             
+      199 +        )                                                     
+      200 +    ).                                                        
+      201 +parse_single_term(Pos, open_curly, Rest, Result) :-           
+      202 +    parse_terms(Rest, [], curly(Pos), InnerResult),           
+      203 +    (                                                         
+      204 +        InnerResult = ok({InnerTerms, Rest2}),                
+      205 +        Result = ok({function(InnerTerms), Rest2})            
+      206 +    ;                                                         
+      207 +        InnerResult = error(Error),                           
+      208 +        Result = error(Error)                                 
+      209 +    ).                                                        
+      210 +parse_single_term(Pos, close_curly, _Rest, Result) :-         
+      211 +    Result = error(unexpected_close_curly(Pos)).              
+      212 +parse_single_term(Pos, open_square, Rest, Result) :-          
+      213 +    parse_terms(Rest, [], square(Pos), InnerResult),          
+      214 +    (                                                         
+      215 +        InnerResult = ok({InnerTerms, Rest2}),                
+      216 +        Result = ok({generator(InnerTerms), Rest2})           
+      217 +    ;                                                         
+      218 +        InnerResult = error(Error),                           
+      219 +        Result = error(Error)                                 
+      220 +    ).                                                        
+      221 +parse_single_term(Pos, close_square, _Rest, Result) :-        
+      222 +    Result = error(unexpected_close_square(Pos)).             
+      223 +parse_single_term(Pos, junk(S), _Rest, Result) :-             
+      224 +    Result = error(junk_token(Pos, S)).                       
+      225 +                                                              
+      226 +%-------------------------------------------------------------
+          +----------%                                                   
+      227  :- end_module parser.
+      228  %-------------------------------------------------------------
+           ----------%
+
+● Read(froth.m)
+  ⎿  Read 53 lines
+
+● Update(froth.m)
+  ⎿  Added 2 lines                                                       
+      225      report_at_position(Pos, "unclosed '{'", !IO).
+      226  report_parse_error(unclosed_square(Pos), !IO) :-
+      227      report_at_position(Pos, "unclosed '['", !IO).
+      228 +report_parse_error(quote_at_end(Pos), !IO) :-                 
+      229 +    report_at_position(Pos, "unexpected end after quote", !IO)
+          +.                                                             
+      230  report_parse_error(junk_token(Pos, S), !IO) :-
+      231      report_at_position(Pos,
+      232          string.format("invalid token: '%s'", [s(S)]), !IO).
+
+● Update(froth.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      241  token_to_string(name(S)) = string.format("name '%s'", [s(S)]).
+      242  token_to_string(slash_name(S)) = string.format("/%s", [s(S)]).
+      243  token_to_string(number(N)) = string.format("number %d", [i(N)]
+           ).
+      244 -token_to_string(quoted(S)) = string.format("\"%s\"", [s(S)]). 
+      244 +token_to_string(string(S)) = string.format("\"%s\"", [s(S)]). 
+      245 +token_to_string(quote) = "'''".                               
+      246  token_to_string(open_curly) = "'{'".
+      247  token_to_string(close_curly) = "'}'".
+      248  token_to_string(open_square) = "'['".
+
+● Update(eval.m)
+  ⎿  Added 3 lines                                                       
+      69          Term = generator(Terms),
+      70          eval_generator(Terms, !Env, !Stack, !IO)
+      71      ;
+      72 +        Term = quoted(T),                                      
+      73 +        push(termval(T), !Stack)                               
+      74 +    ;                                                          
+      75          Term = value(V),
+      76          push(V, !Stack)
+      77      ).
+
+● Update(builtins.m)
+  ⎿  Added 1 line                                                        
+      16      ;       bi_stack
+      17      ;       bi_env
+      18      ;       bi_apply
+      19 +    ;       bi_eval                                            
+      20      ;       bi_add.
+      21  
+      22      % builtin(Name, Builtin):
+
+● Update(builtins.m)
+  ⎿  Added 1 line                                                        
+      48  builtin("stack", bi_stack).
+      49  builtin("env", bi_env).
+      50  builtin("apply", bi_apply).
+      51 +builtin("eval", bi_eval).                                      
+      52  builtin("add", bi_add).
+      53  
+      54  %--------------------------------------------------------------
+          ---------%
+
+● Update(eval.m)
+  ⎿  Added 3 lines                                                       
+      109          Builtin = builtins.bi_apply,
+      110          builtin_apply(!Env, !Stack, !IO)
+      111      ;
+      112 +        Builtin = builtins.bi_eval,                           
+      113 +        builtin_eval(!Env, !Stack, !IO)                       
+      114 +    ;                                                         
+      115          Builtin = builtins.bi_add,
+      116          builtins.builtin_add(!Stack)
+      117      ).
+
+● Update(eval.m)
+  ⎿  Added 15 lines                                                      
+      173      ).
+      174  
+      175  %-------------------------------------------------------------
+           ----------%
+      176 +% eval: evaluate a quoted term                                
+      177 +%-------------------------------------------------------------
+          +----------%                                                   
+      178 +                                                              
+      179 +:- pred builtin_eval(env::in, env::out, stack::in, stack::out,
+      180 +    io::di, io::uo) is det.                                   
+      181 +                                                              
+      182 +builtin_eval(!Env, !Stack, !IO) :-                            
+      183 +    pop("eval", V, !Stack),                                   
+      184 +    ( if V = termval(Term) then                               
+      185 +        eval_term(Term, !Env, !Stack, !IO)                    
+      186 +    else                                                      
+      187 +        throw(type_error("term", V))                          
+      188 +    ).                                                        
+      189 +                                                              
+      190 +%-------------------------------------------------------------
+          +----------%                                                   
+      191  :- end_module eval.
+      192  %-------------------------------------------------------------
+           ----------%
+
+● Read(builtins.m)
+  ⎿  Read 143 lines
+
+● Update(builtins.m)
+  ⎿  Added 2 lines                                                       
+      70      array.foldl(print_value, A, !IO).
+      71  print_value(closure(_, _), !IO) :-
+      72      io.write_string("<closure>", !IO).
+      73 +print_value(termval(T), !IO) :-                                
+      74 +    print_term(T, !IO).                                        
+      75  
+      76  %--------------------------------------------------------------
+          ---------%
+      77  % stack: print the stack
+
+● Update(builtins.m)
+  ⎿  Added 26 lines                                                      
+       73  print_value(termval(T), !IO) :-
+       74      print_term(T, !IO).
+       75  
+       76 +:- pred print_term(term::in, io::di, io::uo) is det.          
+       77 +                                                              
+       78 +print_term(identifier(N), !IO) :-                             
+       79 +    io.write_string(N, !IO).                                  
+       80 +print_term(binder(N), !IO) :-                                 
+       81 +    io.format("/%s", [s(N)], !IO).                            
+       82 +print_term(function(Terms), !IO) :-                           
+       83 +    io.write_string("{ ", !IO),                               
+       84 +    list.foldl(print_term_space, Terms, !IO),                 
+       85 +    io.write_string("}", !IO).                                
+       86 +print_term(generator(Terms), !IO) :-                          
+       87 +    io.write_string("[ ", !IO),                               
+       88 +    list.foldl(print_term_space, Terms, !IO),                 
+       89 +    io.write_string("]", !IO).                                
+       90 +print_term(quoted(T), !IO) :-                                 
+       91 +    io.write_string("'", !IO),                                
+       92 +    print_term(T, !IO).                                       
+       93 +print_term(value(V), !IO) :-                                  
+       94 +    print_value(V, !IO).                                      
+       95 +                                                              
+       96 +:- pred print_term_space(term::in, io::di, io::uo) is det.    
+       97 +                                                              
+       98 +print_term_space(T, !IO) :-                                   
+       99 +    print_term(T, !IO),                                       
+      100 +    io.write_string(" ", !IO).                                
+      101 +                                                              
+      102  %-------------------------------------------------------------
+           ----------%
+      103  % stack: print the stack
+      104  %-------------------------------------------------------------
+           ----------%
+
+● Update(builtins.m)
+  ⎿  Added 4 lines                                                       
+      127      io.write_string(")", !IO).
+      128  print_value_debug(closure(_, _), !IO) :-
+      129      io.write_string("<closure>", !IO).
+      130 +print_value_debug(termval(T), !IO) :-                         
+      131 +    io.write_string("term(", !IO),                            
+      132 +    print_term(T, !IO),                                       
+      133 +    io.write_string(")", !IO).                                
+      134  
+      135  :- pred print_array_elem_debug(value::in, io::di, io::uo) is d
+           et.
+      136  
+
+● Bash(mmc --make froth 2>&1)
+  ⎿  Making Mercury/int3s/froth.int3
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/types.int3
+     … +22 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh)
+  ⎿  PASS: add                     
+     PASS: binder
+     PASS: closure
+     … +10 lines (ctrl+o to expand)
+
+● Now let me add tests for quoting.
+
+● Write(tests/quote.froth)
+  ⎿  Wrote 5 lines to tests/quote.froth
+      1 # Test quoting and eval
+      2 'foo print
+      3 '{ 1 2 add } print
+      4 '42 eval print
+
+● Bash(./froth tests/quote.froth 2>&1)
+  ⎿  foo        
+     { 1 2 add }
+     42
+
+● Write(tests/quote.expected)
+  ⎿  Wrote 3 lines to tests/quote.expected
+      1 foo
+      2 { 1 2 add }
+      3 42
+
+● Write(tests/eval.froth)
+  ⎿  Wrote 12 lines to tests/eval.froth            
+      1 # Test eval builtin
+      2 # eval evaluates in the current environment
+      3 5 /x
+      4 'x eval print
+      5 # eval can evaluate function bodies
+      6 '{ 1 2 add } eval print
+      7 # nested quotes
+     … +2 lines (ctrl+o to expand)
+
+● Bash(./froth tests/eval.froth 2>&1)
+  ⎿  5        
+     <closure>
+     foo
+
+● Write(tests/eval.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+       4  5 /x
+       5  'x eval print
+       6  
+       7 -# eval can evaluate function bodies                            
+       8 -'{ 1 2 add } eval print                                        
+       7 +# eval on a function creates a closure                         
+       8 +'{ 1 2 add } eval apply print                                  
+       9  
+      10  # nested quotes
+      11  ''foo eval print
+
+● Bash(./froth tests/eval.froth 2>&1)
+  ⎿  5  
+     3
+     foo
+
+● Write(tests/eval.expected)
+  ⎿  Wrote 3 lines to tests/eval.expected
+      1 5
+      2 3
+      3 foo
+
+● Bash(./run_tests.sh)
+  ⎿  PASS: add                     
+     PASS: binder
+     PASS: closure
+     … +12 lines (ctrl+o to expand)
+
+● Read(FROTH.md)
+  ⎿  Read 126 lines
+
+● Write(FROTH.md)
+  ⎿  Added 24 lines, removed 3 lines                                     
+      11  | `name` | `[-]?[a-zA-Z][-a-zA-Z0-9]*` | Identifier |
+      12  | `slash_name` | `/` followed by a name | Binder (variable defi
+          nition) |
+      13  | `number` | `[-+]?[0-9]+` | Integer literal |
+      14 -| `quoted` | `"..."` | String literal (supports `\\`, `\"`, `\n
+         -`, `\t`) |                                                     
+      14 +| `string` | `"..."` | String literal |                        
+      15 +| `'` | | Quote (prevents evaluation) |                        
+      16  | `{` `}` | | Function delimiters |
+      17  | `[` `]` | | Generator delimiters |
+      18  
+     ...
+      29  
+      30  ```
+      31  program     ::= term*
+      31 -term        ::= identifier | binder | function | generator | li
+         -teral                                                          
+      32 +term        ::= identifier | binder | function | generator | qu
+         +oted | literal                                                 
+      33  identifier  ::= name
+      34  binder      ::= slash_name
+      35  function    ::= '{' term* '}'
+      36  generator   ::= '[' term* ']'
+      36 -literal     ::= number | quoted                                
+      37 +quoted      ::= "'" term                                       
+      38 +literal     ::= number | string                                
+      39  ```
+      40  
+      41  ## Values
+     ...
+      46  | `string` | String |
+      47  | `array` | Array of values |
+      48  | `closure` | Function with captured environment |
+      49 +| `term` | Quoted (unevaluated) term |                         
+      50  
+      51  ## Evaluation Rules
+      52  
+     ...
+      63  | `binder` (`/name`) | Pop a value and bind it to `name` in the
+           environment. |
+      64  | `function` (`{ ... }`) | Capture the current environment and 
+          push a closure. |
+      65  | `generator` (`[ ... ]`) | Evaluate terms with an empty stack,
+           collect results into an array, push the array. |
+      66 +| `quoted` (`'term`) | Push the term as a value without evaluat
+         +ing it. |                                                      
+      67  | `literal` | Push the value onto the stack. |
+      68  
+      69  ### Lexical Scoping
+     ...
+      84  | `stack` | `( -- )` | Print the entire stack (for debugging) |
+      85  | `env` | `( -- )` | Print the environment (for debugging) |
+      86  | `apply` | `( closure -- ... )` | Pop a closure and execute it
+           |
+      87 +| `eval` | `( term -- ... )` | Pop a quoted term and evaluate i
+         +t |                                                            
+      88  | `add` | `( a b -- a+b )` | Pop two integers, push their sum |
+      89  
+      90  ## Examples
+     ...
+      121  { { 1 } } apply apply print   # prints 1
+      122  ```
+      123  
+      124 +### Quoting                                                   
+      125 +```                                                           
+      126 +'foo print             # prints: foo                          
+      127 +'{ 1 2 add } print     # prints: { 1 2 add }                  
+      128 +                                                              
+      129 +# eval evaluates a quoted term                                
+      130 +5 /x                                                          
+      131 +'x eval print          # prints: 5                            
+      132 +                                                              
+      133 +# Quoting a function, then evaluating and applying it         
+      134 +'{ 1 2 add } eval apply print  # prints: 3                    
+      135 +                                                              
+      136 +# Nested quotes                                               
+      137 +''foo eval print       # prints: foo                          
+      138 +```                                                           
+      139 +                                                              
+      140  ## Runtime Errors
+      141  
+      142  | Error | Cause |
+
+● Bash(./run_tests.sh)
+  ⎿  PASS: add                     
+     PASS: binder
+     PASS: closure
+     … +12 lines (ctrl+o to expand)
+
+● Done. The quoting mechanism is now implemented:
+
+  Summary of changes:
+
+  1. Lexer (lexer.m):
+    - Renamed quoted token to string
+    - Added quote token for '
+    - Single quote no longer works as a string delimiter
+  2. Types (types.m):
+    - Added termval(term) to the value type
+    - Added quoted(term) to the term type
+  3. Parser (parser.m):
+    - Added parse_quoted and parse_single_term predicates
+    - 'term parses as quoted(term)
+    - Added quote_at_end parse error
+  4. Eval (eval.m):
+    - quoted(T) pushes termval(T) onto the stack
+    - Added builtin_eval that pops a termval and evaluates it
+  5. Builtins (builtins.m):
+    - Added bi_eval builtin
+    - Added print_term for printing quoted terms
+  6. Documentation (FROTH.md):
+    - Updated with quoting syntax, grammar, evaluation rules, and examples
+
+  All 13 tests pass.
+
+> /context 
+  ⎿                                                                                  
+      Context Usage                                                                  
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛀   claude-opus-4-5-20251101 · 136k/200k tokens (68%)         
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁                                                             
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.0k tokens (1.5%)                       
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 15.2k tokens (7.6%)                       
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛶ ⛶ ⛶   ⛁ Memory files: 38 tokens (0.0%)                          
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Messages: 73.1k tokens (36.5%)                          
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 64k (31.8%)                                 
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)                
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝                                                             
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝                                                             
+                                                                                     
+     Memory files · /memory                                                          
+     └ Project (/home/mark/Documents/projects/froth/CLAUDE.md): 38 tokens            
+                                                                                     
+     SlashCommand Tool · 0 commands                                                  
+     └ Total: 877 tokens                                                             
+                                                                                     
+     
+     
+
+> Let's add a string table so that we can represent string values with an 
+integer id. Strings are immutable, and cannot be dynamically constructed, so
+ all strings should be known by the end of lexical analysis. That means eval
+ should only require the string     
+  table as an input, although the REPL will still need to have the string 
+table threaded through. Does that make sense? 
+
+● Yes, that makes sense. Interning strings during lexing and using integer IDs afterward is efficient - faster comparisons and single storage.
+
+  Let me plan the implementation:
+
+  1. String table type in types.m - bidirectional lookup (ID↔string)
+  2. Lexer - returns string table alongside tokens, string(int) token uses ID
+  3. Parser - no changes needed (just passes through the ID)
+  4. Types - stringval(int) instead of stringval(string)
+  5. Eval - takes string table as read-only input
+  6. Builtins - need string table for printing
+  7. REPL - threads string table, merging new strings each line
+
+● Read(types.m)
+  ⎿  Read 97 lines
+
+● Update(types.m)
+  ⎿  Added 13 lines, removed 1 line                                      
+      14  
+      15  :- type name == string.
+      16  
+      17 +:- type string_id == int.                                      
+      18 +                                                               
+      19 +    % String table: bidirectional mapping between strings and I
+         +Ds.                                                            
+      20 +    % All strings are interned during lexing.                  
+      21 +    %                                                          
+      22 +:- type string_table.                                          
+      23 +                                                               
+      24 +:- func empty_string_table = string_table.                     
+      25 +:- pred intern_string(string::in, string_id::out,              
+      26 +    string_table::in, string_table::out) is det.               
+      27 +:- func lookup_string(string_table, string_id) = string.       
+      28 +                                                               
+      29  :- type value
+      30      --->    intval(int)
+      19 -    ;       stringval(string)                                  
+      31 +    ;       stringval(string_id)                               
+      32      ;       arrayval(array(value))
+      33      ;       closure(env, list(term))
+      34      ;       termval(term).
+
+● Update(types.m)
+  ⎿  Added 28 lines                                                      
+       71  :- implementation.
+       72  
+       73  :- import_module exception.
+       74 +:- import_module int.                                         
+       75  :- import_module string.
+       76  
+       77  %-------------------------------------------------------------
+           ----------%
+       78 +% String table implementation                                 
+       79 +%-------------------------------------------------------------
+          +----------%                                                   
+       80  
+       81 +:- type string_table                                          
+       82 +    --->    string_table(                                     
+       83 +                st_next_id      :: int,                       
+       84 +                st_to_id        :: map(string, string_id),    
+       85 +                st_to_string    :: map(string_id, string)     
+       86 +            ).                                                
+       87 +                                                              
+       88 +empty_string_table = string_table(0, map.init, map.init).     
+       89 +                                                              
+       90 +intern_string(String, Id, !Table) :-                          
+       91 +    ToId0 = !.Table ^ st_to_id,                               
+       92 +    ( if map.search(ToId0, String, ExistingId) then           
+       93 +        Id = ExistingId                                       
+       94 +    else                                                      
+       95 +        Id = !.Table ^ st_next_id,                            
+       96 +        map.det_insert(String, Id, ToId0, ToId),              
+       97 +        map.det_insert(Id, String, !.Table ^ st_to_string, ToS
+          +tr),                                                          
+       98 +        !:Table = string_table(Id + 1, ToId, ToStr)           
+       99 +    ).                                                        
+      100 +                                                              
+      101 +lookup_string(Table, Id) = String :-                          
+      102 +    map.lookup(Table ^ st_to_string, Id, String).             
+      103 +                                                              
+      104 +%-------------------------------------------------------------
+          +----------%                                                   
+      105 +                                                              
+      106  format_error(stack_underflow(Op)) =
+      107      string.format("stack underflow in '%s'", [s(Op)]).
+      108  format_error(type_error(Expected, Actual)) =
+
+● Read(lexer.m)
+  ⎿  Read 495 lines
+
+● Now I need to update the lexer to thread the string table and return it. I'll update the interface and implementation.
+
+● Update(lexer.m)
+  ⎿  Added 6 lines, removed 4 lines                                      
+       7  :- interface.
+       8  
+       9  :- import_module list.
+      10 +:- import_module types.                                        
+      11  
+      12  %--------------------------------------------------------------
+          ---------%
+      13  
+     ...
+      15      --->    name(string)
+      16      ;       slash_name(string)      % The string excludes the l
+          eading /
+      17      ;       number(int)
+      17 -    ;       string(string)          % The string excludes the d
+         -elimiters                                                      
+      18 +    ;       string(string_id)       % Interned string ID       
+      19      ;       quote                   % The ' character
+      20      ;       open_curly
+      21      ;       close_curly
+     ...
+      40      ;       unterminated_block_comment(position).
+      41  
+      42  :- type lex_result
+      42 -    --->    ok(list(located(token)))                           
+      43 +    --->    ok(list(located(token)), string_table)             
+      44      ;       error(lex_error).
+      45  
+      45 -    % tokenize(Input, Result):                                 
+      46 +    % tokenize(Input, StringTable, Result):                    
+      47      % Tokenize the input string into a list of located tokens.
+      48 +    % Takes an initial string table (use empty_string_table for
+         + fresh start).                                                 
+      49      %
+      48 -:- pred tokenize(string::in, lex_result::out) is det.          
+      50 +:- pred tokenize(string::in, string_table::in, lex_result::out)
+         + is det.                                                       
+      51  
+      52  %--------------------------------------------------------------
+          ---------%
+      53  
+
+● Update(lexer.m)
+  ⎿  Added 5 lines, removed 4 lines                                      
+      64                  ls_input    :: string,
+      65                  ls_pos      :: int,         % Current position 
+          in string
+      66                  ls_line     :: int,
+      67 -                ls_column   :: int                             
+      67 +                ls_column   :: int,                            
+      68 +                ls_strings  :: string_table                    
+      69              ).
+      70  
+      71      % Internal result type to avoid ambiguity with other ok/err
+          or types.
+     ...
+      75  
+      76  %--------------------------------------------------------------
+          ---------%
+      77  
+      77 -tokenize(Input, Result) :-                                     
+      78 -    State0 = lex_state(Input, 0, 1, 1),                        
+      78 +tokenize(Input, StringTable, Result) :-                        
+      79 +    State0 = lex_state(Input, 0, 1, 1, StringTable),           
+      80      tokenize_loop(State0, [], Result).
+      81  
+      82  :- pred tokenize_loop(lex_state::in, list(located(token))::in,
+     ...
+      87      (
+      88          SkipResult = ok(State1),
+      89          ( if at_end(State1) then
+      89 -            Result = ok(list.reverse(RevTokens))               
+      90 +            Result = ok(list.reverse(RevTokens), State1 ^ ls_st
+         +rings)                                                         
+      91          else
+      92              Pos = position(State1 ^ ls_line, State1 ^ ls_column
+          ),
+      93              read_token(State1, Pos, TokenResult),
+
+● Update(lexer.m)
+  ⎿  Added 3 lines, removed 1 line                                       
+      382      (
+      383          StringResult = ok(State1),
+      384          String = string.from_char_list(Chars),
+      385 -        Result = ok({string(String), State1})                 
+      385 +        intern_string(String, Id, State1 ^ ls_strings, NewStri
+          +ngs),                                                         
+      386 +        State2 = State1 ^ ls_strings := NewStrings,           
+      387 +        Result = ok({string(Id), State2})                     
+      388      ;
+      389          StringResult = error(Error),
+      390          Result = error(Error)
+
+● Read(parser.m)
+  ⎿  Read 30 lines
+
+● Read(parser.m)
+  ⎿  Read 20 lines
+
+● Read(eval.m)
+  ⎿  Read 193 lines
+
+● Update(eval.m)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      12  
+      13  %--------------------------------------------------------------
+          ---------%
+      14  
+      15 -    % eval_terms(Terms, !Env, !Stack, !IO):                    
+      15 +    % eval_terms(StringTable, Terms, !Env, !Stack, !IO):       
+      16      % Evaluate a list of terms, updating the environment and st
+          ack.
+      17 +    % StringTable is read-only (all strings known at lex time).
+      18      % Throws eval_error on failure.
+      19      %
+      19 -:- pred eval_terms(list(term)::in, env::in, env::out,          
+      20 +:- pred eval_terms(string_table::in, list(term)::in, env::in, e
+         +nv::out,                                                       
+      21      stack::in, stack::out, io::di, io::uo) is det.
+      22  
+      23      % Environment operations.
+
+● Update(eval.m)
+  ⎿  Added 8 lines, removed 8 lines                                      
+      48  % Main evaluation
+      49  %--------------------------------------------------------------
+          ---------%
+      50  
+      51 -eval_terms([], !Env, !Stack, !IO).                             
+      52 -eval_terms([Term | Terms], !Env, !Stack, !IO) :-               
+      53 -    eval_term(Term, !Env, !Stack, !IO),                        
+      54 -    eval_terms(Terms, !Env, !Stack, !IO).                      
+      51 +eval_terms(_, [], !Env, !Stack, !IO).                          
+      52 +eval_terms(ST, [Term | Terms], !Env, !Stack, !IO) :-           
+      53 +    eval_term(ST, Term, !Env, !Stack, !IO),                    
+      54 +    eval_terms(ST, Terms, !Env, !Stack, !IO).                  
+      55  
+      56 -:- pred eval_term(term::in, env::in, env::out,                 
+      56 +:- pred eval_term(string_table::in, term::in, env::in, env::out
+         +,                                                              
+      57      stack::in, stack::out, io::di, io::uo) is det.
+      58  
+      59 -eval_term(Term, !Env, !Stack, !IO) :-                          
+      59 +eval_term(ST, Term, !Env, !Stack, !IO) :-                      
+      60      (
+      61          Term = identifier(Name),
+      62 -        eval_identifier(Name, !Env, !Stack, !IO)               
+      62 +        eval_identifier(ST, Name, !Env, !Stack, !IO)           
+      63      ;
+      64          Term = binder(Name),
+      65          eval_binder(Name, !Env, !Stack)
+     ...
+      68          eval_function(Terms, !.Env, !Stack)
+      69      ;
+      70          Term = generator(Terms),
+      71 -        eval_generator(Terms, !Env, !Stack, !IO)               
+      71 +        eval_generator(ST, Terms, !Env, !Stack, !IO)           
+      72      ;
+      73          Term = quoted(T),
+      74          push(termval(T), !Stack)
+
+● Update(eval.m)
+  ⎿  Added 9 lines, removed 9 lines                                      
+       81  % Identifier evaluation
+       82  %-------------------------------------------------------------
+           ----------%
+       83  
+       84 -:- pred eval_identifier(name::in, env::in, env::out,          
+       84 +:- pred eval_identifier(string_table::in, name::in, env::in, e
+          +nv::out,                                                      
+       85      stack::in, stack::out, io::di, io::uo) is det.
+       86  
+       87 -eval_identifier(Name, !Env, !Stack, !IO) :-                   
+       87 +eval_identifier(ST, Name, !Env, !Stack, !IO) :-               
+       88      ( if builtins.builtin(Name, Builtin) then
+       89 -        eval_builtin(Builtin, !Env, !Stack, !IO)              
+       89 +        eval_builtin(ST, Builtin, !Env, !Stack, !IO)          
+       90      else if get_env(Name, V, !.Env) then
+       91          push(V, !Stack)
+       92      else
+       93          throw(undefined_name(Name))
+       94      ).
+       95  
+       96 -:- pred eval_builtin(builtins.builtin::in, env::in, env::out, 
+       96 +:- pred eval_builtin(string_table::in, builtins.builtin::in, e
+          +nv::in, env::out,                                             
+       97      stack::in, stack::out, io::di, io::uo) is det.
+       98  
+       99 -eval_builtin(Builtin, !Env, !Stack, !IO) :-                   
+       99 +eval_builtin(ST, Builtin, !Env, !Stack, !IO) :-               
+      100      (
+      101          Builtin = builtins.bi_print,
+      102 -        builtins.builtin_print(!Stack, !IO)                   
+      102 +        builtins.builtin_print(ST, !Stack, !IO)               
+      103      ;
+      104          Builtin = builtins.bi_stack,
+      105 -        builtins.builtin_stack(!.Stack, !IO)                  
+      105 +        builtins.builtin_stack(ST, !.Stack, !IO)              
+      106      ;
+      107          Builtin = builtins.bi_env,
+      108          builtins.builtin_env(!.Env, !IO)
+      109      ;
+      110          Builtin = builtins.bi_apply,
+      111 -        builtin_apply(!Env, !Stack, !IO)                      
+      111 +        builtin_apply(ST, !Env, !Stack, !IO)                  
+      112      ;
+      113          Builtin = builtins.bi_eval,
+      114 -        builtin_eval(!Env, !Stack, !IO)                       
+      114 +        builtin_eval(ST, !Env, !Stack, !IO)                   
+      115      ;
+      116          Builtin = builtins.bi_add,
+      117          builtins.builtin_add(!Stack)
+
+● Update(eval.m)
+  ⎿  Added 9 lines, removed 9 lines                                      
+      143  % Generator evaluation
+      144  %-------------------------------------------------------------
+           ----------%
+      145  
+      146 -:- pred eval_generator(list(term)::in, env::in, env::out,     
+      146 +:- pred eval_generator(string_table::in, list(term)::in, env::
+          +in, env::out,                                                 
+      147      stack::in, stack::out, io::di, io::uo) is det.
+      148  
+      149 -eval_generator(Terms, !Env, !Stack, !IO) :-                   
+      149 +eval_generator(ST, Terms, !Env, !Stack, !IO) :-               
+      150      % Save current stack, evaluate with empty stack
+      151      SavedStack = !.Stack,
+      152      !:Stack = [],
+      153 -    eval_terms(Terms, !Env, !Stack, !IO),                     
+      153 +    eval_terms(ST, Terms, !Env, !Stack, !IO),                 
+      154      % Convert stack to array (reverse since stack is LIFO)
+      155      Array = array.from_reverse_list(!.Stack),
+      156      % Restore stack and push array
+     ...
+      161  % apply: apply a closure
+      162  %-------------------------------------------------------------
+           ----------%
+      163  
+      164 -:- pred builtin_apply(env::in, env::out, stack::in, stack::out
+          -,                                                             
+      164 +:- pred builtin_apply(string_table::in, env::in, env::out, sta
+          +ck::in, stack::out,                                           
+      165      io::di, io::uo) is det.
+      166  
+      167 -builtin_apply(Env, Env, !Stack, !IO) :-                       
+      167 +builtin_apply(ST, Env, Env, !Stack, !IO) :-                   
+      168      pop("apply", V, !Stack),
+      169      ( if V = closure(ClosureEnv, Terms) then
+      170          % Evaluate with closure's env, then discard env change
+           s (lexical scoping)
+      171 -        eval_terms(Terms, ClosureEnv, _, !Stack, !IO)         
+      171 +        eval_terms(ST, Terms, ClosureEnv, _, !Stack, !IO)     
+      172      else
+      173          throw(type_error("closure", V))
+      174      ).
+     ...
+      177  % eval: evaluate a quoted term
+      178  %-------------------------------------------------------------
+           ----------%
+      179  
+      180 -:- pred builtin_eval(env::in, env::out, stack::in, stack::out,
+      180 +:- pred builtin_eval(string_table::in, env::in, env::out, stac
+          +k::in, stack::out,                                            
+      181      io::di, io::uo) is det.
+      182  
+      183 -builtin_eval(!Env, !Stack, !IO) :-                            
+      183 +builtin_eval(ST, !Env, !Stack, !IO) :-                        
+      184      pop("eval", V, !Stack),
+      185      ( if V = termval(Term) then
+      186 -        eval_term(Term, !Env, !Stack, !IO)                    
+      186 +        eval_term(ST, Term, !Env, !Stack, !IO)                
+      187      else
+      188          throw(type_error("term", V))
+      189      ).
+
+● Read(builtins.m)
+  ⎿  Read 175 lines
+
+● Update(builtins.m)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      26  
+      27      % Individual builtin operations.
+      28      %
+      29 -:- pred builtin_print(stack::in, stack::out, io::di, io::uo) is
+         - det.                                                          
+      30 -:- pred builtin_stack(stack::in, io::di, io::uo) is det.       
+      29 +:- pred builtin_print(string_table::in, stack::in, stack::out, 
+      30 +    io::di, io::uo) is det.                                    
+      31 +:- pred builtin_stack(string_table::in, stack::in, io::di, io::
+         +uo) is det.                                                    
+      32  :- pred builtin_env(env::in, io::di, io::uo) is det.
+      33  :- pred builtin_add(stack::in, stack::out) is det.
+      34  
+
+● Update(builtins.m)
+  ⎿  Added 25 lines, removed 25 lines                                    
+       56  % print: pop and print a value
+       57  %-------------------------------------------------------------
+           ----------%
+       58  
+       59 -builtin_print(!Stack, !IO) :-                                 
+       59 +builtin_print(ST, !Stack, !IO) :-                             
+       60      pop("print", V, !Stack),
+       61 -    print_value(V, !IO),                                      
+       61 +    print_value(ST, V, !IO),                                  
+       62      io.nl(!IO).
+       63  
+       64 -:- pred print_value(value::in, io::di, io::uo) is det.        
+       64 +:- pred print_value(string_table::in, value::in, io::di, io::u
+          +o) is det.                                                    
+       65  
+       66 -print_value(intval(I), !IO) :-                                
+       66 +print_value(_, intval(I), !IO) :-                             
+       67      io.write_int(I, !IO).
+       68 -print_value(stringval(S), !IO) :-                             
+       69 -    io.write_string(S, !IO).                                  
+       70 -print_value(arrayval(A), !IO) :-                              
+       71 -    array.foldl(print_value, A, !IO).                         
+       72 -print_value(closure(_, _), !IO) :-                            
+       68 +print_value(ST, stringval(Id), !IO) :-                        
+       69 +    io.write_string(lookup_string(ST, Id), !IO).              
+       70 +print_value(ST, arrayval(A), !IO) :-                          
+       71 +    array.foldl(print_value(ST), A, !IO).                     
+       72 +print_value(_, closure(_, _), !IO) :-                         
+       73      io.write_string("<closure>", !IO).
+       74 -print_value(termval(T), !IO) :-                               
+       75 -    print_term(T, !IO).                                       
+       74 +print_value(ST, termval(T), !IO) :-                           
+       75 +    print_term(ST, T, !IO).                                   
+       76  
+       77 -:- pred print_term(term::in, io::di, io::uo) is det.          
+       77 +:- pred print_term(string_table::in, term::in, io::di, io::uo)
+          + is det.                                                      
+       78  
+       79 -print_term(identifier(N), !IO) :-                             
+       79 +print_term(_, identifier(N), !IO) :-                          
+       80      io.write_string(N, !IO).
+       81 -print_term(binder(N), !IO) :-                                 
+       81 +print_term(_, binder(N), !IO) :-                              
+       82      io.format("/%s", [s(N)], !IO).
+       83 -print_term(function(Terms), !IO) :-                           
+       83 +print_term(ST, function(Terms), !IO) :-                       
+       84      io.write_string("{ ", !IO),
+       85 -    list.foldl(print_term_space, Terms, !IO),                 
+       85 +    list.foldl(print_term_space(ST), Terms, !IO),             
+       86      io.write_string("}", !IO).
+       87 -print_term(generator(Terms), !IO) :-                          
+       87 +print_term(ST, generator(Terms), !IO) :-                      
+       88      io.write_string("[ ", !IO),
+       89 -    list.foldl(print_term_space, Terms, !IO),                 
+       89 +    list.foldl(print_term_space(ST), Terms, !IO),             
+       90      io.write_string("]", !IO).
+       91 -print_term(quoted(T), !IO) :-                                 
+       91 +print_term(ST, quoted(T), !IO) :-                             
+       92      io.write_string("'", !IO),
+       93 -    print_term(T, !IO).                                       
+       94 -print_term(value(V), !IO) :-                                  
+       95 -    print_value(V, !IO).                                      
+       93 +    print_term(ST, T, !IO).                                   
+       94 +print_term(ST, value(V), !IO) :-                              
+       95 +    print_value(ST, V, !IO).                                  
+       96  
+       97 -:- pred print_term_space(term::in, io::di, io::uo) is det.    
+       97 +:- pred print_term_space(string_table::in, term::in, io::di, i
+          +o::uo) is det.                                                
+       98  
+       99 -print_term_space(T, !IO) :-                                   
+      100 -    print_term(T, !IO),                                       
+       99 +print_term_space(ST, T, !IO) :-                               
+      100 +    print_term(ST, T, !IO),                                   
+      101      io.write_string(" ", !IO).
+      102  
+      103  %-------------------------------------------------------------
+           ----------%
+
+● Update(builtins.m)
+  ⎿  Added 17 lines, removed 17 lines                                    
+      104  % stack: print the stack
+      105  %-------------------------------------------------------------
+           ----------%
+      106  
+      107 -builtin_stack(Stack, !IO) :-                                  
+      107 +builtin_stack(ST, Stack, !IO) :-                              
+      108      io.write_string("--- stack ---\n", !IO),
+      109 -    list.foldl(print_stack_entry, Stack, !IO),                
+      109 +    list.foldl(print_stack_entry(ST), Stack, !IO),            
+      110      io.write_string("-------------\n", !IO).
+      111  
+      112 -:- pred print_stack_entry(value::in, io::di, io::uo) is det.  
+      112 +:- pred print_stack_entry(string_table::in, value::in, io::di,
+          + io::uo) is det.                                              
+      113  
+      114 -print_stack_entry(V, !IO) :-                                  
+      114 +print_stack_entry(ST, V, !IO) :-                              
+      115      io.write_string("  ", !IO),
+      116 -    print_value_debug(V, !IO),                                
+      116 +    print_value_debug(ST, V, !IO),                            
+      117      io.nl(!IO).
+      118  
+      119 -:- pred print_value_debug(value::in, io::di, io::uo) is det.  
+      119 +:- pred print_value_debug(string_table::in, value::in, io::di,
+          + io::uo) is det.                                              
+      120  
+      121 -print_value_debug(intval(I), !IO) :-                          
+      121 +print_value_debug(_, intval(I), !IO) :-                       
+      122      io.format("int(%d)", [i(I)], !IO).
+      123 -print_value_debug(stringval(S), !IO) :-                       
+      124 -    io.format("string(\"%s\")", [s(S)], !IO).                 
+      125 -print_value_debug(arrayval(A), !IO) :-                        
+      123 +print_value_debug(ST, stringval(Id), !IO) :-                  
+      124 +    io.format("string(\"%s\")", [s(lookup_string(ST, Id))], !I
+          +O).                                                           
+      125 +print_value_debug(ST, arrayval(A), !IO) :-                    
+      126      io.write_string("array(", !IO),
+      127 -    array.foldl(print_array_elem_debug, A, !IO),              
+      127 +    array.foldl(print_array_elem_debug(ST), A, !IO),          
+      128      io.write_string(")", !IO).
+      129 -print_value_debug(closure(_, _), !IO) :-                      
+      129 +print_value_debug(_, closure(_, _), !IO) :-                   
+      130      io.write_string("<closure>", !IO).
+      131 -print_value_debug(termval(T), !IO) :-                         
+      131 +print_value_debug(ST, termval(T), !IO) :-                     
+      132      io.write_string("term(", !IO),
+      133 -    print_term(T, !IO),                                       
+      133 +    print_term(ST, T, !IO),                                   
+      134      io.write_string(")", !IO).
+      135  
+      136 -:- pred print_array_elem_debug(value::in, io::di, io::uo) is d
+          -et.                                                           
+      136 +:- pred print_array_elem_debug(string_table::in, value::in, io
+          +::di, io::uo) is det.                                         
+      137  
+      138 -print_array_elem_debug(V, !IO) :-                             
+      139 -    print_value_debug(V, !IO),                                
+      138 +print_array_elem_debug(ST, V, !IO) :-                         
+      139 +    print_value_debug(ST, V, !IO),                            
+      140      io.write_string(" ", !IO).
+      141  
+      142  %-------------------------------------------------------------
+           ----------%
+
+● Read(froth.m)
+  ⎿  Read 255 lines
+
+● Update(froth.m)
+  ⎿  Added 20 lines, removed 14 lines                                    
+      71      io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO)
+          ,
+      72      Env0 = map.init,
+      73      Stack0 = [],
+      74 -    repl_loop(Env0, Stack0, !IO).                              
+      74 +    StringTable0 = empty_string_table,                         
+      75 +    repl_loop(StringTable0, Env0, Stack0, !IO).                
+      76  
+      76 -:- pred repl_loop(env::in, stack::in, io::di, io::uo) is cc_mul
+         -ti.                                                            
+      77 +:- pred repl_loop(string_table::in, env::in, stack::in,        
+      78 +    io::di, io::uo) is cc_multi.                               
+      79  
+      78 -repl_loop(Env0, Stack0, !IO) :-                                
+      80 +repl_loop(StringTable0, Env0, Stack0, !IO) :-                  
+      81      io.write_string("> ", !IO),
+      82      io.flush_output(!IO),
+      83      io.read_line_as_string(ReadResult, !IO),
+      84      (
+      85          ReadResult = ok(Line),
+      84 -        repl_eval(Line, Env0, Env, Stack0, Stack, !IO),        
+      85 -        repl_loop(Env, Stack, !IO)                             
+      86 +        repl_eval(Line, StringTable0, StringTable, Env0, Env, S
+         +tack0, Stack,                                                  
+      87 +            !IO),                                              
+      88 +        repl_loop(StringTable, Env, Stack, !IO)                
+      89      ;
+      90          ReadResult = eof,
+      91          io.nl(!IO)
+     ...
+       96          io.set_exit_status(1, !IO)
+       97      ).
+       98  
+       96 -:- pred repl_eval(string::in, env::in, env::out, stack::in, st
+          -ack::out,                                                     
+       97 -    io::di, io::uo) is cc_multi.                              
+       99 +:- pred repl_eval(string::in, string_table::in, string_table::
+          +out,                                                          
+      100 +    env::in, env::out, stack::in, stack::out, io::di, io::uo) 
+          +is cc_multi.                                                  
+      101  
+       99 -repl_eval(Input, Env0, Env, Stack0, Stack, !IO) :-            
+      100 -    lexer.tokenize(Input, LexResult),                         
+      102 +repl_eval(Input, StringTable0, StringTable, Env0, Env, Stack0,
+          + Stack, !IO) :-                                               
+      103 +    lexer.tokenize(Input, StringTable0, LexResult),           
+      104      (
+      102 -        LexResult = ok(Tokens),                               
+      105 +        LexResult = ok(Tokens, StringTable1),                 
+      106          parser.parse(Tokens, ParseResult),
+      107          (
+      108              ParseResult = ok(Terms),
+      106 -            execute_repl(Terms, Env0, Env, Stack0, Stack, !IO)
+      109 +            execute_repl(StringTable1, Terms, Env0, Env, Stack
+          +0, Stack, !IO),                                               
+      110 +            StringTable = StringTable1                        
+      111          ;
+      112              ParseResult = error(ParseError),
+      113              report_parse_error(ParseError, !IO),
+      114 +            StringTable = StringTable1,                       
+      115              Env = Env0,
+      116              Stack = Stack0
+      117          )
+      118      ;
+      119          LexResult = error(LexError),
+      120          report_lex_error(LexError, !IO),
+      121 +        StringTable = StringTable0,                           
+      122          Env = Env0,
+      123          Stack = Stack0
+      124      ).
+      125  
+      120 -:- pred execute_repl(list(term)::in, env::in, env::out,       
+      126 +:- pred execute_repl(string_table::in, list(term)::in, env::in
+          +, env::out,                                                   
+      127      stack::in, stack::out, io::di, io::uo) is cc_multi.
+      128  
+      123 -execute_repl(Terms, Env0, Env, Stack0, Stack, !IO) :-         
+      124 -    try_io(eval_terms_wrapper(Terms, Env0, Stack0), Result, !I
+          -O),                                                           
+      129 +execute_repl(StringTable, Terms, Env0, Env, Stack0, Stack, !IO
+          +) :-                                                          
+      130 +    try_io(eval_terms_wrapper(StringTable, Terms, Env0, Stack0
+          +), Result, !IO),                                              
+      131      (
+      132          Result = succeeded({Env, Stack})
+      133      ;
+
+● Update(froth.m)
+  ⎿  Added 9 lines, removed 9 lines                                      
+      163  :- pred run(string::in, io::di, io::uo) is cc_multi.
+      164  
+      165  run(Input, !IO) :-
+      166 -    lexer.tokenize(Input, LexResult),                         
+      166 +    lexer.tokenize(Input, empty_string_table, LexResult),     
+      167      (
+      168 -        LexResult = ok(Tokens),                               
+      168 +        LexResult = ok(Tokens, StringTable),                  
+      169          parser.parse(Tokens, ParseResult),
+      170          (
+      171              ParseResult = ok(Terms),
+      172 -            execute(Terms, !IO)                               
+      172 +            execute(StringTable, Terms, !IO)                  
+      173          ;
+      174              ParseResult = error(ParseError),
+      175              report_parse_error(ParseError, !IO),
+     ...
+      181          io.set_exit_status(1, !IO)
+      182      ).
+      183  
+      184 -:- pred execute(list(term)::in, io::di, io::uo) is cc_multi.  
+      184 +:- pred execute(string_table::in, list(term)::in, io::di, io::
+          +uo) is cc_multi.                                              
+      185  
+      186 -execute(Terms, !IO) :-                                        
+      186 +execute(StringTable, Terms, !IO) :-                           
+      187      Env0 = map.init,
+      188      Stack0 = [],
+      189 -    try_io(eval_terms_wrapper(Terms, Env0, Stack0), Result, !I
+          -O),                                                           
+      189 +    try_io(eval_terms_wrapper(StringTable, Terms, Env0, Stack0
+          +), Result, !IO),                                              
+      190      (
+      191          Result = succeeded({_, _})
+      192      ;
+     ...
+      200          )
+      201      ).
+      202  
+      203 -:- pred eval_terms_wrapper(list(term)::in, env::in, stack::in,
+      203 +:- pred eval_terms_wrapper(string_table::in, list(term)::in, e
+          +nv::in, stack::in,                                            
+      204      {env, stack}::out, io::di, io::uo) is det.
+      205  
+      206 -eval_terms_wrapper(Terms, Env0, Stack0, {Env, Stack}, !IO) :- 
+      207 -    eval.eval_terms(Terms, Env0, Env, Stack0, Stack, !IO).    
+      206 +eval_terms_wrapper(StringTable, Terms, Env0, Stack0, {Env, Sta
+          +ck}, !IO) :-                                                  
+      207 +    eval.eval_terms(StringTable, Terms, Env0, Env, Stack0, Sta
+          +ck, !IO).                                                     
+      208  
+      209  %-------------------------------------------------------------
+           ----------%
+      210  % Error reporting
+
+● Update(froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      247  token_to_string(name(S)) = string.format("name '%s'", [s(S)]).
+      248  token_to_string(slash_name(S)) = string.format("/%s", [s(S)]).
+      249  token_to_string(number(N)) = string.format("number %d", [i(N)]
+           ).
+      250 -token_to_string(string(S)) = string.format("\"%s\"", [s(S)]). 
+      250 +token_to_string(string(Id)) = string.format("string#%d", [i(Id
+          +)]).                                                          
+      251  token_to_string(quote) = "'''".
+      252  token_to_string(open_curly) = "'{'".
+      253  token_to_string(close_curly) = "'}'".
+
+● Bash(mmc --make froth 2>&1)
+  ⎿  Error: Exit code 1
+     Making Mercury/int3s/froth.int3
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/types.int3
+     Making Mercury/int3s/builtins.int3
+     Making Mercury/int3s/lexer.int3
+     Making Mercury/ints/types.int
+     Making Mercury/ints/parser.int
+     Making Mercury/ints/lexer.int
+     Making Mercury/ints/froth.int
+     … +7 lines (ctrl+o to see all)
+
+● I need to update builtin_env to also take the string table for printing values.
+
+● Update(builtins.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      29  :- pred builtin_print(string_table::in, stack::in, stack::out,
+      30      io::di, io::uo) is det.
+      31  :- pred builtin_stack(string_table::in, stack::in, io::di, io::
+          uo) is det.
+      32 -:- pred builtin_env(env::in, io::di, io::uo) is det.           
+      32 +:- pred builtin_env(string_table::in, env::in, io::di, io::uo) 
+         +is det.                                                        
+      33  :- pred builtin_add(stack::in, stack::out) is det.
+      34  
+      35  %--------------------------------------------------------------
+          ---------%
+
+● Update(builtins.m)
+  ⎿  Added 6 lines, removed 5 lines                                      
+      143  % env: print the environment
+      144  %-------------------------------------------------------------
+           ----------%
+      145  
+      146 -builtin_env(Env, !IO) :-                                      
+      146 +builtin_env(ST, Env, !IO) :-                                  
+      147      io.write_string("--- env ---\n", !IO),
+      148 -    map.foldl(print_env_entry, Env, !IO),                     
+      148 +    map.foldl(print_env_entry(ST), Env, !IO),                 
+      149      io.write_string("-----------\n", !IO).
+      150  
+      151 -:- pred print_env_entry(name::in, value::in, io::di, io::uo) i
+          -s det.                                                        
+      151 +:- pred print_env_entry(string_table::in, name::in, value::in,
+      152 +    io::di, io::uo) is det.                                   
+      153  
+      153 -print_env_entry(Name, V, !IO) :-                              
+      154 +print_env_entry(ST, Name, V, !IO) :-                          
+      155      io.format("  %s = ", [s(Name)], !IO),
+      155 -    print_value_debug(V, !IO),                                
+      156 +    print_value_debug(ST, V, !IO),                            
+      157      io.nl(!IO).
+      158  
+      159  %-------------------------------------------------------------
+           ----------%
+
+● Update(eval.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      105          builtins.builtin_stack(ST, !.Stack, !IO)
+      106      ;
+      107          Builtin = builtins.bi_env,
+      108 -        builtins.builtin_env(!.Env, !IO)                      
+      108 +        builtins.builtin_env(ST, !.Env, !IO)                  
+      109      ;
+      110          Builtin = builtins.bi_apply,
+      111          builtin_apply(ST, !Env, !Stack, !IO)
+
+● Bash(mmc --make froth 2>&1)
+  ⎿  Making Mercury/int3s/eval.int3    
+     Making Mercury/int3s/builtins.int3
+     Making Mercury/ints/eval.int
+     … +14 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh)
+  ⎿  PASS: add                     
+     PASS: binder
+     PASS: closure
+     … +12 lines (ctrl+o to expand)
+
+● Done. All 13 tests pass.
+
+  Summary of changes:
+
+  1. types.m:
+    - Added string_id == int type alias
+    - Added opaque string_table type with empty_string_table, intern_string, and lookup_string
+    - Changed stringval(string) to stringval(string_id)
+  2. lexer.m:
+    - Added string_table to lex_state
+    - Changed string(string) token to string(string_id)
+    - tokenize now takes initial string table and returns it in the result
+    - Strings are interned during lexing via intern_string
+  3. eval.m:
+    - eval_terms now takes string_table as first parameter (read-only)
+    - String table threaded through to all internal evaluation predicates
+  4. builtins.m:
+    - builtin_print, builtin_stack, builtin_env now take string_table
+    - Uses lookup_string to convert string IDs back to strings for printing
+  5. froth.m:
+    - REPL threads string_table through the loop (accumulates strings across lines)
+    - File mode starts with empty_string_table
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁   claude-opus-4-5-20251101 · 181k/200k tokens (90%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 2.9k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 38 tokens (0.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 117.9k tokens (59.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛶ ⛶   ⛶ Free space: 19k (9.7%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 38 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
