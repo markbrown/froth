@@ -1,60 +1,63 @@
 ; lib/eval.froth
 ; Meta-interpreter for Froth
 
-; Arithmetic operator implementations
-
-; eval-add: (stack sim-env -- new-stack new-env 0 | error-message 1)
-{ /sim-env /stack
-  stack isNil 0 = { "stack underflow in +" 1 } {
+; eval-binary-op: (stack sim-env op -- new-stack new-env 0 | error-message 1)
+; Handles binary operators (2 in, 1 out) using ! to apply the operator
+{ /op /sim-env /stack
+  stack isNil 0 = { "stack underflow" 1 } {
     stack fst /b  stack snd /s1
-    s1 isNil 0 = { "stack underflow in +" 1 } {
+    s1 isNil 0 = { "stack underflow" 1 } {
       s1 fst /a  s1 snd /s2
-      a isInt 0 = { b isInt 0 = {
-        s2 a b + , sim-env 0
-      } { "type error in +" 1 } ?!
-      } { "type error in +" 1 } ?!
+      ; Use generator to capture result
+      [ a b op! ] 0 @ /result
+      s2 result , sim-env 0
     } ?!
   } ?!
-} /eval-add
+} /eval-binary-op
 
-; eval-sub: (stack sim-env -- new-stack new-env 0 | error-message 1)
-{ /sim-env /stack
-  stack isNil 0 = { "stack underflow in -" 1 } {
-    stack fst /b  stack snd /s1
-    s1 isNil 0 = { "stack underflow in -" 1 } {
-      s1 fst /a  s1 snd /s2
-      a isInt 0 = { b isInt 0 = {
-        s2 a b - , sim-env 0
-      } { "type error in -" 1 } ?!
-      } { "type error in -" 1 } ?!
+; eval-unary-op: (stack sim-env op -- new-stack new-env 0 | error-message 1)
+; Handles unary operators (1 in, 1 out)
+{ /op /sim-env /stack
+  stack isNil 0 = { "stack underflow" 1 } {
+    stack fst /a  stack snd /s1
+    [ a op! ] 0 @ /result
+    s1 result , sim-env 0
+  } ?!
+} /eval-unary-op
+
+; eval-nullary-op: (stack sim-env op -- new-stack new-env 0 | error-message 1)
+; Handles nullary operators (0 in, 1 out)
+{ /op /sim-env /stack
+  [ op! ] 0 @ /result
+  stack result , sim-env 0
+} /eval-nullary-op
+
+; eval-ternary-op: (stack sim-env op -- new-stack new-env 0 | error-message 1)
+; Handles ternary operators (3 in, 1 out)
+{ /op /sim-env /stack
+  stack isNil 0 = { "stack underflow" 1 } {
+    stack fst /c  stack snd /s1
+    s1 isNil 0 = { "stack underflow" 1 } {
+      s1 fst /b  s1 snd /s2
+      s2 isNil 0 = { "stack underflow" 1 } {
+        s2 fst /a  s2 snd /s3
+        [ a b c op! ] 0 @ /result
+        s3 result , sim-env 0
+      } ?!
     } ?!
   } ?!
-} /eval-sub
+} /eval-ternary-op
 
-; eval-mul: (stack sim-env -- new-stack new-env 0 | error-message 1)
-{ /sim-env /stack
-  stack isNil 0 = { "stack underflow in *" 1 } {
-    stack fst /b  stack snd /s1
-    s1 isNil 0 = { "stack underflow in *" 1 } {
-      s1 fst /a  s1 snd /s2
-      a isInt 0 = { b isInt 0 = {
-        s2 a b * , sim-env 0
-      } { "type error in *" 1 } ?!
-      } { "type error in *" 1 } ?!
-    } ?!
-  } ?!
-} /eval-mul
-
-; eval-eq: (stack sim-env -- new-stack new-env 0 | error-message 1)
-{ /sim-env /stack
-  stack isNil 0 = { "stack underflow in =" 1 } {
-    stack fst /b  stack snd /s1
-    s1 isNil 0 = { "stack underflow in =" 1 } {
-      s1 fst /a  s1 snd /s2
-      s2 a b = , sim-env 0
-    } ?!
-  } ?!
-} /eval-eq
+; eval-operator: (stack sim-env op -- new-stack new-env 0 | error-message 1)
+; Dispatches to the appropriate handler based on operator arity
+{ /op /sim-env /stack
+  op arity /ar
+  ar 0 = 0 = { stack sim-env op eval-nullary-op! } {
+  ar 1 = 0 = { stack sim-env op eval-unary-op! } {
+  ar 2 = 0 = { stack sim-env op eval-binary-op! } {
+  stack sim-env op eval-ternary-op!
+  } ?! } ?! } ?!
+} /eval-operator
 
 ; eval-binder: (stack sim-env term -- new-stack new-env 0 | error-message 1)
 { /term /sim-env /stack
@@ -76,12 +79,11 @@
     sim-env term @ /val
     stack val , sim-env 0
   } {
-  term '+ = 0 = { stack sim-env eval-add! } {
-  term '- = 0 = { stack sim-env eval-sub! } {
-  term '* = 0 = { stack sim-env eval-mul! } {
-  term '= = 0 = { stack sim-env eval-eq! } {
-    "undefined name" 1
-  } ?! } ?! } ?! } ?!
+    term isOperator 0 = {
+      stack sim-env term eval-operator!
+    } {
+      "undefined name" 1
+    } ?!
   } ?!
 } /eval-ident
 

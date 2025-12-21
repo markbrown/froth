@@ -88,11 +88,10 @@ eval_term(IT, Term, !Env, !Stack, !IO) :-
     stack::in, stack::out, io::di, io::uo) is det.
 
 eval_identifier(IT, NameId, Env, !Stack, !IO) :-
-    NameStr = lookup_string(IT ^ it_strings, NameId),
     ( if get_env(NameId, V, Env) then
         push(V, !Stack)
-    else if operators.operator(NameStr, Op) then
-        operators.eval_operator(IT, Op, Env, !Stack, !IO)
+    else if map.search(IT ^ it_operators, NameId, Info) then
+        operators.eval_operator(IT, Info ^ oi_operator, Env, !Stack, !IO)
     else
         throw(undefined_name(NameId))
     ).
@@ -150,8 +149,11 @@ eval_apply(IT, Env, Env, !Stack, !IO) :-
     ( if V = consval(mapval(ClosureEnv), termval(function(Terms))) then
         % Evaluate with closure's env, then discard env changes (lexical scoping)
         eval_terms(IT, Terms, ClosureEnv, _, !Stack, !IO)
+    else if V = termval(identifier(Id)), map.search(IT ^ it_operators, Id, Info) then
+        % Apply a quoted operator
+        operators.eval_operator(IT, Info ^ oi_operator, Env, !Stack, !IO)
     else
-        throw(type_error("closure", V))
+        throw(type_error("closure or operator", V))
     ).
 
 %-----------------------------------------------------------------------%

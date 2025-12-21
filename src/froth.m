@@ -20,10 +20,20 @@
 :- import_module lexer.
 :- import_module list.
 :- import_module map.
+:- import_module operators.
 :- import_module parser.
 :- import_module string.
 :- import_module types.
 :- import_module univ.
+
+%-----------------------------------------------------------------------%
+
+    % Create an intern table with operator names pre-interned.
+    %
+:- func init_intern_table = intern_table.
+
+init_intern_table = IT :-
+    operators.init_operators(empty_intern_table, IT).
 
 %-----------------------------------------------------------------------%
 
@@ -83,7 +93,7 @@ repl(!IO) :-
     io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO),
     Env0 = map.init,
     Stack0 = [],
-    IT0 = empty_intern_table,
+    IT0 = init_intern_table,
     repl_loop(IT0, Env0, Stack0, !IO).
 
 :- pred repl_loop(intern_table::in, env::in, stack::in,
@@ -188,7 +198,7 @@ run_file_then_repl(Filename, !IO) :-
 :- pred run_then_repl(string::in, io::di, io::uo) is cc_multi.
 
 run_then_repl(Input, !IO) :-
-    lexer.tokenize(Input, empty_intern_table, LexResult),
+    lexer.tokenize(Input, init_intern_table, LexResult),
     (
         LexResult = ok(Tokens, IT),
         parser.parse(Tokens, ParseResult),
@@ -231,7 +241,7 @@ execute_then_repl(IT, Terms, !IO) :-
 :- pred run(string::in, io::di, io::uo) is cc_multi.
 
 run(Input, !IO) :-
-    lexer.tokenize(Input, empty_intern_table, LexResult),
+    lexer.tokenize(Input, init_intern_table, LexResult),
     (
         LexResult = ok(Tokens, IT),
         parser.parse(Tokens, ParseResult),
@@ -296,7 +306,7 @@ load_library(LibFile, Result, !IO) :-
     (
         ReadResult = ok(Content),
         LibDir = dir.dirname(LibFile),
-        lexer.tokenize(Content, empty_intern_table, LexResult),
+        lexer.tokenize(Content, init_intern_table, LexResult),
         (
             LexResult = ok(Tokens, IT0),
             extract_string_tokens(IT0, Tokens, FilePaths),

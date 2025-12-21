@@ -11,52 +11,10 @@
 
 %-----------------------------------------------------------------------%
 
-    % Operators.
-    % Each constructor corresponds to a language operator.
+    % init_operators(!IT):
+    % Initialize the operator table by interning all operator names.
     %
-:- type operator
-    --->    op_print        % print  ( a -- )
-    ;       op_dump         % dump   ( -- )
-    ;       op_env          % env    ( -- map )
-    ;       op_add          % +      ( a b -- a+b )
-    ;       op_sub          % -      ( a b -- a-b )
-    ;       op_mul          % *      ( a b -- a*b )
-    ;       op_gt           % >      ( a b -- int )
-    ;       op_lt           % <      ( a b -- int )
-    ;       op_gte          % >=     ( a b -- int )
-    ;       op_lte          % <=     ( a b -- int )
-    ;       op_get          % @      ( container key -- val )
-    ;       op_length       % #      ( container -- int )
-    ;       op_eq           % =      ( a b -- int )
-    ;       op_ite          % ?      ( cond then else -- result )
-    ;       op_nil          % .      ( -- nil )
-    ;       op_cons         % ,      ( tail head -- cons )
-    ;       op_fst          % fst    ( cons -- head )
-    ;       op_snd          % snd    ( cons -- tail )
-    ;       op_write        % write  ( a -- )
-    ;       op_fwrite       % fwrite ( value file -- )
-    ;       op_empty        % $      ( -- map )
-    ;       op_keys         % keys   ( map -- array )
-    ;       op_store        % :      ( map val 'key -- map )
-    ;       op_in           % in     ( map 'key -- int )
-    ;       op_is_int       % isInt    ( a -- int )
-    ;       op_is_string    % isString ( a -- int )
-    ;       op_is_array     % isArray  ( a -- int )
-    ;       op_is_map       % isMap    ( a -- int )
-    ;       op_is_nil       % isNil    ( a -- int )
-    ;       op_is_cons      % isCons   ( a -- int )
-    ;       op_is_ident     % isIdent  ( a -- int )
-    ;       op_is_binder    % isBinder ( a -- int )
-    ;       op_is_func      % isFunc   ( a -- int )
-    ;       op_is_gen       % isGen    ( a -- int )
-    ;       op_is_quote     % isQuote  ( a -- int )
-    ;       op_is_apply     % isApply  ( a -- int )
-    ;       op_is_value     % isValue  ( a -- int )
-    ;       op_unwrap       % unwrap   ( 'value -- value )
-    ;       op_intern       % intern   ( string|'ident|'binder -- int )
-    ;       op_id_to_string % idToString ( int -- string )
-    ;       op_id_to_ident  % idToIdent  ( int -- 'ident )
-    ;       op_id_to_binder.% idToBinder ( int -- 'binder )
+:- pred init_operators(intern_table::in, intern_table::out) is det.
 
     % operator(Name, Op):
     % Map a name to an operator.
@@ -116,6 +74,8 @@
 :- pred operator_id_to_string(stack::in, stack::out) is det.
 :- pred operator_id_to_ident(stack::in, stack::out) is det.
 :- pred operator_id_to_binder(stack::in, stack::out) is det.
+:- pred operator_is_operator(intern_table::in, stack::in, stack::out) is det.
+:- pred operator_arity_op(intern_table::in, stack::in, stack::out) is det.
 
 %-----------------------------------------------------------------------%
 
@@ -129,6 +89,7 @@
 :- import_module list.
 :- import_module map.
 :- import_module pair.
+:- import_module require.
 :- import_module string.
 
 %-----------------------------------------------------------------------%
@@ -175,6 +136,94 @@ operator("intern", op_intern).
 operator("idToString", op_id_to_string).
 operator("idToIdent", op_id_to_ident).
 operator("idToBinder", op_id_to_binder).
+operator("isOperator", op_is_operator).
+operator("arity", op_arity).
+
+%-----------------------------------------------------------------------%
+% Operator arity (number of values popped from stack)
+%-----------------------------------------------------------------------%
+
+:- func operator_arity(operator) = int.
+
+operator_arity(op_print) = 1.
+operator_arity(op_dump) = 0.
+operator_arity(op_env) = 0.
+operator_arity(op_add) = 2.
+operator_arity(op_sub) = 2.
+operator_arity(op_mul) = 2.
+operator_arity(op_gt) = 2.
+operator_arity(op_lt) = 2.
+operator_arity(op_gte) = 2.
+operator_arity(op_lte) = 2.
+operator_arity(op_get) = 2.
+operator_arity(op_length) = 1.
+operator_arity(op_eq) = 2.
+operator_arity(op_ite) = 3.
+operator_arity(op_nil) = 0.
+operator_arity(op_cons) = 2.
+operator_arity(op_fst) = 1.
+operator_arity(op_snd) = 1.
+operator_arity(op_write) = 1.
+operator_arity(op_fwrite) = 2.
+operator_arity(op_empty) = 0.
+operator_arity(op_keys) = 1.
+operator_arity(op_store) = 3.
+operator_arity(op_in) = 2.
+operator_arity(op_is_int) = 1.
+operator_arity(op_is_string) = 1.
+operator_arity(op_is_array) = 1.
+operator_arity(op_is_map) = 1.
+operator_arity(op_is_nil) = 1.
+operator_arity(op_is_cons) = 1.
+operator_arity(op_is_ident) = 1.
+operator_arity(op_is_binder) = 1.
+operator_arity(op_is_func) = 1.
+operator_arity(op_is_gen) = 1.
+operator_arity(op_is_quote) = 1.
+operator_arity(op_is_apply) = 1.
+operator_arity(op_is_value) = 1.
+operator_arity(op_unwrap) = 1.
+operator_arity(op_intern) = 1.
+operator_arity(op_id_to_string) = 1.
+operator_arity(op_id_to_ident) = 1.
+operator_arity(op_id_to_binder) = 1.
+operator_arity(op_is_operator) = 1.
+operator_arity(op_arity) = 1.
+
+%-----------------------------------------------------------------------%
+% init_operators: intern all operator names and build the operator table
+%-----------------------------------------------------------------------%
+
+init_operators(!IT) :-
+    OpNames = [
+        "print", "dump", "env",
+        "+", "-", "*",
+        ">", "<", ">=", "<=",
+        "@", "#", "=", "?",
+        ".", ",", "fst", "snd",
+        "write", "fwrite",
+        "$", "keys", ":", "in",
+        "isInt", "isString", "isArray", "isMap", "isNil", "isCons",
+        "isIdent", "isBinder", "isFunc", "isGen", "isQuote", "isApply",
+        "isValue", "unwrap", "intern",
+        "idToString", "idToIdent", "idToBinder", "isOperator", "arity"
+    ],
+    list.foldl2(intern_operator, OpNames, map.init, OpTable, !IT),
+    !:IT = !.IT ^ it_operators := OpTable.
+
+:- pred intern_operator(string::in, operator_table::in, operator_table::out,
+    intern_table::in, intern_table::out) is det.
+
+intern_operator(Name, !OpTable, !IT) :-
+    ( if operator(Name, Op) then
+        Strings0 = !.IT ^ it_strings,
+        intern_string(Name, Id, Strings0, Strings),
+        !:IT = !.IT ^ it_strings := Strings,
+        Arity = operator_arity(Op),
+        map.det_insert(Id, operator_info(Op, Arity), !OpTable)
+    else
+        unexpected($pred, "unknown operator: " ++ Name)
+    ).
 
 %-----------------------------------------------------------------------%
 % eval_operator: dispatch to operator implementation
@@ -307,6 +356,12 @@ eval_operator(IT, Op, Env, !Stack, !IO) :-
     ;
         Op = op_id_to_binder,
         operator_id_to_binder(!Stack)
+    ;
+        Op = op_is_operator,
+        operator_is_operator(IT, !Stack)
+    ;
+        Op = op_arity,
+        operator_arity_op(IT, !Stack)
     ).
 
 %-----------------------------------------------------------------------%
@@ -999,6 +1054,38 @@ operator_id_to_binder(!Stack) :-
         push(termval(binder(Id)), !Stack)
     else
         throw(type_error("int", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% isOperator: ( 'ident -- int ) Test if identifier is an operator name
+%-----------------------------------------------------------------------%
+
+operator_is_operator(IT, !Stack) :-
+    pop("isOperator", V, !Stack),
+    ( if V = termval(identifier(Id)) then
+        ( if map.contains(IT ^ it_operators, Id) then
+            push(intval(0), !Stack)
+        else
+            push(intval(1), !Stack)
+        )
+    else
+        throw(type_error("identifier", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% arity: ( 'ident -- int ) Get the arity of an operator
+%-----------------------------------------------------------------------%
+
+operator_arity_op(IT, !Stack) :-
+    pop("arity", V, !Stack),
+    ( if V = termval(identifier(Id)) then
+        ( if map.search(IT ^ it_operators, Id, Info) then
+            push(intval(Info ^ oi_arity), !Stack)
+        else
+            throw(type_error("operator", V))
+        )
+    else
+        throw(type_error("identifier", V))
     ).
 
 %-----------------------------------------------------------------------%

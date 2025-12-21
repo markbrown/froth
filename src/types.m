@@ -14,13 +14,71 @@
 
 :- type string_id == int.
 
-    % Intern table: bidirectional mapping between strings and IDs.
-    % All strings (including names) are interned during lexing.
+    % Operators.
+    % Each constructor corresponds to a language operator.
+    %
+:- type operator
+    --->    op_print        % print  ( a -- )
+    ;       op_dump         % dump   ( -- )
+    ;       op_env          % env    ( -- map )
+    ;       op_add          % +      ( a b -- a+b )
+    ;       op_sub          % -      ( a b -- a-b )
+    ;       op_mul          % *      ( a b -- a*b )
+    ;       op_gt           % >      ( a b -- int )
+    ;       op_lt           % <      ( a b -- int )
+    ;       op_gte          % >=     ( a b -- int )
+    ;       op_lte          % <=     ( a b -- int )
+    ;       op_get          % @      ( container key -- val )
+    ;       op_length       % #      ( container -- int )
+    ;       op_eq           % =      ( a b -- int )
+    ;       op_ite          % ?      ( cond then else -- result )
+    ;       op_nil          % .      ( -- nil )
+    ;       op_cons         % ,      ( tail head -- cons )
+    ;       op_fst          % fst    ( cons -- head )
+    ;       op_snd          % snd    ( cons -- tail )
+    ;       op_write        % write  ( a -- )
+    ;       op_fwrite       % fwrite ( value file -- )
+    ;       op_empty        % $      ( -- map )
+    ;       op_keys         % keys   ( map -- array )
+    ;       op_store        % :      ( map val 'key -- map )
+    ;       op_in           % in     ( map 'key -- int )
+    ;       op_is_int       % isInt    ( a -- int )
+    ;       op_is_string    % isString ( a -- int )
+    ;       op_is_array     % isArray  ( a -- int )
+    ;       op_is_map       % isMap    ( a -- int )
+    ;       op_is_nil       % isNil    ( a -- int )
+    ;       op_is_cons      % isCons   ( a -- int )
+    ;       op_is_ident     % isIdent  ( a -- int )
+    ;       op_is_binder    % isBinder ( a -- int )
+    ;       op_is_func      % isFunc   ( a -- int )
+    ;       op_is_gen       % isGen    ( a -- int )
+    ;       op_is_quote     % isQuote  ( a -- int )
+    ;       op_is_apply     % isApply  ( a -- int )
+    ;       op_is_value     % isValue  ( a -- int )
+    ;       op_unwrap       % unwrap   ( 'value -- value )
+    ;       op_intern       % intern   ( string|'ident|'binder -- int )
+    ;       op_id_to_string % idToString ( int -- string )
+    ;       op_id_to_ident  % idToIdent  ( int -- 'ident )
+    ;       op_id_to_binder % idToBinder ( int -- 'binder )
+    ;       op_is_operator  % isOperator ( 'ident -- int )
+    ;       op_arity.       % arity      ( 'ident -- int )
+
+:- type operator_info
+    --->    operator_info(
+                oi_operator :: operator,
+                oi_arity    :: int
+            ).
+
+:- type operator_table == map(string_id, operator_info).
+
+    % Intern table: bidirectional mapping between strings and IDs,
+    % plus operator lookup table.
     %
 :- type string_table.
 :- type intern_table
     --->    intern_table(
-                it_strings  :: string_table
+                it_strings   :: string_table,
+                it_operators :: operator_table
             ).
 
 :- func empty_string_table = string_table.
@@ -125,7 +183,7 @@ intern_string(String, Id, !Table) :-
 lookup_string(Table, Id) = String :-
     map.lookup(Table ^ st_to_string, Id, String).
 
-empty_intern_table = intern_table(empty_string_table).
+empty_intern_table = intern_table(empty_string_table, map.init).
 
 %-----------------------------------------------------------------------%
 % String escaping

@@ -115,7 +115,7 @@ Evaluation maintains three pieces of state:
 | `function` (`{ ... }`) | Capture the current environment and push a closure. |
 | `generator` (`[ ... ]`) | Evaluate terms with an empty stack, collect results into an array, push the array. |
 | `quoted` (`'term`) | Push the term as a value without evaluating it. |
-| `apply` (`!`) | Pop a closure and execute it. Stack is shared; environment changes are discarded. |
+| `apply` (`!`) | Pop a closure or quoted operator and execute it. Stack is shared; environment changes are discarded. |
 | `literal` | Push the value onto the stack. |
 
 ## Operators
@@ -196,6 +196,8 @@ Evaluation maintains three pieces of state:
 | `idToString` | `( int -- string )` | Create string from intern id |
 | `idToIdent` | `( int -- 'ident )` | Create quoted identifier from intern id |
 | `idToBinder` | `( int -- 'binder )` | Create quoted binder from intern id |
+| `isOperator` | `( 'ident -- int )` | 0 if identifier is an operator, else 1 |
+| `arity` | `( 'ident -- int )` | Get arity (input count) of an operator |
 
 ## Library
 
