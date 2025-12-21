@@ -101,7 +101,7 @@ Evaluation maintains three pieces of state:
 |-------|-------|
 | `stack underflow in 'op'` | Operation `op` needed more values than available |
 | `type error: expected T, got U` | Operation expected type T but got type U |
-| `undefined name: N` | Name N is not a builtin and not in the environment |
+| `undefined name: N` | Name N is not an operator and not in the environment |
 | `index out of bounds: I (array size: S)` | Array index I is not in range 0..S-1 |
 
 ## Evaluation
@@ -110,7 +110,7 @@ Evaluation maintains three pieces of state:
 
 | Term | Rule |
 |------|------|
-| `identifier` | If builtin, execute it. Otherwise, look up name in environment and push its value. |
+| `identifier` | If operator, execute it. Otherwise, look up name in environment and push its value. |
 | `binder` (`/name`) | Pop a value and bind it to `name` in the environment. |
 | `function` (`{ ... }`) | Capture the current environment and push a closure. |
 | `generator` (`[ ... ]`) | Evaluate terms with an empty stack, collect results into an array, push the array. |
@@ -118,7 +118,7 @@ Evaluation maintains three pieces of state:
 | `apply` (`!`) | Pop a closure and execute it. Stack is shared; environment changes are discarded. |
 | `literal` | Push the value onto the stack. |
 
-## Builtins
+## Operators
 
 ### Arithmetic
 

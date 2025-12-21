@@ -17,7 +17,7 @@ froth/
 │   ├── lexer.m           # Tokenizer
 │   ├── parser.m          # Parser
 │   ├── eval.m            # Evaluator
-│   ├── builtins.m        # Builtin operations
+│   ├── operators.m       # Operator definitions
 │   └── types.m           # Type definitions
 ├── tests/                # Regression tests
 │   ├── *.froth           # Test programs

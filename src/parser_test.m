@@ -62,7 +62,7 @@ run_tests(!IO) :-
     test("Quoted apply", "'!", !IO),
 
     % Operators
-    test("Builtin operators", "+ - = . , ? @ # : $", !IO),
+    test("Graphical operators", "+ - = . , ? @ # : $", !IO),
 
     % Complete program
     test("Complete program", "1 /x { x x + } /double x double !", !IO),

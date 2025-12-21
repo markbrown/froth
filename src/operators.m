@@ -1,9 +1,9 @@
 %-----------------------------------------------------------------------%
-% builtins.m
-% Builtin operations for the Froth programming language.
+% operators.m
+% Operator definitions for the Froth programming language.
 %-----------------------------------------------------------------------%
 
-:- module builtins.
+:- module operators.
 :- interface.
 
 :- import_module io.
@@ -11,97 +11,97 @@
 
 %-----------------------------------------------------------------------%
 
-    % Builtin operations.
+    % Operators.
     % Each constructor corresponds to a language operator.
     %
-:- type builtin
-    --->    bi_print        % print  ( a -- )
-    ;       bi_dump         % dump   ( -- )
-    ;       bi_env          % env    ( -- map )
-    ;       bi_add          % +      ( a b -- a+b )
-    ;       bi_sub          % -      ( a b -- a-b )
-    ;       bi_mul          % *      ( a b -- a*b )
-    ;       bi_gt           % >      ( a b -- int )
-    ;       bi_lt           % <      ( a b -- int )
-    ;       bi_gte          % >=     ( a b -- int )
-    ;       bi_lte          % <=     ( a b -- int )
-    ;       bi_get          % @      ( container key -- val )
-    ;       bi_length       % #      ( container -- int )
-    ;       bi_eq           % =      ( a b -- int )
-    ;       bi_ite          % ?      ( cond then else -- result )
-    ;       bi_nil          % .      ( -- nil )
-    ;       bi_cons         % ,      ( tail head -- cons )
-    ;       bi_fst          % fst    ( cons -- head )
-    ;       bi_snd          % snd    ( cons -- tail )
-    ;       bi_write        % write  ( a -- )
-    ;       bi_fwrite       % fwrite ( value file -- )
-    ;       bi_empty        % $      ( -- map )
-    ;       bi_keys         % keys   ( map -- array )
-    ;       bi_store        % :      ( map val 'key -- map )
-    ;       bi_in           % in     ( map 'key -- int )
-    ;       bi_is_int       % isInt    ( a -- int )
-    ;       bi_is_string    % isString ( a -- int )
-    ;       bi_is_array     % isArray  ( a -- int )
-    ;       bi_is_map       % isMap    ( a -- int )
-    ;       bi_is_nil       % isNil    ( a -- int )
-    ;       bi_is_cons      % isCons   ( a -- int )
-    ;       bi_is_ident     % isIdent  ( a -- int )
-    ;       bi_is_binder    % isBinder ( a -- int )
-    ;       bi_is_func      % isFunc   ( a -- int )
-    ;       bi_is_gen       % isGen    ( a -- int )
-    ;       bi_is_quote     % isQuote  ( a -- int )
-    ;       bi_is_apply     % isApply  ( a -- int )
-    ;       bi_to_binder    % toBinder ( 'ident -- 'binder )
-    ;       bi_to_ident.    % toIdent  ( 'binder -- 'ident )
+:- type operator
+    --->    op_print        % print  ( a -- )
+    ;       op_dump         % dump   ( -- )
+    ;       op_env          % env    ( -- map )
+    ;       op_add          % +      ( a b -- a+b )
+    ;       op_sub          % -      ( a b -- a-b )
+    ;       op_mul          % *      ( a b -- a*b )
+    ;       op_gt           % >      ( a b -- int )
+    ;       op_lt           % <      ( a b -- int )
+    ;       op_gte          % >=     ( a b -- int )
+    ;       op_lte          % <=     ( a b -- int )
+    ;       op_get          % @      ( container key -- val )
+    ;       op_length       % #      ( container -- int )
+    ;       op_eq           % =      ( a b -- int )
+    ;       op_ite          % ?      ( cond then else -- result )
+    ;       op_nil          % .      ( -- nil )
+    ;       op_cons         % ,      ( tail head -- cons )
+    ;       op_fst          % fst    ( cons -- head )
+    ;       op_snd          % snd    ( cons -- tail )
+    ;       op_write        % write  ( a -- )
+    ;       op_fwrite       % fwrite ( value file -- )
+    ;       op_empty        % $      ( -- map )
+    ;       op_keys         % keys   ( map -- array )
+    ;       op_store        % :      ( map val 'key -- map )
+    ;       op_in           % in     ( map 'key -- int )
+    ;       op_is_int       % isInt    ( a -- int )
+    ;       op_is_string    % isString ( a -- int )
+    ;       op_is_array     % isArray  ( a -- int )
+    ;       op_is_map       % isMap    ( a -- int )
+    ;       op_is_nil       % isNil    ( a -- int )
+    ;       op_is_cons      % isCons   ( a -- int )
+    ;       op_is_ident     % isIdent  ( a -- int )
+    ;       op_is_binder    % isBinder ( a -- int )
+    ;       op_is_func      % isFunc   ( a -- int )
+    ;       op_is_gen       % isGen    ( a -- int )
+    ;       op_is_quote     % isQuote  ( a -- int )
+    ;       op_is_apply     % isApply  ( a -- int )
+    ;       op_to_binder    % toBinder ( 'ident -- 'binder )
+    ;       op_to_ident.    % toIdent  ( 'binder -- 'ident )
 
-    % builtin(Name, Builtin):
-    % Map a name to a builtin operation.
+    % operator(Name, Op):
+    % Map a name to an operator.
     %
-:- pred builtin(string::in, builtin::out) is semidet.
+:- pred operator(string::in, operator::out) is semidet.
 
-    % Individual builtin operations.
+    % Individual operator implementations.
     %
-:- pred builtin_print(intern_table::in, stack::in, stack::out,
+:- pred operator_print(intern_table::in, stack::in, stack::out,
     io::di, io::uo) is det.
-:- pred builtin_dump(intern_table::in, stack::in, io::di, io::uo) is det.
-:- pred builtin_env(env::in, stack::in, stack::out) is det.
-:- pred builtin_add(stack::in, stack::out) is det.
-:- pred builtin_sub(stack::in, stack::out) is det.
-:- pred builtin_mul(stack::in, stack::out) is det.
-:- pred builtin_gt(stack::in, stack::out) is det.
-:- pred builtin_lt(stack::in, stack::out) is det.
-:- pred builtin_gte(stack::in, stack::out) is det.
-:- pred builtin_lte(stack::in, stack::out) is det.
-:- pred builtin_get(stack::in, stack::out) is det.
-:- pred builtin_length(stack::in, stack::out) is det.
-:- pred builtin_eq(stack::in, stack::out) is det.
-:- pred builtin_ite(stack::in, stack::out) is det.
-:- pred builtin_nil(stack::in, stack::out) is det.
-:- pred builtin_cons(stack::in, stack::out) is det.
-:- pred builtin_fst(stack::in, stack::out) is det.
-:- pred builtin_snd(stack::in, stack::out) is det.
-:- pred builtin_write(intern_table::in, stack::in, stack::out,
+:- pred operator_dump(intern_table::in, stack::in, io::di, io::uo) is det.
+:- pred operator_env(env::in, stack::in, stack::out) is det.
+:- pred operator_add(stack::in, stack::out) is det.
+:- pred operator_sub(stack::in, stack::out) is det.
+:- pred operator_mul(stack::in, stack::out) is det.
+:- pred operator_gt(stack::in, stack::out) is det.
+:- pred operator_lt(stack::in, stack::out) is det.
+:- pred operator_gte(stack::in, stack::out) is det.
+:- pred operator_lte(stack::in, stack::out) is det.
+:- pred operator_get(stack::in, stack::out) is det.
+:- pred operator_length(stack::in, stack::out) is det.
+:- pred operator_eq(stack::in, stack::out) is det.
+:- pred operator_ite(stack::in, stack::out) is det.
+:- pred operator_nil(stack::in, stack::out) is det.
+:- pred operator_cons(stack::in, stack::out) is det.
+:- pred operator_fst(stack::in, stack::out) is det.
+:- pred operator_snd(stack::in, stack::out) is det.
+:- pred operator_write(intern_table::in, stack::in, stack::out,
     io::di, io::uo) is det.
-:- pred builtin_fwrite(intern_table::in, stack::in, stack::out,
+:- pred operator_fwrite(intern_table::in, stack::in, stack::out,
     io::di, io::uo) is det.
-:- pred builtin_empty(stack::in, stack::out) is det.
-:- pred builtin_keys(stack::in, stack::out) is det.
-:- pred builtin_store(stack::in, stack::out) is det.
-:- pred builtin_in(stack::in, stack::out) is det.
-:- pred builtin_is_int(stack::in, stack::out) is det.
-:- pred builtin_is_string(stack::in, stack::out) is det.
-:- pred builtin_is_array(stack::in, stack::out) is det.
-:- pred builtin_is_map(stack::in, stack::out) is det.
-:- pred builtin_is_nil(stack::in, stack::out) is det.
-:- pred builtin_is_cons(stack::in, stack::out) is det.
-:- pred builtin_is_ident(stack::in, stack::out) is det.
-:- pred builtin_is_binder(stack::in, stack::out) is det.
-:- pred builtin_is_func(stack::in, stack::out) is det.
-:- pred builtin_is_gen(stack::in, stack::out) is det.
-:- pred builtin_is_quote(stack::in, stack::out) is det.
-:- pred builtin_is_apply(stack::in, stack::out) is det.
-:- pred builtin_to_binder(stack::in, stack::out) is det.
-:- pred builtin_to_ident(stack::in, stack::out) is det.
+:- pred operator_empty(stack::in, stack::out) is det.
+:- pred operator_keys(stack::in, stack::out) is det.
+:- pred operator_store(stack::in, stack::out) is det.
+:- pred operator_in(stack::in, stack::out) is det.
+:- pred operator_is_int(stack::in, stack::out) is det.
+:- pred operator_is_string(stack::in, stack::out) is det.
+:- pred operator_is_array(stack::in, stack::out) is det.
+:- pred operator_is_map(stack::in, stack::out) is det.
+:- pred operator_is_nil(stack::in, stack::out) is det.
+:- pred operator_is_cons(stack::in, stack::out) is det.
+:- pred operator_is_ident(stack::in, stack::out) is det.
+:- pred operator_is_binder(stack::in, stack::out) is det.
+:- pred operator_is_func(stack::in, stack::out) is det.
+:- pred operator_is_gen(stack::in, stack::out) is det.
+:- pred operator_is_quote(stack::in, stack::out) is det.
+:- pred operator_is_apply(stack::in, stack::out) is det.
+:- pred operator_to_binder(stack::in, stack::out) is det.
+:- pred operator_to_ident(stack::in, stack::out) is det.
 
 %-----------------------------------------------------------------------%
 
@@ -119,50 +119,50 @@
 
 %-----------------------------------------------------------------------%
 
-builtin("print", bi_print).
-builtin("dump", bi_dump).
-builtin("env", bi_env).
-builtin("+", bi_add).
-builtin("-", bi_sub).
-builtin("*", bi_mul).
-builtin(">", bi_gt).
-builtin("<", bi_lt).
-builtin(">=", bi_gte).
-builtin("<=", bi_lte).
-builtin("@", bi_get).
-builtin("#", bi_length).
-builtin("=", bi_eq).
-builtin("?", bi_ite).
-builtin(".", bi_nil).
-builtin(",", bi_cons).
-builtin("fst", bi_fst).
-builtin("snd", bi_snd).
-builtin("write", bi_write).
-builtin("fwrite", bi_fwrite).
-builtin("$", bi_empty).
-builtin("keys", bi_keys).
-builtin(":", bi_store).
-builtin("in", bi_in).
-builtin("isInt", bi_is_int).
-builtin("isString", bi_is_string).
-builtin("isArray", bi_is_array).
-builtin("isMap", bi_is_map).
-builtin("isNil", bi_is_nil).
-builtin("isCons", bi_is_cons).
-builtin("isIdent", bi_is_ident).
-builtin("isBinder", bi_is_binder).
-builtin("isFunc", bi_is_func).
-builtin("isGen", bi_is_gen).
-builtin("isQuote", bi_is_quote).
-builtin("isApply", bi_is_apply).
-builtin("toBinder", bi_to_binder).
-builtin("toIdent", bi_to_ident).
+operator("print", op_print).
+operator("dump", op_dump).
+operator("env", op_env).
+operator("+", op_add).
+operator("-", op_sub).
+operator("*", op_mul).
+operator(">", op_gt).
+operator("<", op_lt).
+operator(">=", op_gte).
+operator("<=", op_lte).
+operator("@", op_get).
+operator("#", op_length).
+operator("=", op_eq).
+operator("?", op_ite).
+operator(".", op_nil).
+operator(",", op_cons).
+operator("fst", op_fst).
+operator("snd", op_snd).
+operator("write", op_write).
+operator("fwrite", op_fwrite).
+operator("$", op_empty).
+operator("keys", op_keys).
+operator(":", op_store).
+operator("in", op_in).
+operator("isInt", op_is_int).
+operator("isString", op_is_string).
+operator("isArray", op_is_array).
+operator("isMap", op_is_map).
+operator("isNil", op_is_nil).
+operator("isCons", op_is_cons).
+operator("isIdent", op_is_ident).
+operator("isBinder", op_is_binder).
+operator("isFunc", op_is_func).
+operator("isGen", op_is_gen).
+operator("isQuote", op_is_quote).
+operator("isApply", op_is_apply).
+operator("toBinder", op_to_binder).
+operator("toIdent", op_to_ident).
 
 %-----------------------------------------------------------------------%
 % print: ( a -- ) Pop and print a value
 %-----------------------------------------------------------------------%
 
-builtin_print(IT, !Stack, !IO) :-
+operator_print(IT, !Stack, !IO) :-
     pop("print", V, !Stack),
     io.write_string(value_to_string(IT, V), !IO),
     io.nl(!IO).
@@ -205,7 +205,7 @@ terms_to_string(IT, [T | Ts]) =
 % dump: ( -- ) Print the entire stack (for debugging)
 %-----------------------------------------------------------------------%
 
-builtin_dump(IT, Stack, !IO) :-
+operator_dump(IT, Stack, !IO) :-
     io.write_string("--- stack ---\n", !IO),
     list.foldl(print_stack_entry(IT), Stack, !IO),
     io.write_string("-------------\n", !IO).
@@ -253,14 +253,14 @@ print_array_elem_debug(IT, V, !IO) :-
 % env: ( -- map ) Push the current environment as a map
 %-----------------------------------------------------------------------%
 
-builtin_env(Env, !Stack) :-
+operator_env(Env, !Stack) :-
     push(mapval(Env), !Stack).
 
 %-----------------------------------------------------------------------%
 % +: ( int int -- int ) Add two integers
 %-----------------------------------------------------------------------%
 
-builtin_add(!Stack) :-
+operator_add(!Stack) :-
     pop("+", V1, !Stack),
     pop("+", V2, !Stack),
     ( if V1 = intval(I1), V2 = intval(I2) then
@@ -275,7 +275,7 @@ builtin_add(!Stack) :-
 % -: ( int int -- int ) Subtract: a b - computes a - b
 %-----------------------------------------------------------------------%
 
-builtin_sub(!Stack) :-
+operator_sub(!Stack) :-
     pop("-", V1, !Stack),
     pop("-", V2, !Stack),
     ( if V1 = intval(I1), V2 = intval(I2) then
@@ -290,7 +290,7 @@ builtin_sub(!Stack) :-
 % *: ( int int -- int ) Multiply two integers
 %-----------------------------------------------------------------------%
 
-builtin_mul(!Stack) :-
+operator_mul(!Stack) :-
     pop("*", V1, !Stack),
     pop("*", V2, !Stack),
     ( if V1 = intval(I1), V2 = intval(I2) then
@@ -305,7 +305,7 @@ builtin_mul(!Stack) :-
 % >: ( int int -- int ) Greater than: a b > is 0 if a > b, else 1
 %-----------------------------------------------------------------------%
 
-builtin_gt(!Stack) :-
+operator_gt(!Stack) :-
     pop(">", V1, !Stack),
     pop(">", V2, !Stack),
     ( if V1 = intval(I1), V2 = intval(I2) then
@@ -322,7 +322,7 @@ builtin_gt(!Stack) :-
 % <: ( int int -- int ) Less than: a b < is 0 if a < b, else 1
 %-----------------------------------------------------------------------%
 
-builtin_lt(!Stack) :-
+operator_lt(!Stack) :-
     pop("<", V1, !Stack),
     pop("<", V2, !Stack),
     ( if V1 = intval(I1), V2 = intval(I2) then
@@ -339,7 +339,7 @@ builtin_lt(!Stack) :-
 % >=: ( int int -- int ) Greater or equal: a b >= is 0 if a >= b, else 1
 %-----------------------------------------------------------------------%
 
-builtin_gte(!Stack) :-
+operator_gte(!Stack) :-
     pop(">=", V1, !Stack),
     pop(">=", V2, !Stack),
     ( if V1 = intval(I1), V2 = intval(I2) then
@@ -356,7 +356,7 @@ builtin_gte(!Stack) :-
 % <=: ( int int -- int ) Less or equal: a b <= is 0 if a <= b, else 1
 %-----------------------------------------------------------------------%
 
-builtin_lte(!Stack) :-
+operator_lte(!Stack) :-
     pop("<=", V1, !Stack),
     pop("<=", V2, !Stack),
     ( if V1 = intval(I1), V2 = intval(I2) then
@@ -374,7 +374,7 @@ builtin_lte(!Stack) :-
 % For arrays: key must be int. For maps: key must be quoted identifier ('name).
 %-----------------------------------------------------------------------%
 
-builtin_get(!Stack) :-
+operator_get(!Stack) :-
     pop("@", KeyVal, !Stack),
     pop("@", ContainerVal, !Stack),
     ( if ContainerVal = arrayval(Array), KeyVal = intval(Index) then
@@ -413,7 +413,7 @@ builtin_get(!Stack) :-
 % #: ( container -- int ) Get length of array or size of map
 %-----------------------------------------------------------------------%
 
-builtin_length(!Stack) :-
+operator_length(!Stack) :-
     pop("#", V, !Stack),
     ( if V = arrayval(Array) then
         push(intval(array.size(Array)), !Stack)
@@ -431,7 +431,7 @@ builtin_length(!Stack) :-
 % =: ( a b -- int ) Test equality: push 0 if equal, 1 if not equal
 %-----------------------------------------------------------------------%
 
-builtin_eq(!Stack) :-
+operator_eq(!Stack) :-
     pop("=", V1, !Stack),
     pop("=", V2, !Stack),
     ( if values_equal(V1, V2, Equal) then
@@ -514,7 +514,7 @@ assoc_lists_equal([K1 - V1 | Rest1], [K2 - V2 | Rest2], Equal) :-
 % ?: ( cond then else -- result ) If cond is 0, push then; otherwise push else
 %-----------------------------------------------------------------------%
 
-builtin_ite(!Stack) :-
+operator_ite(!Stack) :-
     pop("?", C, !Stack),
     pop("?", B, !Stack),
     pop("?", A, !Stack),
@@ -530,14 +530,14 @@ builtin_ite(!Stack) :-
 % .: ( -- nil ) Push nil onto the stack
 %-----------------------------------------------------------------------%
 
-builtin_nil(!Stack) :-
+operator_nil(!Stack) :-
     push(nilval, !Stack).
 
 %-----------------------------------------------------------------------%
 % ,: ( tail head -- cons ) Create a cons cell with head and tail
 %-----------------------------------------------------------------------%
 
-builtin_cons(!Stack) :-
+operator_cons(!Stack) :-
     pop(",", Head, !Stack),
     pop(",", Tail, !Stack),
     push(consval(Head, Tail), !Stack).
@@ -546,7 +546,7 @@ builtin_cons(!Stack) :-
 % fst: ( cons -- head ) Get the first element (head) of a cons cell
 %-----------------------------------------------------------------------%
 
-builtin_fst(!Stack) :-
+operator_fst(!Stack) :-
     pop("fst", V, !Stack),
     ( if V = consval(H, _) then
         push(H, !Stack)
@@ -558,7 +558,7 @@ builtin_fst(!Stack) :-
 % snd: ( cons -- tail ) Get the second element (tail) of a cons cell
 %-----------------------------------------------------------------------%
 
-builtin_snd(!Stack) :-
+operator_snd(!Stack) :-
     pop("snd", V, !Stack),
     ( if V = consval(_, T) then
         push(T, !Stack)
@@ -570,7 +570,7 @@ builtin_snd(!Stack) :-
 % write: ( a -- ) Pop and print value in executable (round-trippable) form
 %-----------------------------------------------------------------------%
 
-builtin_write(IT, !Stack, !IO) :-
+operator_write(IT, !Stack, !IO) :-
     pop("write", V, !Stack),
     io.write_string(value_to_write_string(IT, V), !IO),
     io.nl(!IO).
@@ -624,7 +624,7 @@ terms_to_write_string(IT, [T | Ts]) =
 % fwrite: ( value file -- ) Write value to file in executable form
 %-----------------------------------------------------------------------%
 
-builtin_fwrite(IT, !Stack, !IO) :-
+operator_fwrite(IT, !Stack, !IO) :-
     pop("fwrite", FileVal, !Stack),
     pop("fwrite", V, !Stack),
     Filename = value_to_string(IT, FileVal),
@@ -644,14 +644,14 @@ builtin_fwrite(IT, !Stack, !IO) :-
 % $: ( -- map ) Push an empty map onto the stack
 %-----------------------------------------------------------------------%
 
-builtin_empty(!Stack) :-
+operator_empty(!Stack) :-
     push(mapval(map.init), !Stack).
 
 %-----------------------------------------------------------------------%
 % keys: ( map -- array ) Get map keys as an array of quoted identifiers
 %-----------------------------------------------------------------------%
 
-builtin_keys(!Stack) :-
+operator_keys(!Stack) :-
     pop("keys", V, !Stack),
     ( if V = mapval(Map) then
         Keys = map.keys(Map),
@@ -667,7 +667,7 @@ builtin_keys(!Stack) :-
 % :: ( map val 'key -- map ) Store value in map under key, return new map
 %-----------------------------------------------------------------------%
 
-builtin_store(!Stack) :-
+operator_store(!Stack) :-
     pop(":", KeyVal, !Stack),
     pop(":", Val, !Stack),
     pop(":", MapVal, !Stack),
@@ -684,7 +684,7 @@ builtin_store(!Stack) :-
 % in: ( map 'key -- int ) Test if key exists in map: 0 if yes, 1 if no
 %-----------------------------------------------------------------------%
 
-builtin_in(!Stack) :-
+operator_in(!Stack) :-
     pop("in", KeyVal, !Stack),
     pop("in", MapVal, !Stack),
     ( if MapVal = mapval(Map), KeyVal = termval(identifier(NameId)) then
@@ -704,73 +704,73 @@ builtin_in(!Stack) :-
 % Each returns 0 if true, 1 if false (following Froth's boolean convention)
 %-----------------------------------------------------------------------%
 
-builtin_is_int(!Stack) :-
+operator_is_int(!Stack) :-
     pop("isInt", V, !Stack),
     ( if V = intval(_) then push(intval(0), !Stack)
     else push(intval(1), !Stack)
     ).
 
-builtin_is_string(!Stack) :-
+operator_is_string(!Stack) :-
     pop("isString", V, !Stack),
     ( if V = stringval(_) then push(intval(0), !Stack)
     else push(intval(1), !Stack)
     ).
 
-builtin_is_array(!Stack) :-
+operator_is_array(!Stack) :-
     pop("isArray", V, !Stack),
     ( if V = arrayval(_) then push(intval(0), !Stack)
     else push(intval(1), !Stack)
     ).
 
-builtin_is_map(!Stack) :-
+operator_is_map(!Stack) :-
     pop("isMap", V, !Stack),
     ( if V = mapval(_) then push(intval(0), !Stack)
     else push(intval(1), !Stack)
     ).
 
-builtin_is_nil(!Stack) :-
+operator_is_nil(!Stack) :-
     pop("isNil", V, !Stack),
     ( if V = nilval then push(intval(0), !Stack)
     else push(intval(1), !Stack)
     ).
 
-builtin_is_cons(!Stack) :-
+operator_is_cons(!Stack) :-
     pop("isCons", V, !Stack),
     ( if V = consval(_, _) then push(intval(0), !Stack)
     else push(intval(1), !Stack)
     ).
 
-builtin_is_ident(!Stack) :-
+operator_is_ident(!Stack) :-
     pop("isIdent", V, !Stack),
     ( if V = termval(identifier(_)) then push(intval(0), !Stack)
     else push(intval(1), !Stack)
     ).
 
-builtin_is_binder(!Stack) :-
+operator_is_binder(!Stack) :-
     pop("isBinder", V, !Stack),
     ( if V = termval(binder(_)) then push(intval(0), !Stack)
     else push(intval(1), !Stack)
     ).
 
-builtin_is_func(!Stack) :-
+operator_is_func(!Stack) :-
     pop("isFunc", V, !Stack),
     ( if V = termval(function(_)) then push(intval(0), !Stack)
     else push(intval(1), !Stack)
     ).
 
-builtin_is_gen(!Stack) :-
+operator_is_gen(!Stack) :-
     pop("isGen", V, !Stack),
     ( if V = termval(generator(_)) then push(intval(0), !Stack)
     else push(intval(1), !Stack)
     ).
 
-builtin_is_quote(!Stack) :-
+operator_is_quote(!Stack) :-
     pop("isQuote", V, !Stack),
     ( if V = termval(quoted(_)) then push(intval(0), !Stack)
     else push(intval(1), !Stack)
     ).
 
-builtin_is_apply(!Stack) :-
+operator_is_apply(!Stack) :-
     pop("isApply", V, !Stack),
     ( if V = termval(apply_term) then push(intval(0), !Stack)
     else push(intval(1), !Stack)
@@ -780,7 +780,7 @@ builtin_is_apply(!Stack) :-
 % toBinder: ( 'ident -- 'binder ) Convert quoted identifier to quoted binder
 %-----------------------------------------------------------------------%
 
-builtin_to_binder(!Stack) :-
+operator_to_binder(!Stack) :-
     pop("toBinder", V, !Stack),
     ( if V = termval(identifier(NameId)) then
         push(termval(binder(NameId)), !Stack)
@@ -792,7 +792,7 @@ builtin_to_binder(!Stack) :-
 % toIdent: ( 'binder -- 'ident ) Convert quoted binder to quoted identifier
 %-----------------------------------------------------------------------%
 
-builtin_to_ident(!Stack) :-
+operator_to_ident(!Stack) :-
     pop("toIdent", V, !Stack),
     ( if V = termval(binder(NameId)) then
         push(termval(identifier(NameId)), !Stack)
@@ -801,5 +801,5 @@ builtin_to_ident(!Stack) :-
     ).
 
 %-----------------------------------------------------------------------%
-:- end_module builtins.
+:- end_module operators.
 %-----------------------------------------------------------------------%

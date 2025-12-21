@@ -30,7 +30,7 @@
 :- implementation.
 
 :- import_module array.
-:- import_module builtins.
+:- import_module operators.
 :- import_module exception.
 :- import_module map.
 
@@ -89,132 +89,132 @@ eval_term(IT, Term, !Env, !Stack, !IO) :-
 
 eval_identifier(IT, NameId, !Env, !Stack, !IO) :-
     NameStr = lookup_name(IT ^ it_names, NameId),
-    ( if builtins.builtin(NameStr, Builtin) then
-        eval_builtin(IT, Builtin, !Env, !Stack, !IO)
+    ( if operators.operator(NameStr, Op) then
+        eval_operator(IT, Op, !Env, !Stack, !IO)
     else if get_env(NameId, V, !.Env) then
         push(V, !Stack)
     else
         throw(undefined_name(NameId))
     ).
 
-:- pred eval_builtin(intern_table::in, builtins.builtin::in,
+:- pred eval_operator(intern_table::in, operators.operator::in,
     env::in, env::out, stack::in, stack::out, io::di, io::uo) is det.
 
-eval_builtin(IT, Builtin, !Env, !Stack, !IO) :-
+eval_operator(IT, Op, !Env, !Stack, !IO) :-
     (
-        Builtin = builtins.bi_print,
-        builtins.builtin_print(IT, !Stack, !IO)
+        Op = operators.op_print,
+        operators.operator_print(IT, !Stack, !IO)
     ;
-        Builtin = builtins.bi_dump,
-        builtins.builtin_dump(IT, !.Stack, !IO)
+        Op = operators.op_dump,
+        operators.operator_dump(IT, !.Stack, !IO)
     ;
-        Builtin = builtins.bi_env,
-        builtins.builtin_env(!.Env, !Stack)
+        Op = operators.op_env,
+        operators.operator_env(!.Env, !Stack)
     ;
-        Builtin = builtins.bi_add,
-        builtins.builtin_add(!Stack)
+        Op = operators.op_add,
+        operators.operator_add(!Stack)
     ;
-        Builtin = builtins.bi_sub,
-        builtins.builtin_sub(!Stack)
+        Op = operators.op_sub,
+        operators.operator_sub(!Stack)
     ;
-        Builtin = builtins.bi_mul,
-        builtins.builtin_mul(!Stack)
+        Op = operators.op_mul,
+        operators.operator_mul(!Stack)
     ;
-        Builtin = builtins.bi_gt,
-        builtins.builtin_gt(!Stack)
+        Op = operators.op_gt,
+        operators.operator_gt(!Stack)
     ;
-        Builtin = builtins.bi_lt,
-        builtins.builtin_lt(!Stack)
+        Op = operators.op_lt,
+        operators.operator_lt(!Stack)
     ;
-        Builtin = builtins.bi_gte,
-        builtins.builtin_gte(!Stack)
+        Op = operators.op_gte,
+        operators.operator_gte(!Stack)
     ;
-        Builtin = builtins.bi_lte,
-        builtins.builtin_lte(!Stack)
+        Op = operators.op_lte,
+        operators.operator_lte(!Stack)
     ;
-        Builtin = builtins.bi_get,
-        builtins.builtin_get(!Stack)
+        Op = operators.op_get,
+        operators.operator_get(!Stack)
     ;
-        Builtin = builtins.bi_length,
-        builtins.builtin_length(!Stack)
+        Op = operators.op_length,
+        operators.operator_length(!Stack)
     ;
-        Builtin = builtins.bi_eq,
-        builtins.builtin_eq(!Stack)
+        Op = operators.op_eq,
+        operators.operator_eq(!Stack)
     ;
-        Builtin = builtins.bi_ite,
-        builtins.builtin_ite(!Stack)
+        Op = operators.op_ite,
+        operators.operator_ite(!Stack)
     ;
-        Builtin = builtins.bi_nil,
-        builtins.builtin_nil(!Stack)
+        Op = operators.op_nil,
+        operators.operator_nil(!Stack)
     ;
-        Builtin = builtins.bi_cons,
-        builtins.builtin_cons(!Stack)
+        Op = operators.op_cons,
+        operators.operator_cons(!Stack)
     ;
-        Builtin = builtins.bi_fst,
-        builtins.builtin_fst(!Stack)
+        Op = operators.op_fst,
+        operators.operator_fst(!Stack)
     ;
-        Builtin = builtins.bi_snd,
-        builtins.builtin_snd(!Stack)
+        Op = operators.op_snd,
+        operators.operator_snd(!Stack)
     ;
-        Builtin = builtins.bi_write,
-        builtins.builtin_write(IT, !Stack, !IO)
+        Op = operators.op_write,
+        operators.operator_write(IT, !Stack, !IO)
     ;
-        Builtin = builtins.bi_fwrite,
-        builtins.builtin_fwrite(IT, !Stack, !IO)
+        Op = operators.op_fwrite,
+        operators.operator_fwrite(IT, !Stack, !IO)
     ;
-        Builtin = builtins.bi_empty,
-        builtins.builtin_empty(!Stack)
+        Op = operators.op_empty,
+        operators.operator_empty(!Stack)
     ;
-        Builtin = builtins.bi_keys,
-        builtins.builtin_keys(!Stack)
+        Op = operators.op_keys,
+        operators.operator_keys(!Stack)
     ;
-        Builtin = builtins.bi_store,
-        builtins.builtin_store(!Stack)
+        Op = operators.op_store,
+        operators.operator_store(!Stack)
     ;
-        Builtin = builtins.bi_in,
-        builtins.builtin_in(!Stack)
+        Op = operators.op_in,
+        operators.operator_in(!Stack)
     ;
-        Builtin = builtins.bi_is_int,
-        builtins.builtin_is_int(!Stack)
+        Op = operators.op_is_int,
+        operators.operator_is_int(!Stack)
     ;
-        Builtin = builtins.bi_is_string,
-        builtins.builtin_is_string(!Stack)
+        Op = operators.op_is_string,
+        operators.operator_is_string(!Stack)
     ;
-        Builtin = builtins.bi_is_array,
-        builtins.builtin_is_array(!Stack)
+        Op = operators.op_is_array,
+        operators.operator_is_array(!Stack)
     ;
-        Builtin = builtins.bi_is_map,
-        builtins.builtin_is_map(!Stack)
+        Op = operators.op_is_map,
+        operators.operator_is_map(!Stack)
     ;
-        Builtin = builtins.bi_is_nil,
-        builtins.builtin_is_nil(!Stack)
+        Op = operators.op_is_nil,
+        operators.operator_is_nil(!Stack)
     ;
-        Builtin = builtins.bi_is_cons,
-        builtins.builtin_is_cons(!Stack)
+        Op = operators.op_is_cons,
+        operators.operator_is_cons(!Stack)
     ;
-        Builtin = builtins.bi_is_ident,
-        builtins.builtin_is_ident(!Stack)
+        Op = operators.op_is_ident,
+        operators.operator_is_ident(!Stack)
     ;
-        Builtin = builtins.bi_is_binder,
-        builtins.builtin_is_binder(!Stack)
+        Op = operators.op_is_binder,
+        operators.operator_is_binder(!Stack)
     ;
-        Builtin = builtins.bi_is_func,
-        builtins.builtin_is_func(!Stack)
+        Op = operators.op_is_func,
+        operators.operator_is_func(!Stack)
     ;
-        Builtin = builtins.bi_is_gen,
-        builtins.builtin_is_gen(!Stack)
+        Op = operators.op_is_gen,
+        operators.operator_is_gen(!Stack)
     ;
-        Builtin = builtins.bi_is_quote,
-        builtins.builtin_is_quote(!Stack)
+        Op = operators.op_is_quote,
+        operators.operator_is_quote(!Stack)
     ;
-        Builtin = builtins.bi_is_apply,
-        builtins.builtin_is_apply(!Stack)
+        Op = operators.op_is_apply,
+        operators.operator_is_apply(!Stack)
     ;
-        Builtin = builtins.bi_to_binder,
-        builtins.builtin_to_binder(!Stack)
+        Op = operators.op_to_binder,
+        operators.operator_to_binder(!Stack)
     ;
-        Builtin = builtins.bi_to_ident,
-        builtins.builtin_to_ident(!Stack)
+        Op = operators.op_to_ident,
+        operators.operator_to_ident(!Stack)
     ).
 
 %-----------------------------------------------------------------------%
