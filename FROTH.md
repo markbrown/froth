@@ -187,6 +187,8 @@ Evaluation maintains three pieces of state:
 | `isApply` | `( a -- int )` | 0 if quoted apply, else 1 |
 | `toBinder` | `( 'ident -- 'binder )` | Convert quoted identifier to quoted binder |
 | `toIdent` | `( 'binder -- 'ident )` | Convert quoted binder to quoted identifier |
+| `isValue` | `( a -- int )` | 0 if quoted value term, else 1 |
+| `unwrap` | `( 'value -- value )` | Extract value from quoted value term |
 
 ## Library
 
@@ -212,3 +214,29 @@ The function may leave zero or more values on the stack per element. Use a gener
 [ [1 2 3] {1 +} foldl! ]       ; produces [2 3 4]
 [1 2 3] {print} foldr!         ; prints 3, 2, 1
 ```
+
+### Eval (eval.froth)
+
+A meta-interpreter that evaluates Froth closures.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `eval` | `( stack closure -- result-stack 0 \| error-msg 1 )` | Evaluate closure with initial stack |
+
+The stack is represented as a cons list (nil-terminated). Push with `, `:
+
+```
+.                  ; empty stack (nil)
+. 3 ,              ; stack with just 3
+. 3 , 2 , 1 ,      ; stack [1, 2, 3] (1 on top)
+```
+
+Returns a cons pair: `(result-stack, 0)` on success, or `(error-message, 1)` on error.
+
+```
+. { 3 4 + } eval!              ; returns (. 7 ,) 0
+. { 10 /x x 1 + } eval!        ; returns (. 11 ,) 0
+. 10 , { 5 + } eval!           ; returns (. 15 ,) 0
+```
+
+Supported operators: `+`, `-`, `*`, `=`, variable binding, function application.

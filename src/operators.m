@@ -52,7 +52,9 @@
     ;       op_is_quote     % isQuote  ( a -- int )
     ;       op_is_apply     % isApply  ( a -- int )
     ;       op_to_binder    % toBinder ( 'ident -- 'binder )
-    ;       op_to_ident.    % toIdent  ( 'binder -- 'ident )
+    ;       op_to_ident     % toIdent  ( 'binder -- 'ident )
+    ;       op_is_value     % isValue  ( a -- int )
+    ;       op_unwrap.      % unwrap   ( 'value -- value )
 
     % operator(Name, Op):
     % Map a name to an operator.
@@ -102,6 +104,8 @@
 :- pred operator_is_apply(stack::in, stack::out) is det.
 :- pred operator_to_binder(stack::in, stack::out) is det.
 :- pred operator_to_ident(stack::in, stack::out) is det.
+:- pred operator_is_value(stack::in, stack::out) is det.
+:- pred operator_unwrap(stack::in, stack::out) is det.
 
 %-----------------------------------------------------------------------%
 
@@ -157,6 +161,8 @@ operator("isQuote", op_is_quote).
 operator("isApply", op_is_apply).
 operator("toBinder", op_to_binder).
 operator("toIdent", op_to_ident).
+operator("isValue", op_is_value).
+operator("unwrap", op_unwrap).
 
 %-----------------------------------------------------------------------%
 % print: ( a -- ) Pop and print a value
@@ -798,6 +804,28 @@ operator_to_ident(!Stack) :-
         push(termval(identifier(NameId)), !Stack)
     else
         throw(type_error("quoted binder", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% isValue: ( a -- int ) Test if value is a quoted value term
+%-----------------------------------------------------------------------%
+
+operator_is_value(!Stack) :-
+    pop("isValue", V, !Stack),
+    ( if V = termval(value(_)) then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
+
+%-----------------------------------------------------------------------%
+% unwrap: ( 'value -- value ) Extract value from quoted value term
+%-----------------------------------------------------------------------%
+
+operator_unwrap(!Stack) :-
+    pop("unwrap", V, !Stack),
+    ( if V = termval(value(Inner)) then
+        push(Inner, !Stack)
+    else
+        throw(type_error("quoted value", V))
     ).
 
 %-----------------------------------------------------------------------%

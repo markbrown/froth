@@ -215,6 +215,12 @@ eval_operator(IT, Op, !Env, !Stack, !IO) :-
     ;
         Op = operators.op_to_ident,
         operators.operator_to_ident(!Stack)
+    ;
+        Op = operators.op_is_value,
+        operators.operator_is_value(!Stack)
+    ;
+        Op = operators.op_unwrap,
+        operators.operator_unwrap(!Stack)
     ).
 
 %-----------------------------------------------------------------------%

@@ -1,0 +1,179 @@
+; lib/eval.froth
+; Meta-interpreter for Froth
+
+; Arithmetic operator implementations
+
+; eval-add: (stack sim-env -- new-stack new-env 0 | error-message 1)
+{ /sim-env /stack
+  stack isNil 0 = { "stack underflow in +" 1 } {
+    stack fst /b  stack snd /s1
+    s1 isNil 0 = { "stack underflow in +" 1 } {
+      s1 fst /a  s1 snd /s2
+      a isInt 0 = { b isInt 0 = {
+        s2 a b + , sim-env 0
+      } { "type error in +" 1 } ?!
+      } { "type error in +" 1 } ?!
+    } ?!
+  } ?!
+} /eval-add
+
+; eval-sub: (stack sim-env -- new-stack new-env 0 | error-message 1)
+{ /sim-env /stack
+  stack isNil 0 = { "stack underflow in -" 1 } {
+    stack fst /b  stack snd /s1
+    s1 isNil 0 = { "stack underflow in -" 1 } {
+      s1 fst /a  s1 snd /s2
+      a isInt 0 = { b isInt 0 = {
+        s2 a b - , sim-env 0
+      } { "type error in -" 1 } ?!
+      } { "type error in -" 1 } ?!
+    } ?!
+  } ?!
+} /eval-sub
+
+; eval-mul: (stack sim-env -- new-stack new-env 0 | error-message 1)
+{ /sim-env /stack
+  stack isNil 0 = { "stack underflow in *" 1 } {
+    stack fst /b  stack snd /s1
+    s1 isNil 0 = { "stack underflow in *" 1 } {
+      s1 fst /a  s1 snd /s2
+      a isInt 0 = { b isInt 0 = {
+        s2 a b * , sim-env 0
+      } { "type error in *" 1 } ?!
+      } { "type error in *" 1 } ?!
+    } ?!
+  } ?!
+} /eval-mul
+
+; eval-eq: (stack sim-env -- new-stack new-env 0 | error-message 1)
+{ /sim-env /stack
+  stack isNil 0 = { "stack underflow in =" 1 } {
+    stack fst /b  stack snd /s1
+    s1 isNil 0 = { "stack underflow in =" 1 } {
+      s1 fst /a  s1 snd /s2
+      s2 a b = , sim-env 0
+    } ?!
+  } ?!
+} /eval-eq
+
+; eval-binder: (stack sim-env term -- new-stack new-env 0 | error-message 1)
+{ /term /sim-env /stack
+  stack isNil 0 = {
+    "stack underflow in binder" 1
+  } {
+    stack fst /val
+    stack snd /new-stack
+    term toIdent /ident
+    sim-env val ident : /new-env
+    new-stack new-env 0
+  } ?!
+} /eval-binder
+
+; eval-ident: (stack sim-env term -- new-stack new-env 0 | error-message 1)
+{ /term /sim-env /stack
+  term '+ = 0 = { stack sim-env eval-add! } {
+  term '- = 0 = { stack sim-env eval-sub! } {
+  term '* = 0 = { stack sim-env eval-mul! } {
+  term '= = 0 = { stack sim-env eval-eq! } {
+  sim-env term in 0 = {
+    sim-env term @ /val
+    stack val , sim-env 0
+  } {
+    "undefined name" 1
+  } ?!
+  } ?! } ?! } ?! } ?!
+} /eval-ident
+
+; eval-apply: (stack sim-env recurse -- new-stack new-env 0 | error-message 1)
+{ /recurse /sim-env /stack
+  stack isNil 0 = {
+    "stack underflow in !" 1
+  } {
+    stack fst /closure
+    stack snd /new-stack
+    closure isCons 0 = {
+      ; Get closure's env and body
+      closure fst /cenv
+      closure snd /cbody
+      cbody isFunc 0 = {
+        ; Evaluate body with closure's env
+        new-stack cenv cbody 0 recurse recurse!
+        /status
+        status 0 = {
+          ; Restore original sim-env (lexical scoping)
+          sim-env 0
+        } {
+          1
+        } ?!
+      } {
+        "type error: expected closure" 1
+      } ?!
+    } {
+      "type error: expected closure" 1
+    } ?!
+  } ?!
+} /eval-apply
+
+; eval-term: (stack sim-env term recurse -- new-stack new-env 0 | error-message 1)
+{ /recurse /term /sim-env /stack
+  term isIdent 0 = {
+    stack sim-env term eval-ident!
+  } {
+  term isBinder 0 = {
+    stack sim-env term eval-binder!
+  } {
+  term isFunc 0 = {
+    ; Create closure as (env, body) - same as native Froth
+    term sim-env , /new-closure
+    stack new-closure , sim-env 0
+  } {
+  term isApply 0 = {
+    stack sim-env recurse eval-apply!
+  } {
+  term isValue 0 = {
+    ; Value term - unwrap and push the inner value
+    stack term unwrap , sim-env 0
+  } {
+    ; Unknown term type - push as-is
+    stack term , sim-env 0
+  } ?! } ?! } ?! } ?! } ?!
+} /eval-term
+
+; eval-terms-impl: (stack sim-env body idx self -- result-stack 0 | error-message 1)
+; self is passed for recursion
+{ /self /idx /body /sim-env /stack
+  idx body # = 0 = {
+    ; Done - return stack with success
+    stack 0
+  } {
+    ; Evaluate one term
+    body idx @ /term
+    stack sim-env term self eval-term!
+    ; Check result - stack now has (status, maybe-env, maybe-stack)
+    /status
+    status 0 = {
+      ; Success - get new-env and new-stack, then recurse
+      /result-env /result-stack
+      result-stack result-env body idx 1 + self self!
+    } {
+      ; Error - just push 1 (error message already on stack)
+      1
+    } ?!
+  } ?!
+} /eval-terms-impl
+
+; eval-terms: (stack sim-env body idx -- result-stack 0 | error-message 1)
+{ /idx /body /sim-env /stack
+  stack sim-env body idx eval-terms-impl eval-terms-impl!
+} /eval-terms
+
+; eval: (init-stack closure -- result-stack 0 | error-message 1)
+{ /closure /stack
+  closure fst /sim-env
+  closure snd /body
+  body isFunc 0 = {
+    stack sim-env body 0 eval-terms!
+  } {
+    "eval: expected closure" 1
+  } ?!
+} /eval
