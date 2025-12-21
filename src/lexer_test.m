@@ -28,54 +28,63 @@ main(!IO) :-
 :- pred run_tests(io::di, io::uo) is det.
 
 run_tests(!IO) :-
-    % Test simple tokens
-    test("Simple name", "foo", !IO),
-    test("Name with hyphen", "my-func", !IO),
-    test("Name starting with hyphen", "-negative", !IO),
-    test("Multiple names", "foo bar baz", !IO),
+    % Text names: [a-zA-Z][a-zA-Z0-9-]*
+    test("Simple text name", "foo", !IO),
+    test("Text name with hyphen", "my-func", !IO),
+    test("Text name with digits", "var1", !IO),
+    test("Multiple text names", "foo bar baz", !IO),
 
-    % Test numbers
+    % Graphical names: [+=.,<>?@#:$-]+
+    test("Single graphical", "+", !IO),
+    test("Multi-char graphical", "->", !IO),
+    test("Adjacent graphicals", "++ --", !IO),
+    test("All graphical chars", "+-*=.,<>?@#:$", !IO),
+
+    % Text and graphical separation
+    test("Text then graphical", "foo+bar", !IO),
+    test("Graphical then text", "+foo", !IO),
+
+    % Numbers
     test("Positive number", "42", !IO),
     test("Negative number", "-17", !IO),
     test("Number with plus", "+5", !IO),
-    test("Mixed names and numbers", "foo 42 bar -3", !IO),
+    test("Adjacent numbers", "1+2", !IO),
+    test("Graphical before number", "--3", !IO),
 
-    % Test slash names
-    test("Slash name", "/define", !IO),
+    % Slash names (text or graphical)
+    test("Slash text name", "/define", !IO),
+    test("Slash graphical name", "/+", !IO),
+    test("Slash multi-graphical", "/->", !IO),
     test("Multiple slash names", "/foo /bar", !IO),
     test("Slash alone (junk)", "/ foo", !IO),
 
-    % Test quoted strings
+    % Quoted strings
     test("Double quoted", "\"hello world\"", !IO),
     test("Empty string", "\"\"", !IO),
 
-    % Test quote and bang
+    % Quote and bang
     test("Quote token", "'foo", !IO),
     test("Bang token", "foo !", !IO),
 
-    % Test brackets
+    % Brackets
     test("Curly braces", "{ foo }", !IO),
     test("Square brackets", "[ 1 2 3 ]", !IO),
     test("Nested brackets", "{ [ foo ] }", !IO),
 
-    % Test comments
+    % Comments
     test("Line comment", "foo ; this is a comment\nbar", !IO),
     test("Block comment", "foo ( comment ) bar", !IO),
     test("Nested block comment", "foo ( outer ( inner ) outer ) bar", !IO),
 
-    % Test operators as names
-    test("Operator names", "+ - = , . @ # : $", !IO),
+    % Complex examples
+    test("Stack addition", "1 2 +", !IO),
+    test("Function definition", "{ 2 + } /add-two", !IO),
 
-    % Test complex example
-    test("Complex example",
-        "/define square { dup * }\n; compute square of 5\n5 square",
-        !IO),
-
-    % Test escape sequences
+    % Escape sequences
     test("String with escapes", "\"hello\\nworld\"", !IO),
     test("String with quotes", "\"say \\\"hi\\\"\"", !IO),
 
-    % Test error cases
+    % Error cases
     test("Unterminated string", "\"hello", !IO),
     test("Unterminated block comment", "foo ( comment", !IO),
     test("Invalid escape sequence", "\"hello\\x\"", !IO),

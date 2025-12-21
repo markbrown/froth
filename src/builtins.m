@@ -19,6 +19,12 @@
     ;       bi_dump         % dump   ( -- )
     ;       bi_env          % env    ( -- map )
     ;       bi_add          % +      ( a b -- a+b )
+    ;       bi_sub          % -      ( a b -- a-b )
+    ;       bi_mul          % *      ( a b -- a*b )
+    ;       bi_gt           % >      ( a b -- int )
+    ;       bi_lt           % <      ( a b -- int )
+    ;       bi_gte          % >=     ( a b -- int )
+    ;       bi_lte          % <=     ( a b -- int )
     ;       bi_get          % @      ( container key -- val )
     ;       bi_length       % #      ( container -- int )
     ;       bi_eq           % =      ( a b -- int )
@@ -31,7 +37,22 @@
     ;       bi_fwrite       % fwrite ( value file -- )
     ;       bi_empty        % $      ( -- map )
     ;       bi_keys         % keys   ( map -- array )
-    ;       bi_store.       % :      ( map val 'key -- map )
+    ;       bi_store        % :      ( map val 'key -- map )
+    ;       bi_in           % in     ( map 'key -- int )
+    ;       bi_is_int       % isInt    ( a -- int )
+    ;       bi_is_string    % isString ( a -- int )
+    ;       bi_is_array     % isArray  ( a -- int )
+    ;       bi_is_map       % isMap    ( a -- int )
+    ;       bi_is_nil       % isNil    ( a -- int )
+    ;       bi_is_cons      % isCons   ( a -- int )
+    ;       bi_is_ident     % isIdent  ( a -- int )
+    ;       bi_is_binder    % isBinder ( a -- int )
+    ;       bi_is_func      % isFunc   ( a -- int )
+    ;       bi_is_gen       % isGen    ( a -- int )
+    ;       bi_is_quote     % isQuote  ( a -- int )
+    ;       bi_is_apply     % isApply  ( a -- int )
+    ;       bi_to_binder    % toBinder ( 'ident -- 'binder )
+    ;       bi_to_ident.    % toIdent  ( 'binder -- 'ident )
 
     % builtin(Name, Builtin):
     % Map a name to a builtin operation.
@@ -45,6 +66,12 @@
 :- pred builtin_dump(intern_table::in, stack::in, io::di, io::uo) is det.
 :- pred builtin_env(env::in, stack::in, stack::out) is det.
 :- pred builtin_add(stack::in, stack::out) is det.
+:- pred builtin_sub(stack::in, stack::out) is det.
+:- pred builtin_mul(stack::in, stack::out) is det.
+:- pred builtin_gt(stack::in, stack::out) is det.
+:- pred builtin_lt(stack::in, stack::out) is det.
+:- pred builtin_gte(stack::in, stack::out) is det.
+:- pred builtin_lte(stack::in, stack::out) is det.
 :- pred builtin_get(stack::in, stack::out) is det.
 :- pred builtin_length(stack::in, stack::out) is det.
 :- pred builtin_eq(stack::in, stack::out) is det.
@@ -60,6 +87,21 @@
 :- pred builtin_empty(stack::in, stack::out) is det.
 :- pred builtin_keys(stack::in, stack::out) is det.
 :- pred builtin_store(stack::in, stack::out) is det.
+:- pred builtin_in(stack::in, stack::out) is det.
+:- pred builtin_is_int(stack::in, stack::out) is det.
+:- pred builtin_is_string(stack::in, stack::out) is det.
+:- pred builtin_is_array(stack::in, stack::out) is det.
+:- pred builtin_is_map(stack::in, stack::out) is det.
+:- pred builtin_is_nil(stack::in, stack::out) is det.
+:- pred builtin_is_cons(stack::in, stack::out) is det.
+:- pred builtin_is_ident(stack::in, stack::out) is det.
+:- pred builtin_is_binder(stack::in, stack::out) is det.
+:- pred builtin_is_func(stack::in, stack::out) is det.
+:- pred builtin_is_gen(stack::in, stack::out) is det.
+:- pred builtin_is_quote(stack::in, stack::out) is det.
+:- pred builtin_is_apply(stack::in, stack::out) is det.
+:- pred builtin_to_binder(stack::in, stack::out) is det.
+:- pred builtin_to_ident(stack::in, stack::out) is det.
 
 %-----------------------------------------------------------------------%
 
@@ -81,6 +123,12 @@ builtin("print", bi_print).
 builtin("dump", bi_dump).
 builtin("env", bi_env).
 builtin("+", bi_add).
+builtin("-", bi_sub).
+builtin("*", bi_mul).
+builtin(">", bi_gt).
+builtin("<", bi_lt).
+builtin(">=", bi_gte).
+builtin("<=", bi_lte).
 builtin("@", bi_get).
 builtin("#", bi_length).
 builtin("=", bi_eq).
@@ -94,6 +142,21 @@ builtin("fwrite", bi_fwrite).
 builtin("$", bi_empty).
 builtin("keys", bi_keys).
 builtin(":", bi_store).
+builtin("in", bi_in).
+builtin("isInt", bi_is_int).
+builtin("isString", bi_is_string).
+builtin("isArray", bi_is_array).
+builtin("isMap", bi_is_map).
+builtin("isNil", bi_is_nil).
+builtin("isCons", bi_is_cons).
+builtin("isIdent", bi_is_ident).
+builtin("isBinder", bi_is_binder).
+builtin("isFunc", bi_is_func).
+builtin("isGen", bi_is_gen).
+builtin("isQuote", bi_is_quote).
+builtin("isApply", bi_is_apply).
+builtin("toBinder", bi_to_binder).
+builtin("toIdent", bi_to_ident).
 
 %-----------------------------------------------------------------------%
 % print: ( a -- ) Pop and print a value
@@ -209,6 +272,104 @@ builtin_add(!Stack) :-
     ).
 
 %-----------------------------------------------------------------------%
+% -: ( int int -- int ) Subtract: a b - computes a - b
+%-----------------------------------------------------------------------%
+
+builtin_sub(!Stack) :-
+    pop("-", V1, !Stack),
+    pop("-", V2, !Stack),
+    ( if V1 = intval(I1), V2 = intval(I2) then
+        push(intval(I2 - I1), !Stack)
+    else if V1 = intval(_) then
+        throw(type_error("int", V2))
+    else
+        throw(type_error("int", V1))
+    ).
+
+%-----------------------------------------------------------------------%
+% *: ( int int -- int ) Multiply two integers
+%-----------------------------------------------------------------------%
+
+builtin_mul(!Stack) :-
+    pop("*", V1, !Stack),
+    pop("*", V2, !Stack),
+    ( if V1 = intval(I1), V2 = intval(I2) then
+        push(intval(I1 * I2), !Stack)
+    else if V1 = intval(_) then
+        throw(type_error("int", V2))
+    else
+        throw(type_error("int", V1))
+    ).
+
+%-----------------------------------------------------------------------%
+% >: ( int int -- int ) Greater than: a b > is 0 if a > b, else 1
+%-----------------------------------------------------------------------%
+
+builtin_gt(!Stack) :-
+    pop(">", V1, !Stack),
+    pop(">", V2, !Stack),
+    ( if V1 = intval(I1), V2 = intval(I2) then
+        ( if I2 > I1 then push(intval(0), !Stack)
+        else push(intval(1), !Stack)
+        )
+    else if V1 = intval(_) then
+        throw(type_error("int", V2))
+    else
+        throw(type_error("int", V1))
+    ).
+
+%-----------------------------------------------------------------------%
+% <: ( int int -- int ) Less than: a b < is 0 if a < b, else 1
+%-----------------------------------------------------------------------%
+
+builtin_lt(!Stack) :-
+    pop("<", V1, !Stack),
+    pop("<", V2, !Stack),
+    ( if V1 = intval(I1), V2 = intval(I2) then
+        ( if I2 < I1 then push(intval(0), !Stack)
+        else push(intval(1), !Stack)
+        )
+    else if V1 = intval(_) then
+        throw(type_error("int", V2))
+    else
+        throw(type_error("int", V1))
+    ).
+
+%-----------------------------------------------------------------------%
+% >=: ( int int -- int ) Greater or equal: a b >= is 0 if a >= b, else 1
+%-----------------------------------------------------------------------%
+
+builtin_gte(!Stack) :-
+    pop(">=", V1, !Stack),
+    pop(">=", V2, !Stack),
+    ( if V1 = intval(I1), V2 = intval(I2) then
+        ( if I2 >= I1 then push(intval(0), !Stack)
+        else push(intval(1), !Stack)
+        )
+    else if V1 = intval(_) then
+        throw(type_error("int", V2))
+    else
+        throw(type_error("int", V1))
+    ).
+
+%-----------------------------------------------------------------------%
+% <=: ( int int -- int ) Less or equal: a b <= is 0 if a <= b, else 1
+%-----------------------------------------------------------------------%
+
+builtin_lte(!Stack) :-
+    pop("<=", V1, !Stack),
+    pop("<=", V2, !Stack),
+    ( if V1 = intval(I1), V2 = intval(I2) then
+        ( if I2 =< I1 then push(intval(0), !Stack)
+        else push(intval(1), !Stack)
+        )
+    else if V1 = intval(_) then
+        throw(type_error("int", V2))
+    else
+        throw(type_error("int", V1))
+    ).
+
+%-----------------------------------------------------------------------%
 % @: ( container key -- val ) Get element from array by index or from map by key
 % For arrays: key must be int. For maps: key must be quoted identifier ('name).
 %-----------------------------------------------------------------------%
@@ -228,12 +389,24 @@ builtin_get(!Stack) :-
         else
             throw(undefined_name(NameId))
         )
+    else if ContainerVal = termval(function(Terms)), KeyVal = intval(Index) then
+        ( if list.index0(Terms, Index, Term) then
+            push(termval(Term), !Stack)
+        else
+            throw(index_out_of_bounds(Index, list.length(Terms)))
+        )
+    else if ContainerVal = termval(generator(Terms)), KeyVal = intval(Index) then
+        ( if list.index0(Terms, Index, Term) then
+            push(termval(Term), !Stack)
+        else
+            throw(index_out_of_bounds(Index, list.length(Terms)))
+        )
     else if ContainerVal = arrayval(_) then
         throw(type_error("int", KeyVal))
     else if ContainerVal = mapval(_) then
         throw(type_error("term", KeyVal))
     else
-        throw(type_error("array or map", ContainerVal))
+        throw(type_error("array, map, or quoted function/generator", ContainerVal))
     ).
 
 %-----------------------------------------------------------------------%
@@ -246,8 +419,12 @@ builtin_length(!Stack) :-
         push(intval(array.size(Array)), !Stack)
     else if V = mapval(Map) then
         push(intval(map.count(Map)), !Stack)
+    else if V = termval(function(Terms)) then
+        push(intval(list.length(Terms)), !Stack)
+    else if V = termval(generator(Terms)) then
+        push(intval(list.length(Terms)), !Stack)
     else
-        throw(type_error("array or map", V))
+        throw(type_error("array, map, or quoted function/generator", V))
     ).
 
 %-----------------------------------------------------------------------%
@@ -501,6 +678,126 @@ builtin_store(!Stack) :-
         throw(type_error("term", KeyVal))
     else
         throw(type_error("map", MapVal))
+    ).
+
+%-----------------------------------------------------------------------%
+% in: ( map 'key -- int ) Test if key exists in map: 0 if yes, 1 if no
+%-----------------------------------------------------------------------%
+
+builtin_in(!Stack) :-
+    pop("in", KeyVal, !Stack),
+    pop("in", MapVal, !Stack),
+    ( if MapVal = mapval(Map), KeyVal = termval(identifier(NameId)) then
+        ( if map.contains(Map, NameId) then
+            push(intval(0), !Stack)
+        else
+            push(intval(1), !Stack)
+        )
+    else if MapVal = mapval(_) then
+        throw(type_error("term", KeyVal))
+    else
+        throw(type_error("map", MapVal))
+    ).
+
+%-----------------------------------------------------------------------%
+% Type testing predicates
+% Each returns 0 if true, 1 if false (following Froth's boolean convention)
+%-----------------------------------------------------------------------%
+
+builtin_is_int(!Stack) :-
+    pop("isInt", V, !Stack),
+    ( if V = intval(_) then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
+
+builtin_is_string(!Stack) :-
+    pop("isString", V, !Stack),
+    ( if V = stringval(_) then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
+
+builtin_is_array(!Stack) :-
+    pop("isArray", V, !Stack),
+    ( if V = arrayval(_) then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
+
+builtin_is_map(!Stack) :-
+    pop("isMap", V, !Stack),
+    ( if V = mapval(_) then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
+
+builtin_is_nil(!Stack) :-
+    pop("isNil", V, !Stack),
+    ( if V = nilval then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
+
+builtin_is_cons(!Stack) :-
+    pop("isCons", V, !Stack),
+    ( if V = consval(_, _) then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
+
+builtin_is_ident(!Stack) :-
+    pop("isIdent", V, !Stack),
+    ( if V = termval(identifier(_)) then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
+
+builtin_is_binder(!Stack) :-
+    pop("isBinder", V, !Stack),
+    ( if V = termval(binder(_)) then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
+
+builtin_is_func(!Stack) :-
+    pop("isFunc", V, !Stack),
+    ( if V = termval(function(_)) then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
+
+builtin_is_gen(!Stack) :-
+    pop("isGen", V, !Stack),
+    ( if V = termval(generator(_)) then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
+
+builtin_is_quote(!Stack) :-
+    pop("isQuote", V, !Stack),
+    ( if V = termval(quoted(_)) then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
+
+builtin_is_apply(!Stack) :-
+    pop("isApply", V, !Stack),
+    ( if V = termval(apply_term) then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
+
+%-----------------------------------------------------------------------%
+% toBinder: ( 'ident -- 'binder ) Convert quoted identifier to quoted binder
+%-----------------------------------------------------------------------%
+
+builtin_to_binder(!Stack) :-
+    pop("toBinder", V, !Stack),
+    ( if V = termval(identifier(NameId)) then
+        push(termval(binder(NameId)), !Stack)
+    else
+        throw(type_error("quoted identifier", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% toIdent: ( 'binder -- 'ident ) Convert quoted binder to quoted identifier
+%-----------------------------------------------------------------------%
+
+builtin_to_ident(!Stack) :-
+    pop("toIdent", V, !Stack),
+    ( if V = termval(binder(NameId)) then
+        push(termval(identifier(NameId)), !Stack)
+    else
+        throw(type_error("quoted binder", V))
     ).
 
 %-----------------------------------------------------------------------%

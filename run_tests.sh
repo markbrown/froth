@@ -19,7 +19,14 @@ for test_file in "$TESTS_DIR"/*.froth; do
         continue
     fi
 
-    actual=$("$FROTH" "$test_file" 2>&1) || true
+    # Check for a .lib file specifying a library to load
+    lib_file="$TESTS_DIR/$test_name.lib"
+    if [ -f "$lib_file" ]; then
+        lib_path=$(cat "$lib_file" | tr -d '\n')
+        actual=$("$FROTH" -l "$lib_path" "$test_file" 2>&1) || true
+    else
+        actual=$("$FROTH" "$test_file" 2>&1) || true
+    fi
     expected=$(cat "$expected_file")
 
     if [ "$actual" = "$expected" ]; then

@@ -217,10 +217,11 @@ read_token(State0, Pos, Result) :-
             advance(State0, State1),
             read_slash_name(State1, Result)
         else if is_number_start(State0) then
-            % Check number before name since +/- are now name start chars
             read_number(State0, Result)
-        else if is_name_start(Char) then
-            read_name(State0, Result)
+        else if is_text_name_start(Char) then
+            read_text_name(State0, Result)
+        else if is_graphical_char(Char) then
+            read_graphical_name(State0, Result)
         else
             read_junk(State0, Result)
         )
@@ -231,37 +232,35 @@ read_token(State0, Pos, Result) :-
 
 %-----------------------------------------------------------------------%
 % Name tokens
+%
+% Names are either text or graphical:
+%   - Text names: [a-zA-Z][a-zA-Z0-9-]*
+%   - Graphical names: [+=.,<>?@#:$-]+
 %-----------------------------------------------------------------------%
 
-:- pred is_name_start(char::in) is semidet.
+:- pred is_text_name_start(char::in) is semidet.
 
-is_name_start(Char) :-
-    ( char.is_alpha(Char)
-    ; Char = ('+')
-    ; Char = ('-')
-    ; Char = ('=')
-    ; Char = (',')
-    ; Char = ('.')
-    ; Char = ('>')
-    ; Char = ('<')
-    ; Char = ('?')
-    ; Char = ('@')
-    ; Char = ('#')
-    ; Char = (':')
-    ; Char = ('$')
-    ).
+is_text_name_start(Char) :-
+    char.is_alpha(Char).
 
-:- pred is_name_char(char::in) is semidet.
+:- pred is_text_name_char(char::in) is semidet.
 
-is_name_char(Char) :-
+is_text_name_char(Char) :-
     ( char.is_alnum(Char)
     ; Char = ('-')
-    ; Char = ('+')
+    ).
+
+:- pred is_graphical_char(char::in) is semidet.
+
+is_graphical_char(Char) :-
+    ( Char = ('+')
+    ; Char = ('-')
+    ; Char = ('*')
     ; Char = ('=')
     ; Char = (',')
     ; Char = ('.')
-    ; Char = ('>')
     ; Char = ('<')
+    ; Char = ('>')
     ; Char = ('?')
     ; Char = ('@')
     ; Char = ('#')
@@ -269,32 +268,62 @@ is_name_char(Char) :-
     ; Char = ('$')
     ).
 
-:- pred read_name(lex_state::in,
+:- pred read_text_name(lex_state::in,
     maybe_result({token, lex_state}, lex_error)::out) is det.
 
-read_name(State0, Result) :-
-    ( if peek_char(State0, Char), is_name_start(Char) then
-        read_name_chars(State0, Chars, State1),
-        NameStr = string.from_char_list(Chars),
-        IT0 = State1 ^ ls_intern,
-        intern_name(NameStr, NameId, IT0 ^ it_names, NewNames),
-        State2 = State1 ^ ls_intern := (IT0 ^ it_names := NewNames),
-        Result = ok({name(NameId), State2})
-    else
-        % Fall through to junk
-        read_junk(State0, Result)
-    ).
+read_text_name(State0, Result) :-
+    read_text_name_chars(State0, Chars, State1),
+    NameStr = string.from_char_list(Chars),
+    IT0 = State1 ^ ls_intern,
+    intern_name(NameStr, NameId, IT0 ^ it_names, NewNames),
+    State2 = State1 ^ ls_intern := (IT0 ^ it_names := NewNames),
+    Result = ok({name(NameId), State2}).
 
-:- pred read_name_chars(lex_state::in, list(char)::out, lex_state::out) is det.
+:- pred read_text_name_chars(lex_state::in, list(char)::out,
+    lex_state::out) is det.
 
-read_name_chars(State0, Chars, State) :-
+read_text_name_chars(State0, Chars, State) :-
     ( if
         not at_end(State0),
         peek_char(State0, Char),
-        is_name_char(Char)
+        is_text_name_char(Char)
     then
         advance(State0, State1),
-        read_name_chars(State1, RestChars, State),
+        read_text_name_chars(State1, RestChars, State),
+        Chars = [Char | RestChars]
+    else
+        Chars = [],
+        State = State0
+    ).
+
+:- pred read_graphical_name(lex_state::in,
+    maybe_result({token, lex_state}, lex_error)::out) is det.
+
+read_graphical_name(State0, Result) :-
+    read_graphical_chars(State0, Chars, State1),
+    NameStr = string.from_char_list(Chars),
+    IT0 = State1 ^ ls_intern,
+    intern_name(NameStr, NameId, IT0 ^ it_names, NewNames),
+    State2 = State1 ^ ls_intern := (IT0 ^ it_names := NewNames),
+    Result = ok({name(NameId), State2}).
+
+:- pred read_graphical_chars(lex_state::in, list(char)::out,
+    lex_state::out) is det.
+
+read_graphical_chars(State0, Chars, State) :-
+    ( if
+        not at_end(State0),
+        peek_char(State0, Char),
+        is_graphical_char(Char),
+        % Stop if this would start a number: +/- followed by digit
+        not (
+            ( Char = ('+') ; Char = ('-') ),
+            peek_char_at(State0, 1, NextChar),
+            char.is_digit(NextChar)
+        )
+    then
+        advance(State0, State1),
+        read_graphical_chars(State1, RestChars, State),
         Chars = [Char | RestChars]
     else
         Chars = [],
@@ -309,8 +338,15 @@ read_name_chars(State0, Chars, State) :-
     maybe_result({token, lex_state}, lex_error)::out) is det.
 
 read_slash_name(State0, Result) :-
-    ( if peek_char(State0, Char), is_name_start(Char) then
-        read_name_chars(State0, Chars, State1),
+    ( if peek_char(State0, Char), is_text_name_start(Char) then
+        read_text_name_chars(State0, Chars, State1),
+        NameStr = string.from_char_list(Chars),
+        IT0 = State1 ^ ls_intern,
+        intern_name(NameStr, NameId, IT0 ^ it_names, NewNames),
+        State2 = State1 ^ ls_intern := (IT0 ^ it_names := NewNames),
+        Result = ok({slash_name(NameId), State2})
+    else if peek_char(State0, Char), is_graphical_char(Char) then
+        read_graphical_chars(State0, Chars, State1),
         NameStr = string.from_char_list(Chars),
         IT0 = State1 ^ ls_intern,
         intern_name(NameStr, NameId, IT0 ^ it_names, NewNames),
@@ -352,16 +388,14 @@ read_number(State0, Result) :-
 :- pred read_number_chars(lex_state::in, list(char)::out, lex_state::out) is det.
 
 read_number_chars(State0, Chars, State) :-
+    % This is only called after is_number_start validated the input,
+    % so the first char is either a digit or +/- followed by digit.
     ( if
         not at_end(State0),
         peek_char(State0, Char),
         ( char.is_digit(Char)
-        ; ( Char = ('-') ; Char = ('+') ), State0 ^ ls_pos = 0
-        ; ( Char = ('-') ; Char = ('+') ),
-          % Only allow sign at start of number
-          peek_char_at(State0, -1, PrevChar),
-          not is_name_char(PrevChar),
-          not char.is_digit(PrevChar)
+        ; Char = ('-')
+        ; Char = ('+')
         )
     then
         advance(State0, State1),
@@ -518,6 +552,10 @@ is_token_starter(Char) :-
     ; Char = ('!')
     ; Char = (';')
     ; Char = ('(')
+    ; Char = ('/')
+    ; char.is_digit(Char)
+    ; is_text_name_start(Char)
+    ; is_graphical_char(Char)
     ).
 
 %-----------------------------------------------------------------------%

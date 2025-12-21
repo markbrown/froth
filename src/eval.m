@@ -114,6 +114,24 @@ eval_builtin(IT, Builtin, !Env, !Stack, !IO) :-
         Builtin = builtins.bi_add,
         builtins.builtin_add(!Stack)
     ;
+        Builtin = builtins.bi_sub,
+        builtins.builtin_sub(!Stack)
+    ;
+        Builtin = builtins.bi_mul,
+        builtins.builtin_mul(!Stack)
+    ;
+        Builtin = builtins.bi_gt,
+        builtins.builtin_gt(!Stack)
+    ;
+        Builtin = builtins.bi_lt,
+        builtins.builtin_lt(!Stack)
+    ;
+        Builtin = builtins.bi_gte,
+        builtins.builtin_gte(!Stack)
+    ;
+        Builtin = builtins.bi_lte,
+        builtins.builtin_lte(!Stack)
+    ;
         Builtin = builtins.bi_get,
         builtins.builtin_get(!Stack)
     ;
@@ -152,6 +170,51 @@ eval_builtin(IT, Builtin, !Env, !Stack, !IO) :-
     ;
         Builtin = builtins.bi_store,
         builtins.builtin_store(!Stack)
+    ;
+        Builtin = builtins.bi_in,
+        builtins.builtin_in(!Stack)
+    ;
+        Builtin = builtins.bi_is_int,
+        builtins.builtin_is_int(!Stack)
+    ;
+        Builtin = builtins.bi_is_string,
+        builtins.builtin_is_string(!Stack)
+    ;
+        Builtin = builtins.bi_is_array,
+        builtins.builtin_is_array(!Stack)
+    ;
+        Builtin = builtins.bi_is_map,
+        builtins.builtin_is_map(!Stack)
+    ;
+        Builtin = builtins.bi_is_nil,
+        builtins.builtin_is_nil(!Stack)
+    ;
+        Builtin = builtins.bi_is_cons,
+        builtins.builtin_is_cons(!Stack)
+    ;
+        Builtin = builtins.bi_is_ident,
+        builtins.builtin_is_ident(!Stack)
+    ;
+        Builtin = builtins.bi_is_binder,
+        builtins.builtin_is_binder(!Stack)
+    ;
+        Builtin = builtins.bi_is_func,
+        builtins.builtin_is_func(!Stack)
+    ;
+        Builtin = builtins.bi_is_gen,
+        builtins.builtin_is_gen(!Stack)
+    ;
+        Builtin = builtins.bi_is_quote,
+        builtins.builtin_is_quote(!Stack)
+    ;
+        Builtin = builtins.bi_is_apply,
+        builtins.builtin_is_apply(!Stack)
+    ;
+        Builtin = builtins.bi_to_binder,
+        builtins.builtin_to_binder(!Stack)
+    ;
+        Builtin = builtins.bi_to_ident,
+        builtins.builtin_to_ident(!Stack)
     ).
 
 %-----------------------------------------------------------------------%
