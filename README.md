@@ -177,6 +177,32 @@ m keys # print                ; 2
 5 fact fact! print     ; 120
 ```
 
+## Language Comparison
+
+Froth belongs to the concatenative/stack-based language family, but combines ideas from multiple traditions:
+
+**From Forth**: Stack-based execution, postfix notation, minimal syntax, concatenative style.
+
+**From Scheme**: Lexical scoping, first-class closures, quoting mechanism, minimalist design philosophy.
+
+| Feature | Forth | Scheme | Froth |
+|---------|-------|--------|-------|
+| Execution | Stack-based | Expression evaluation | Stack-based |
+| Syntax | Postfix | Prefix `(+ 1 2)` | Postfix `1 2 +` |
+| Scoping | Dynamic | Lexical | Lexical |
+| Closures | No | Yes | Yes, inspectable as `(env, body)` |
+| Quoting | Limited | `'x` | `'x` |
+| Code as data | No | S-expressions | Quoted terms |
+
+Froth could be described as "Forth with Scheme's scoping semantics" - it looks like Forth but thinks more like Scheme.
+
+### Related Languages
+
+- **Factor** - Modern concatenative language with quotations and lexical scope
+- **Joy** - Pure functional concatenative language
+- **PostScript** - Stack-based language for graphics
+- **RPL** - HP calculator language with stack and quoting
+
 ## Documentation
 
 See [FROTH.md](FROTH.md) for the complete language reference.
