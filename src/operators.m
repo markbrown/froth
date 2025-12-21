@@ -51,15 +51,23 @@
     ;       op_is_gen       % isGen    ( a -- int )
     ;       op_is_quote     % isQuote  ( a -- int )
     ;       op_is_apply     % isApply  ( a -- int )
-    ;       op_to_binder    % toBinder ( 'ident -- 'binder )
-    ;       op_to_ident     % toIdent  ( 'binder -- 'ident )
     ;       op_is_value     % isValue  ( a -- int )
-    ;       op_unwrap.      % unwrap   ( 'value -- value )
+    ;       op_unwrap       % unwrap   ( 'value -- value )
+    ;       op_intern       % intern   ( string|'ident|'binder -- int )
+    ;       op_id_to_string % idToString ( int -- string )
+    ;       op_id_to_ident  % idToIdent  ( int -- 'ident )
+    ;       op_id_to_binder.% idToBinder ( int -- 'binder )
 
     % operator(Name, Op):
     % Map a name to an operator.
     %
 :- pred operator(string::in, operator::out) is semidet.
+
+    % eval_operator(IT, Op, Env, !Stack, !IO):
+    % Execute an operator. Env is read-only (for the env operator).
+    %
+:- pred eval_operator(intern_table::in, operator::in, env::in,
+    stack::in, stack::out, io::di, io::uo) is det.
 
     % Individual operator implementations.
     %
@@ -102,10 +110,12 @@
 :- pred operator_is_gen(stack::in, stack::out) is det.
 :- pred operator_is_quote(stack::in, stack::out) is det.
 :- pred operator_is_apply(stack::in, stack::out) is det.
-:- pred operator_to_binder(stack::in, stack::out) is det.
-:- pred operator_to_ident(stack::in, stack::out) is det.
 :- pred operator_is_value(stack::in, stack::out) is det.
 :- pred operator_unwrap(stack::in, stack::out) is det.
+:- pred operator_intern(stack::in, stack::out) is det.
+:- pred operator_id_to_string(stack::in, stack::out) is det.
+:- pred operator_id_to_ident(stack::in, stack::out) is det.
+:- pred operator_id_to_binder(stack::in, stack::out) is det.
 
 %-----------------------------------------------------------------------%
 
@@ -159,10 +169,145 @@ operator("isFunc", op_is_func).
 operator("isGen", op_is_gen).
 operator("isQuote", op_is_quote).
 operator("isApply", op_is_apply).
-operator("toBinder", op_to_binder).
-operator("toIdent", op_to_ident).
 operator("isValue", op_is_value).
 operator("unwrap", op_unwrap).
+operator("intern", op_intern).
+operator("idToString", op_id_to_string).
+operator("idToIdent", op_id_to_ident).
+operator("idToBinder", op_id_to_binder).
+
+%-----------------------------------------------------------------------%
+% eval_operator: dispatch to operator implementation
+%-----------------------------------------------------------------------%
+
+eval_operator(IT, Op, Env, !Stack, !IO) :-
+    (
+        Op = op_print,
+        operator_print(IT, !Stack, !IO)
+    ;
+        Op = op_dump,
+        operator_dump(IT, !.Stack, !IO)
+    ;
+        Op = op_env,
+        operator_env(Env, !Stack)
+    ;
+        Op = op_add,
+        operator_add(!Stack)
+    ;
+        Op = op_sub,
+        operator_sub(!Stack)
+    ;
+        Op = op_mul,
+        operator_mul(!Stack)
+    ;
+        Op = op_gt,
+        operator_gt(!Stack)
+    ;
+        Op = op_lt,
+        operator_lt(!Stack)
+    ;
+        Op = op_gte,
+        operator_gte(!Stack)
+    ;
+        Op = op_lte,
+        operator_lte(!Stack)
+    ;
+        Op = op_get,
+        operator_get(!Stack)
+    ;
+        Op = op_length,
+        operator_length(!Stack)
+    ;
+        Op = op_eq,
+        operator_eq(!Stack)
+    ;
+        Op = op_ite,
+        operator_ite(!Stack)
+    ;
+        Op = op_nil,
+        operator_nil(!Stack)
+    ;
+        Op = op_cons,
+        operator_cons(!Stack)
+    ;
+        Op = op_fst,
+        operator_fst(!Stack)
+    ;
+        Op = op_snd,
+        operator_snd(!Stack)
+    ;
+        Op = op_write,
+        operator_write(IT, !Stack, !IO)
+    ;
+        Op = op_fwrite,
+        operator_fwrite(IT, !Stack, !IO)
+    ;
+        Op = op_empty,
+        operator_empty(!Stack)
+    ;
+        Op = op_keys,
+        operator_keys(!Stack)
+    ;
+        Op = op_store,
+        operator_store(!Stack)
+    ;
+        Op = op_in,
+        operator_in(!Stack)
+    ;
+        Op = op_is_int,
+        operator_is_int(!Stack)
+    ;
+        Op = op_is_string,
+        operator_is_string(!Stack)
+    ;
+        Op = op_is_array,
+        operator_is_array(!Stack)
+    ;
+        Op = op_is_map,
+        operator_is_map(!Stack)
+    ;
+        Op = op_is_nil,
+        operator_is_nil(!Stack)
+    ;
+        Op = op_is_cons,
+        operator_is_cons(!Stack)
+    ;
+        Op = op_is_ident,
+        operator_is_ident(!Stack)
+    ;
+        Op = op_is_binder,
+        operator_is_binder(!Stack)
+    ;
+        Op = op_is_func,
+        operator_is_func(!Stack)
+    ;
+        Op = op_is_gen,
+        operator_is_gen(!Stack)
+    ;
+        Op = op_is_quote,
+        operator_is_quote(!Stack)
+    ;
+        Op = op_is_apply,
+        operator_is_apply(!Stack)
+    ;
+        Op = op_is_value,
+        operator_is_value(!Stack)
+    ;
+        Op = op_unwrap,
+        operator_unwrap(!Stack)
+    ;
+        Op = op_intern,
+        operator_intern(!Stack)
+    ;
+        Op = op_id_to_string,
+        operator_id_to_string(!Stack)
+    ;
+        Op = op_id_to_ident,
+        operator_id_to_ident(!Stack)
+    ;
+        Op = op_id_to_binder,
+        operator_id_to_binder(!Stack)
+    ).
 
 %-----------------------------------------------------------------------%
 % print: ( a -- ) Pop and print a value
@@ -193,8 +338,8 @@ value_to_string(IT, consval(H, T)) =
 
 :- func term_to_string(intern_table, term) = string.
 
-term_to_string(IT, identifier(NameId)) = lookup_name(IT ^ it_names, NameId).
-term_to_string(IT, binder(NameId)) = "/" ++ lookup_name(IT ^ it_names, NameId).
+term_to_string(IT, identifier(NameId)) = lookup_string(IT ^ it_strings, NameId).
+term_to_string(IT, binder(NameId)) = "/" ++ lookup_string(IT ^ it_strings, NameId).
 term_to_string(IT, function(Terms)) = "{ " ++ terms_to_string(IT, Terms) ++ "}".
 term_to_string(IT, generator(Terms)) = "[ " ++ terms_to_string(IT, Terms) ++ "]".
 term_to_string(IT, quoted(T)) = "'" ++ term_to_string(IT, T).
@@ -494,7 +639,7 @@ arrays_equal_loop(A1, A2, I, Size, Equal) :-
     ).
 
 % Convert map to assoc_list to perform bulk operations.
-:- pred maps_equal(map(name_id, value)::in, map(name_id, value)::in,
+:- pred maps_equal(map(string_id, value)::in, map(string_id, value)::in,
     bool::out) is semidet.
 
 maps_equal(M1, M2, Equal) :-
@@ -502,8 +647,8 @@ maps_equal(M1, M2, Equal) :-
     map.to_assoc_list(M2, AL2),
     assoc_lists_equal(AL1, AL2, Equal).
 
-:- pred assoc_lists_equal(assoc_list(name_id, value)::in,
-    assoc_list(name_id, value)::in, bool::out) is semidet.
+:- pred assoc_lists_equal(assoc_list(string_id, value)::in,
+    assoc_list(string_id, value)::in, bool::out) is semidet.
 
 assoc_lists_equal([], [], yes).
 assoc_lists_equal([K1 - V1 | Rest1], [K2 - V2 | Rest2], Equal) :-
@@ -603,17 +748,17 @@ value_to_write_string(_, nilval) = ".".
 value_to_write_string(IT, consval(H, T)) =
     value_to_write_string(IT, T) ++ " " ++ value_to_write_string(IT, H) ++ " ,".
 
-:- pred map_entry_to_string(intern_table::in, name_id::in, value::in,
+:- pred map_entry_to_string(intern_table::in, string_id::in, value::in,
     string::in, string::out) is det.
 
 map_entry_to_string(IT, NameId, V, !Acc) :-
     !:Acc = !.Acc ++ " " ++ value_to_write_string(IT, V) ++ " '" ++
-        lookup_name(IT ^ it_names, NameId) ++ " :".
+        lookup_string(IT ^ it_strings, NameId) ++ " :".
 
 :- func term_to_write_string(intern_table, term) = string.
 
-term_to_write_string(IT, identifier(NameId)) = lookup_name(IT ^ it_names, NameId).
-term_to_write_string(IT, binder(NameId)) = "/" ++ lookup_name(IT ^ it_names, NameId).
+term_to_write_string(IT, identifier(NameId)) = lookup_string(IT ^ it_strings, NameId).
+term_to_write_string(IT, binder(NameId)) = "/" ++ lookup_string(IT ^ it_strings, NameId).
 term_to_write_string(IT, function(Terms)) = "{ " ++ terms_to_write_string(IT, Terms) ++ "}".
 term_to_write_string(IT, generator(Terms)) = "[ " ++ terms_to_write_string(IT, Terms) ++ "]".
 term_to_write_string(IT, quoted(T)) = "'" ++ term_to_write_string(IT, T).
@@ -783,30 +928,6 @@ operator_is_apply(!Stack) :-
     ).
 
 %-----------------------------------------------------------------------%
-% toBinder: ( 'ident -- 'binder ) Convert quoted identifier to quoted binder
-%-----------------------------------------------------------------------%
-
-operator_to_binder(!Stack) :-
-    pop("toBinder", V, !Stack),
-    ( if V = termval(identifier(NameId)) then
-        push(termval(binder(NameId)), !Stack)
-    else
-        throw(type_error("quoted identifier", V))
-    ).
-
-%-----------------------------------------------------------------------%
-% toIdent: ( 'binder -- 'ident ) Convert quoted binder to quoted identifier
-%-----------------------------------------------------------------------%
-
-operator_to_ident(!Stack) :-
-    pop("toIdent", V, !Stack),
-    ( if V = termval(binder(NameId)) then
-        push(termval(identifier(NameId)), !Stack)
-    else
-        throw(type_error("quoted binder", V))
-    ).
-
-%-----------------------------------------------------------------------%
 % isValue: ( a -- int ) Test if value is a quoted value term
 %-----------------------------------------------------------------------%
 
@@ -826,6 +947,58 @@ operator_unwrap(!Stack) :-
         push(Inner, !Stack)
     else
         throw(type_error("quoted value", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% intern: ( string|'ident|'binder -- int ) Get the intern id
+%-----------------------------------------------------------------------%
+
+operator_intern(!Stack) :-
+    pop("intern", V, !Stack),
+    ( if V = stringval(Id) then
+        push(intval(Id), !Stack)
+    else if V = termval(identifier(Id)) then
+        push(intval(Id), !Stack)
+    else if V = termval(binder(Id)) then
+        push(intval(Id), !Stack)
+    else
+        throw(type_error("string, identifier, or binder", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% idToString: ( int -- string ) Create string from intern id
+%-----------------------------------------------------------------------%
+
+operator_id_to_string(!Stack) :-
+    pop("idToString", V, !Stack),
+    ( if V = intval(Id) then
+        push(stringval(Id), !Stack)
+    else
+        throw(type_error("int", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% idToIdent: ( int -- 'ident ) Create quoted identifier from intern id
+%-----------------------------------------------------------------------%
+
+operator_id_to_ident(!Stack) :-
+    pop("idToIdent", V, !Stack),
+    ( if V = intval(Id) then
+        push(termval(identifier(Id)), !Stack)
+    else
+        throw(type_error("int", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% idToBinder: ( int -- 'binder ) Create quoted binder from intern id
+%-----------------------------------------------------------------------%
+
+operator_id_to_binder(!Stack) :-
+    pop("idToBinder", V, !Stack),
+    ( if V = intval(Id) then
+        push(termval(binder(Id)), !Stack)
+    else
+        throw(type_error("int", V))
     ).
 
 %-----------------------------------------------------------------------%

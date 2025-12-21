@@ -110,7 +110,7 @@ Evaluation maintains three pieces of state:
 
 | Term | Rule |
 |------|------|
-| `identifier` | If operator, execute it. Otherwise, look up name in environment and push its value. |
+| `identifier` | Look up name in environment; if found, push its value. Otherwise, if operator, execute it. Environment shadows operators. |
 | `binder` (`/name`) | Pop a value and bind it to `name` in the environment. |
 | `function` (`{ ... }`) | Capture the current environment and push a closure. |
 | `generator` (`[ ... ]`) | Evaluate terms with an empty stack, collect results into an array, push the array. |
@@ -159,6 +159,24 @@ Evaluation maintains three pieces of state:
 | `keys` | `( map -- array )` | Get map keys as array of quoted identifiers |
 | `in` | `( map 'key -- int )` | Test if key exists in map: 0 if yes, 1 if no |
 
+### Type Testing
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `isInt` | `( a -- int )` | 0 if int, else 1 |
+| `isString` | `( a -- int )` | 0 if string, else 1 |
+| `isArray` | `( a -- int )` | 0 if array, else 1 |
+| `isMap` | `( a -- int )` | 0 if map, else 1 |
+| `isNil` | `( a -- int )` | 0 if nil, else 1 |
+| `isCons` | `( a -- int )` | 0 if cons (including closures), else 1 |
+| `isIdent` | `( a -- int )` | 0 if quoted identifier, else 1 |
+| `isBinder` | `( a -- int )` | 0 if quoted binder, else 1 |
+| `isFunc` | `( a -- int )` | 0 if quoted function, else 1 |
+| `isGen` | `( a -- int )` | 0 if quoted generator, else 1 |
+| `isQuote` | `( a -- int )` | 0 if quoted quote, else 1 |
+| `isApply` | `( a -- int )` | 0 if quoted apply, else 1 |
+| `isValue` | `( a -- int )` | 0 if quoted value term, else 1 |
+
 ### I/O
 
 | Name | Stack Effect | Description |
@@ -173,22 +191,11 @@ Evaluation maintains three pieces of state:
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
 | `env` | `( -- map )` | Push current environment as a map |
-| `isInt` | `( a -- int )` | 0 if int, else 1 |
-| `isString` | `( a -- int )` | 0 if string, else 1 |
-| `isArray` | `( a -- int )` | 0 if array, else 1 |
-| `isMap` | `( a -- int )` | 0 if map, else 1 |
-| `isNil` | `( a -- int )` | 0 if nil, else 1 |
-| `isCons` | `( a -- int )` | 0 if cons (including closures), else 1 |
-| `isIdent` | `( a -- int )` | 0 if quoted identifier, else 1 |
-| `isBinder` | `( a -- int )` | 0 if quoted binder, else 1 |
-| `isFunc` | `( a -- int )` | 0 if quoted function, else 1 |
-| `isGen` | `( a -- int )` | 0 if quoted generator, else 1 |
-| `isQuote` | `( a -- int )` | 0 if quoted quote, else 1 |
-| `isApply` | `( a -- int )` | 0 if quoted apply, else 1 |
-| `toBinder` | `( 'ident -- 'binder )` | Convert quoted identifier to quoted binder |
-| `toIdent` | `( 'binder -- 'ident )` | Convert quoted binder to quoted identifier |
-| `isValue` | `( a -- int )` | 0 if quoted value term, else 1 |
 | `unwrap` | `( 'value -- value )` | Extract value from quoted value term |
+| `intern` | `( a -- int )` | Get intern id from string, identifier, or binder |
+| `idToString` | `( int -- string )` | Create string from intern id |
+| `idToIdent` | `( int -- 'ident )` | Create quoted identifier from intern id |
+| `idToBinder` | `( int -- 'binder )` | Create quoted binder from intern id |
 
 ## Library
 

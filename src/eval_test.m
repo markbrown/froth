@@ -173,8 +173,8 @@ value_to_string(IT, consval(H, T)) =
 
 :- func term_to_string(intern_table, term) = string.
 
-term_to_string(IT, identifier(NameId)) = lookup_name(IT ^ it_names, NameId).
-term_to_string(IT, binder(NameId)) = "/" ++ lookup_name(IT ^ it_names, NameId).
+term_to_string(IT, identifier(NameId)) = lookup_string(IT ^ it_strings, NameId).
+term_to_string(IT, binder(NameId)) = "/" ++ lookup_string(IT ^ it_strings, NameId).
 term_to_string(IT, function(Terms)) = "{ " ++ terms_to_string(IT, Terms) ++ "}".
 term_to_string(IT, generator(Terms)) = "[ " ++ terms_to_string(IT, Terms) ++ "]".
 term_to_string(IT, quoted(T)) = "'" ++ term_to_string(IT, T).

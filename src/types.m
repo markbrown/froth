@@ -12,30 +12,21 @@
 
 %-----------------------------------------------------------------------%
 
-:- type name_id == int.
-
 :- type string_id == int.
 
-    % Intern tables: bidirectional mappings between strings/names and IDs.
-    % All strings and names are interned during lexing.
+    % Intern table: bidirectional mapping between strings and IDs.
+    % All strings (including names) are interned during lexing.
     %
 :- type string_table.
-:- type name_table.
 :- type intern_table
     --->    intern_table(
-                it_strings  :: string_table,
-                it_names    :: name_table
+                it_strings  :: string_table
             ).
 
 :- func empty_string_table = string_table.
 :- pred intern_string(string::in, string_id::out,
     string_table::in, string_table::out) is det.
 :- func lookup_string(string_table, string_id) = string.
-
-:- func empty_name_table = name_table.
-:- pred intern_name(string::in, name_id::out,
-    name_table::in, name_table::out) is det.
-:- func lookup_name(name_table, name_id) = string.
 
 :- func empty_intern_table = intern_table.
 
@@ -57,21 +48,21 @@
     --->    intval(int)
     ;       stringval(string_id)
     ;       arrayval(array(value))
-    ;       mapval(map(name_id, value))
+    ;       mapval(map(string_id, value))
     ;       termval(term)
     ;       nilval
     ;       consval(value, value).  % cons(head, tail)
 
 :- type term
-    --->    identifier(name_id)
-    ;       binder(name_id)
+    --->    identifier(string_id)
+    ;       binder(string_id)
     ;       function(list(term))
     ;       generator(list(term))
     ;       quoted(term)
     ;       value(value)
     ;       apply_term.
 
-:- type env == map(name_id, value).
+:- type env == map(string_id, value).
 
 :- type stack == list(value).
 
@@ -82,7 +73,7 @@
 :- type eval_error
     --->    stack_underflow(string)         % Operation that caused it
     ;       type_error(string, value)       % Expected type, actual value
-    ;       undefined_name(name_id)
+    ;       undefined_name(string_id)
     ;       index_out_of_bounds(int, int)   % Index, array size
     ;       io_error(string, string, string).  % Operation, filename, message
 
@@ -118,13 +109,6 @@
                 st_to_string    :: map(string_id, string)
             ).
 
-:- type name_table
-    --->    name_table(
-                nt_next_id      :: int,
-                nt_to_id        :: map(string, name_id),
-                nt_to_name      :: map(name_id, string)
-            ).
-
 empty_string_table = string_table(0, map.init, map.init).
 
 intern_string(String, Id, !Table) :-
@@ -141,23 +125,7 @@ intern_string(String, Id, !Table) :-
 lookup_string(Table, Id) = String :-
     map.lookup(Table ^ st_to_string, Id, String).
 
-empty_name_table = name_table(0, map.init, map.init).
-
-intern_name(Name, Id, !Table) :-
-    ToId0 = !.Table ^ nt_to_id,
-    ( if map.search(ToId0, Name, ExistingId) then
-        Id = ExistingId
-    else
-        Id = !.Table ^ nt_next_id,
-        map.det_insert(Name, Id, ToId0, ToId),
-        map.det_insert(Id, Name, !.Table ^ nt_to_name, ToName),
-        !:Table = name_table(Id + 1, ToId, ToName)
-    ).
-
-lookup_name(Table, Id) = Name :-
-    map.lookup(Table ^ nt_to_name, Id, Name).
-
-empty_intern_table = intern_table(empty_string_table, empty_name_table).
+empty_intern_table = intern_table(empty_string_table).
 
 %-----------------------------------------------------------------------%
 % String escaping
@@ -194,7 +162,7 @@ format_error(_, type_error(Expected, Actual)) =
     string.format("type error: expected %s, got %s",
         [s(Expected), s(value_type_name(Actual))]).
 format_error(IT, undefined_name(NameId)) =
-    string.format("undefined name: %s", [s(lookup_name(IT ^ it_names, NameId))]).
+    string.format("undefined name: %s", [s(lookup_string(IT ^ it_strings, NameId))]).
 format_error(_, index_out_of_bounds(Index, Size)) =
     string.format("index out of bounds: %d (array size: %d)", [i(Index), i(Size)]).
 format_error(_, io_error(Op, Filename, Msg)) =

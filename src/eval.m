@@ -22,8 +22,8 @@
 
     % Environment operations.
     %
-:- pred get_env(name_id::in, value::out, env::in) is semidet.
-:- pred set_env(name_id::in, value::in, env::in, env::out) is det.
+:- pred get_env(string_id::in, value::out, env::in) is semidet.
+:- pred set_env(string_id::in, value::in, env::in, env::out) is det.
 
 %-----------------------------------------------------------------------%
 
@@ -59,7 +59,7 @@ eval_terms(IT, [Term | Terms], !Env, !Stack, !IO) :-
 eval_term(IT, Term, !Env, !Stack, !IO) :-
     (
         Term = identifier(NameId),
-        eval_identifier(IT, NameId, !Env, !Stack, !IO)
+        eval_identifier(IT, NameId, !.Env, !Stack, !IO)
     ;
         Term = binder(NameId),
         eval_binder(NameId, !Env, !Stack)
@@ -84,150 +84,24 @@ eval_term(IT, Term, !Env, !Stack, !IO) :-
 % Identifier evaluation
 %-----------------------------------------------------------------------%
 
-:- pred eval_identifier(intern_table::in, name_id::in,
-    env::in, env::out, stack::in, stack::out, io::di, io::uo) is det.
+:- pred eval_identifier(intern_table::in, string_id::in, env::in,
+    stack::in, stack::out, io::di, io::uo) is det.
 
-eval_identifier(IT, NameId, !Env, !Stack, !IO) :-
-    NameStr = lookup_name(IT ^ it_names, NameId),
-    ( if operators.operator(NameStr, Op) then
-        eval_operator(IT, Op, !Env, !Stack, !IO)
-    else if get_env(NameId, V, !.Env) then
+eval_identifier(IT, NameId, Env, !Stack, !IO) :-
+    NameStr = lookup_string(IT ^ it_strings, NameId),
+    ( if get_env(NameId, V, Env) then
         push(V, !Stack)
+    else if operators.operator(NameStr, Op) then
+        operators.eval_operator(IT, Op, Env, !Stack, !IO)
     else
         throw(undefined_name(NameId))
-    ).
-
-:- pred eval_operator(intern_table::in, operators.operator::in,
-    env::in, env::out, stack::in, stack::out, io::di, io::uo) is det.
-
-eval_operator(IT, Op, !Env, !Stack, !IO) :-
-    (
-        Op = operators.op_print,
-        operators.operator_print(IT, !Stack, !IO)
-    ;
-        Op = operators.op_dump,
-        operators.operator_dump(IT, !.Stack, !IO)
-    ;
-        Op = operators.op_env,
-        operators.operator_env(!.Env, !Stack)
-    ;
-        Op = operators.op_add,
-        operators.operator_add(!Stack)
-    ;
-        Op = operators.op_sub,
-        operators.operator_sub(!Stack)
-    ;
-        Op = operators.op_mul,
-        operators.operator_mul(!Stack)
-    ;
-        Op = operators.op_gt,
-        operators.operator_gt(!Stack)
-    ;
-        Op = operators.op_lt,
-        operators.operator_lt(!Stack)
-    ;
-        Op = operators.op_gte,
-        operators.operator_gte(!Stack)
-    ;
-        Op = operators.op_lte,
-        operators.operator_lte(!Stack)
-    ;
-        Op = operators.op_get,
-        operators.operator_get(!Stack)
-    ;
-        Op = operators.op_length,
-        operators.operator_length(!Stack)
-    ;
-        Op = operators.op_eq,
-        operators.operator_eq(!Stack)
-    ;
-        Op = operators.op_ite,
-        operators.operator_ite(!Stack)
-    ;
-        Op = operators.op_nil,
-        operators.operator_nil(!Stack)
-    ;
-        Op = operators.op_cons,
-        operators.operator_cons(!Stack)
-    ;
-        Op = operators.op_fst,
-        operators.operator_fst(!Stack)
-    ;
-        Op = operators.op_snd,
-        operators.operator_snd(!Stack)
-    ;
-        Op = operators.op_write,
-        operators.operator_write(IT, !Stack, !IO)
-    ;
-        Op = operators.op_fwrite,
-        operators.operator_fwrite(IT, !Stack, !IO)
-    ;
-        Op = operators.op_empty,
-        operators.operator_empty(!Stack)
-    ;
-        Op = operators.op_keys,
-        operators.operator_keys(!Stack)
-    ;
-        Op = operators.op_store,
-        operators.operator_store(!Stack)
-    ;
-        Op = operators.op_in,
-        operators.operator_in(!Stack)
-    ;
-        Op = operators.op_is_int,
-        operators.operator_is_int(!Stack)
-    ;
-        Op = operators.op_is_string,
-        operators.operator_is_string(!Stack)
-    ;
-        Op = operators.op_is_array,
-        operators.operator_is_array(!Stack)
-    ;
-        Op = operators.op_is_map,
-        operators.operator_is_map(!Stack)
-    ;
-        Op = operators.op_is_nil,
-        operators.operator_is_nil(!Stack)
-    ;
-        Op = operators.op_is_cons,
-        operators.operator_is_cons(!Stack)
-    ;
-        Op = operators.op_is_ident,
-        operators.operator_is_ident(!Stack)
-    ;
-        Op = operators.op_is_binder,
-        operators.operator_is_binder(!Stack)
-    ;
-        Op = operators.op_is_func,
-        operators.operator_is_func(!Stack)
-    ;
-        Op = operators.op_is_gen,
-        operators.operator_is_gen(!Stack)
-    ;
-        Op = operators.op_is_quote,
-        operators.operator_is_quote(!Stack)
-    ;
-        Op = operators.op_is_apply,
-        operators.operator_is_apply(!Stack)
-    ;
-        Op = operators.op_to_binder,
-        operators.operator_to_binder(!Stack)
-    ;
-        Op = operators.op_to_ident,
-        operators.operator_to_ident(!Stack)
-    ;
-        Op = operators.op_is_value,
-        operators.operator_is_value(!Stack)
-    ;
-        Op = operators.op_unwrap,
-        operators.operator_unwrap(!Stack)
     ).
 
 %-----------------------------------------------------------------------%
 % Binder evaluation
 %-----------------------------------------------------------------------%
 
-:- pred eval_binder(name_id::in, env::in, env::out,
+:- pred eval_binder(string_id::in, env::in, env::out,
     stack::in, stack::out) is det.
 
 eval_binder(NameId, !Env, !Stack) :-

@@ -117,9 +117,9 @@ print_token(IT, located(Pos, Token), !IO) :-
 :- func token_to_string(intern_table, token) = string.
 
 token_to_string(IT, name(NameId)) =
-    string.format("name(%s)", [s(lookup_name(IT ^ it_names, NameId))]).
+    string.format("name(%s)", [s(lookup_string(IT ^ it_strings, NameId))]).
 token_to_string(IT, slash_name(NameId)) =
-    string.format("slash_name(%s)", [s(lookup_name(IT ^ it_names, NameId))]).
+    string.format("slash_name(%s)", [s(lookup_string(IT ^ it_strings, NameId))]).
 token_to_string(_, number(N)) = string.format("number(%d)", [i(N)]).
 token_to_string(IT, string(StrId)) =
     string.format("string(\"%s\")", [s(lookup_string(IT ^ it_strings, StrId))]).

@@ -13,8 +13,8 @@
 %-----------------------------------------------------------------------%
 
 :- type token
-    --->    name(name_id)
-    ;       slash_name(name_id)     % The name_id excludes the leading /
+    --->    name(string_id)
+    ;       slash_name(string_id)   % The string_id excludes the leading /
     ;       number(int)
     ;       string(string_id)       % Interned string ID
     ;       quote                   % The ' character
@@ -275,8 +275,8 @@ read_text_name(State0, Result) :-
     read_text_name_chars(State0, Chars, State1),
     NameStr = string.from_char_list(Chars),
     IT0 = State1 ^ ls_intern,
-    intern_name(NameStr, NameId, IT0 ^ it_names, NewNames),
-    State2 = State1 ^ ls_intern := (IT0 ^ it_names := NewNames),
+    intern_string(NameStr, NameId, IT0 ^ it_strings, NewStrings),
+    State2 = State1 ^ ls_intern := (IT0 ^ it_strings := NewStrings),
     Result = ok({name(NameId), State2}).
 
 :- pred read_text_name_chars(lex_state::in, list(char)::out,
@@ -303,8 +303,8 @@ read_graphical_name(State0, Result) :-
     read_graphical_chars(State0, Chars, State1),
     NameStr = string.from_char_list(Chars),
     IT0 = State1 ^ ls_intern,
-    intern_name(NameStr, NameId, IT0 ^ it_names, NewNames),
-    State2 = State1 ^ ls_intern := (IT0 ^ it_names := NewNames),
+    intern_string(NameStr, NameId, IT0 ^ it_strings, NewStrings),
+    State2 = State1 ^ ls_intern := (IT0 ^ it_strings := NewStrings),
     Result = ok({name(NameId), State2}).
 
 :- pred read_graphical_chars(lex_state::in, list(char)::out,
@@ -342,15 +342,15 @@ read_slash_name(State0, Result) :-
         read_text_name_chars(State0, Chars, State1),
         NameStr = string.from_char_list(Chars),
         IT0 = State1 ^ ls_intern,
-        intern_name(NameStr, NameId, IT0 ^ it_names, NewNames),
-        State2 = State1 ^ ls_intern := (IT0 ^ it_names := NewNames),
+        intern_string(NameStr, NameId, IT0 ^ it_strings, NewStrings),
+        State2 = State1 ^ ls_intern := (IT0 ^ it_strings := NewStrings),
         Result = ok({slash_name(NameId), State2})
     else if peek_char(State0, Char), is_graphical_char(Char) then
         read_graphical_chars(State0, Chars, State1),
         NameStr = string.from_char_list(Chars),
         IT0 = State1 ^ ls_intern,
-        intern_name(NameStr, NameId, IT0 ^ it_names, NewNames),
-        State2 = State1 ^ ls_intern := (IT0 ^ it_names := NewNames),
+        intern_string(NameStr, NameId, IT0 ^ it_strings, NewStrings),
+        State2 = State1 ^ ls_intern := (IT0 ^ it_strings := NewStrings),
         Result = ok({slash_name(NameId), State2})
     else
         % Just a slash followed by non-name, treat as junk
