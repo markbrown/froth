@@ -236,6 +236,26 @@ The function may leave zero or more values on the stack per element. Use a gener
 [1 2 3] {print} foldr!         ; prints 3, 2, 1
 ```
 
+### List (list.froth)
+
+Utilities for cons lists. Lists are built with `.` (nil) and `,` (cons):
+
+```
+.              ; empty list
+. 3 , 2 , 1 ,  ; list [1, 2, 3] (1 is head)
+```
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `fold` | `( list fn -- ... )` | Apply fn to each element head-to-tail |
+| `lreverse` | `( list -- list )` | Reverse a list |
+
+```
+. 3 , 2 , 1 , {print} fold!    ; prints 1, 2, 3
+. 3 , 2 , 1 , lreverse!        ; produces [3, 2, 1]
+0 . 3 , 2 , 1 , {+} fold!      ; sums to 6
+```
+
 ### Eval (eval.froth)
 
 A meta-interpreter that evaluates Froth closures.
