@@ -247,13 +247,15 @@ Utilities for cons lists. Lists are built with `.` (nil) and `,` (cons):
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `fold` | `( list fn -- ... )` | Apply fn to each element head-to-tail |
+| `lfoldl` | `( list fn -- ... )` | Apply fn to each element head-to-tail |
+| `lfoldr` | `( list fn -- ... )` | Apply fn to each element tail-to-head |
 | `lreverse` | `( list -- list )` | Reverse a list |
 
 ```
-. 3 , 2 , 1 , {print} fold!    ; prints 1, 2, 3
-. 3 , 2 , 1 , lreverse!        ; produces [3, 2, 1]
-0 . 3 , 2 , 1 , {+} fold!      ; sums to 6
+. 3 , 2 , 1 , {print} lfoldl!   ; prints 1, 2, 3
+. 3 , 2 , 1 , {print} lfoldr!   ; prints 3, 2, 1
+. 3 , 2 , 1 , lreverse!         ; produces [3, 2, 1]
+0 . 3 , 2 , 1 , {+} lfoldl!     ; sums to 6
 ```
 
 ### Eval (eval.froth)
