@@ -194,7 +194,7 @@ The `import` operator loads a file relative to the current file's directory. Def
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
 | `env` | `( -- map )` | Push current environment as a map |
-| `unwrap` | `( 'value -- value )` | Extract value from quoted value term |
+| `unwrap` | `( 'x -- x )` | Extract inner from quoted value or quoted term |
 | `intern` | `( a -- int )` | Get intern id from string, identifier, or binder |
 | `idToString` | `( int -- string )` | Create string from intern id |
 | `idToIdent` | `( int -- 'ident )` | Create quoted identifier from intern id |
@@ -282,6 +282,6 @@ Returns two values: `result-stack` and `0` on success, or `error-message` and `1
 . 10 , { 5 + } eval!           ; returns (. 15 ,) 0
 ```
 
-Supported: all operators (dispatched by arity), variable binding, function literals, function application.
+Supported: all operators (dispatched by arity), variable binding, function literals, function application, quoted terms.
 
-Not yet supported: generators (`[ ]`), quoted terms (`'`), I/O operators, `env`, `stack`.
+Not yet supported: generators (`[ ]`), I/O operators, `env`, `stack`.

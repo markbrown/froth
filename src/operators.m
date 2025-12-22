@@ -982,8 +982,10 @@ operator_unwrap(!Stack) :-
     pop("unwrap", V, !Stack),
     ( if V = termval(value(Inner)) then
         push(Inner, !Stack)
+    else if V = termval(quoted(InnerTerm)) then
+        push(termval(InnerTerm), !Stack)
     else
-        throw(type_error("quoted value", V))
+        throw(type_error("quoted value or quoted term", V))
     ).
 
 %-----------------------------------------------------------------------%
