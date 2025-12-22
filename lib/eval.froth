@@ -67,32 +67,8 @@
   } ?!
 } /eval-binder
 
-; eval-ident: (stack sim-env term -- new-stack new-env 0 | error-message 1)
-; Environment shadows operators
-{ /term /sim-env /stack
-  sim-env term in {
-    sim-env term @ /val
-    stack val , sim-env 0
-  } {
-    term 'env = {
-      ; Special case: env returns simulated environment
-      stack sim-env , sim-env 0
-    } {
-    term 'stack = {
-      ; Special case: stack returns simulated stack as array
-      [ stack {} lfoldr! ] /arr
-      stack arr , sim-env 0
-    } {
-    term isOperator {
-      stack sim-env term eval-operator!
-    } {
-      "undefined name" 1
-    } ?! } ?! } ?!
-  } ?!
-} /eval-ident
-
-; eval-apply: (stack sim-env recurse -- new-stack new-env 0 | error-message 1)
-{ /recurse /sim-env /stack
+; eval-apply: (stack sim-env op-table recurse -- new-stack new-env 0 | error-message 1)
+{ /recurse /op-table /sim-env /stack
   stack isNil {
     "stack underflow in !" 1
   } {
@@ -104,7 +80,7 @@
       closure snd /cbody
       cbody isFunc {
         ; Evaluate body with closure's env
-        new-stack cenv cbody 0 recurse recurse!
+        new-stack cenv op-table cbody 0 recurse recurse!
         /status
         status {
           ; Restore original sim-env (lexical scoping)
@@ -121,10 +97,50 @@
   } ?!
 } /eval-apply
 
-; eval-term: (stack sim-env term recurse -- new-stack new-env 0 | error-message 1)
-{ /recurse /term /sim-env /stack
+; eval-ident: (stack sim-env op-table term recurse -- new-stack new-env 0 | error-message 1)
+; Lookup order: sim-env, op-table, special cases, built-in operators
+{ /recurse /term /op-table /sim-env /stack
+  sim-env term in {
+    sim-env term @ /val
+    stack val , sim-env 0
+  } {
+    op-table term in {
+      ; Custom operator - apply the closure
+      op-table term @ /op-closure
+      stack op-closure , sim-env op-table recurse eval-apply!
+    } {
+    term 'env = {
+      ; Special case: env returns simulated environment
+      stack sim-env , sim-env 0
+    } {
+    term 'stack = {
+      ; Special case: stack returns simulated stack as array
+      [ stack {} lfoldr! ] /arr
+      stack arr , sim-env 0
+    } {
+    term 'isOperator = {
+      ; Special case: isOperator checks op-table first
+      stack isNil { "stack underflow" 1 } {
+        stack fst /arg  stack snd /s1
+        op-table arg in {
+          s1 0 , sim-env 0
+        } {
+          s1 [ arg isOperator ] {,} foldl! sim-env 0
+        } ?!
+      } ?!
+    } {
+    term isOperator {
+      stack sim-env term eval-operator!
+    } {
+      "undefined name" 1
+    } ?! } ?! } ?! } ?! } ?!
+  } ?!
+} /eval-ident
+
+; eval-term: (stack sim-env op-table term recurse -- new-stack new-env 0 | error-message 1)
+{ /recurse /term /op-table /sim-env /stack
   term isIdent {
-    stack sim-env term eval-ident!
+    stack sim-env op-table term recurse eval-ident!
   } {
   term isBinder {
     stack sim-env term eval-binder!
@@ -136,7 +152,7 @@
   } {
   term isGen {
     ; Generator - evaluate with empty stack, collect results into array
-    . sim-env term 0 recurse recurse!
+    . sim-env op-table term 0 recurse recurse!
     /status
     status {
       ; Success - convert result stack to array (lfoldr for correct order)
@@ -149,7 +165,7 @@
     } ?!
   } {
   term isApply {
-    stack sim-env recurse eval-apply!
+    stack sim-env op-table recurse eval-apply!
   } {
   term isQuote {
     ; Quoted term - push the inner term without evaluating
@@ -164,22 +180,22 @@
   } ?! } ?! } ?! } ?! } ?! } ?! } ?!
 } /eval-term
 
-; eval-terms-impl: (stack sim-env body idx self -- result-stack 0 | error-message 1)
+; eval-terms-impl: (stack sim-env op-table body idx self -- result-stack 0 | error-message 1)
 ; self is passed for recursion
-{ /self /idx /body /sim-env /stack
+{ /self /idx /body /op-table /sim-env /stack
   idx body # = {
     ; Done - return stack with success
     stack 0
   } {
     ; Evaluate one term
     body idx @ /term
-    stack sim-env term self eval-term!
+    stack sim-env op-table term self eval-term!
     ; Check result - stack now has (status, maybe-env, maybe-stack)
     /status
     status {
       ; Success - get new-env and new-stack, then recurse
       /result-env /result-stack
-      result-stack result-env body idx 1 + self self!
+      result-stack result-env op-table body idx 1 + self self!
     } {
       ; Error - just push 1 (error message already on stack)
       1
@@ -187,17 +203,17 @@
   } ?!
 } /eval-terms-impl
 
-; eval-terms: (stack sim-env body idx -- result-stack 0 | error-message 1)
-{ /idx /body /sim-env /stack
-  stack sim-env body idx eval-terms-impl eval-terms-impl!
+; eval-terms: (stack sim-env op-table body idx -- result-stack 0 | error-message 1)
+{ /idx /body /op-table /sim-env /stack
+  stack sim-env op-table body idx eval-terms-impl eval-terms-impl!
 } /eval-terms
 
-; eval: (init-stack closure -- result-stack 0 | error-message 1)
-{ /closure /stack
+; eval: (init-stack op-table closure -- result-stack 0 | error-message 1)
+{ /closure /op-table /stack
   closure fst /sim-env
   closure snd /body
   body isFunc {
-    stack sim-env body 0 eval-terms!
+    stack sim-env op-table body 0 eval-terms!
   } {
     "eval: expected closure" 1
   } ?!

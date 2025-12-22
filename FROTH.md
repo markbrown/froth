@@ -264,7 +264,7 @@ A meta-interpreter that evaluates Froth closures.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `eval` | `( stack closure -- result-stack 0 \| error-msg 1 )` | Evaluate closure with initial stack |
+| `eval` | `( stack op-table closure -- result-stack 0 \| error-msg 1 )` | Evaluate closure with initial stack and operator table |
 
 The stack is represented as a cons list (nil-terminated). Push with `, `:
 
@@ -274,14 +274,21 @@ The stack is represented as a cons list (nil-terminated). Push with `, `:
 . 3 , 2 , 1 ,      ; stack [1, 2, 3] (1 on top)
 ```
 
+The operator table is a map from quoted identifiers to closures. Custom operators are auto-applied (no `!` needed) when their name is encountered:
+
+```
+$ {2 *} 'double :              ; op-table with 'double' operator
+. ops { 5 double } eval!       ; returns (. 10 ,) 0
+```
+
 Returns two values: `result-stack` and `0` on success, or `error-message` and `1` on error.
 
 ```
-. { 3 4 + } eval!              ; returns (. 7 ,) 0
-. { 10 /x x 1 + } eval!        ; returns (. 11 ,) 0
-. 10 , { 5 + } eval!           ; returns (. 15 ,) 0
+. $ { 3 4 + } eval!            ; returns (. 7 ,) 0
+. $ { 10 /x x 1 + } eval!      ; returns (. 11 ,) 0
+. 10 , $ { 5 + } eval!         ; returns (. 15 ,) 0
 ```
 
-Supported: all operators (dispatched by arity), variable binding, function literals, function application, quoted terms, generators, `env`, `stack`.
+Supported: all operators (dispatched by arity), variable binding, function literals, function application, quoted terms, generators, `env`, `stack`, custom operators via op-table.
 
 Not yet supported: I/O operators.
