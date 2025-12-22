@@ -1,0 +1,2279 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Referenced file src/froth.m
+  ⎿  Read tests/write.opts (2 lines)
+  ⎿  Read tests/env.opts (2 lines)
+  ⎿  Read run_tests.sh (49 lines)
+  ⎿  Read tests/write.froth (32 lines)
+
+> continue 
+
+● I'll continue fixing the BaseDir issue for no-stdlib execution paths. Let me first check the current state of froth.m.
+
+● Read(src/froth.m)
+  ⎿  Read 643 lines
+
+● I see the issue. There are a few predicates that still need to be updated to properly pass BaseDir:
+
+  1. run (line 456) calls execute with wrong arity
+  2. run_then_repl (line 412) calls execute_then_repl with wrong arity
+  3. run_file and run_file_then_repl need to pass BaseDir
+
+  Let me fix these:
+
+● Update(src/froth.m)
+  ⎿  Added 7 lines, removed 5 lines                                      
+      374  :- pred run_file(string::in, io::di, io::uo) is cc_multi.
+      375  
+      376  run_file(Filename, !IO) :-
+      377 +    BaseDir = dir.dirname(Filename),                          
+      378      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      379      (
+      380          ReadResult = ok(Input),
+      380 -        run(Input, !IO)                                       
+      381 +        run(BaseDir, Input, !IO)                              
+      382      ;
+      383          ReadResult = error(Error),
+      384          io.format("Error reading '%s': %s\n",
+     ...
+      389  :- pred run_file_then_repl(string::in, io::di, io::uo) is cc_m
+           ulti.
+      390  
+      391  run_file_then_repl(Filename, !IO) :-
+      392 +    BaseDir = dir.dirname(Filename),                          
+      393      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      394      (
+      395          ReadResult = ok(Input),
+      394 -        run_then_repl(Input, !IO)                             
+      396 +        run_then_repl(BaseDir, Input, !IO)                    
+      397      ;
+      398          ReadResult = error(Error),
+      399          io.format("Error reading '%s': %s\n",
+     ...
+      401          io.set_exit_status(1, !IO)
+      402      ).
+      403  
+      402 -:- pred run_then_repl(string::in, io::di, io::uo) is cc_multi.
+      404 +:- pred run_then_repl(string::in, string::in, io::di, io::uo) 
+          +is cc_multi.                                                  
+      405  
+      404 -run_then_repl(Input, !IO) :-                                  
+      406 +run_then_repl(BaseDir, Input, !IO) :-                         
+      407      init_tables(ST0, OpTable),
+      408      lexer.tokenize(Input, ST0, LexResult),
+      409      (
+     ...
+      411          parser.parse(Tokens, ParseResult),
+      412          (
+      413              ParseResult = ok(Terms),
+      412 -            execute_then_repl(OpTable, ST, Terms, !IO)        
+      414 +            execute_then_repl(OpTable, BaseDir, ST, Terms, !IO
+          +)                                                             
+      415          ;
+      416              ParseResult = error(ParseError),
+      417              report_parse_error(ParseError, !IO),
+
+● Update(src/froth.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      445          )
+      446      ).
+      447  
+      448 -:- pred run(string::in, io::di, io::uo) is cc_multi.          
+      448 +:- pred run(string::in, string::in, io::di, io::uo) is cc_mult
+          +i.                                                            
+      449  
+      450 -run(Input, !IO) :-                                            
+      450 +run(BaseDir, Input, !IO) :-                                   
+      451      init_tables(ST0, OpTable),
+      452      lexer.tokenize(Input, ST0, LexResult),
+      453      (
+     ...
+      455          parser.parse(Tokens, ParseResult),
+      456          (
+      457              ParseResult = ok(Terms),
+      458 -            execute(OpTable, ST, Terms, !IO)                  
+      458 +            execute(OpTable, BaseDir, ST, Terms, !IO)         
+      459          ;
+      460              ParseResult = error(ParseError),
+      461              report_parse_error(ParseError, !IO),
+
+● Now let's build and test:
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth     
+     Making Mercury/int3s/froth.int3
+     Making Mercury/ints/froth.int
+     … +4 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  Error: Exit code 1
+     PASS: add
+     PASS: apply_op
+     PASS: arithmetic
+     PASS: arity
+     PASS: array
+     PASS: array_ops
+     PASS: binder
+     PASS: closure
+     PASS: comments
+     … +88 lines (ctrl+o to see all)
+
+● The tests are running now, but the expected files need updating since the map entry ordering is different. Let me update them:
+
+● Bash(./bin/froth -n tests/env.froth)
+  ⎿ $ 42 'x : "hello" 'y : '{ write nl ! } $ '{ print nl ! } $ '{ "\n" prin
+    t } $ , 'nl : , 'println : '{ "\n" print } $ , 'nl : , 'writeln : '{ pr
+    int nl ! } $ '{ "\n" print } $ , 'nl : , 'println : '{ "\n" print } $ ,
+    … +3 lines (ctrl+o to expand)
+
+
+
+
+● Bash(./bin/froth -n tests/write.froth)
+  ⎿  42                            
+     -5
+     "hello"
+     … +11 lines (ctrl+o to expand)
+
+● Read(tests/env.expected)
+  ⎿  Read 4 lines
+
+● Read(tests/write.expected)
+  ⎿  Read 13 lines
+
+● The issue is map iteration order differences. Let me update the expected files to match the actual output:
+
+● Write(tests/env.expected)
+  ⎿  Added 1 line, removed 1 line                                        
+      1 -$ '{ "\n" print } $ , 'nl : '{ print nl ! } $ '{ "\n" print } $ 
+        -, 'nl : , 'println : '{ write nl ! } $ '{ "\n" print } $ , 'nl :
+        - '{ print nl ! } $ '{ "\n" print } $ , 'nl : , 'println : , 'wri
+        -teln : 42 'x : "hello" 'y :                                     
+      1 +$ 42 'x : "hello" 'y : '{ write nl ! } $ '{ print nl ! } $ '{ "\
+        +n" print } $ , 'nl : , 'println : '{ "\n" print } $ , 'nl : , 'w
+        +riteln : '{ print nl ! } $ '{ "\n" print } $ , 'nl : , 'println 
+        +: '{ "\n" print } $ , 'nl :                                     
+      2  5
+      3  42
+
+● Write(tests/write.expected)
+  ⎿  Added 1 line, removed 1 line                                        
+       9  . 3 , 2 , 1 ,
+      10  'foo
+      11  '{ 1 2 + }
+      12 -'{ 1 2 + } $ '{ "\n" print } $ , 'nl : '{ print nl ! } $ '{ "\n
+         -" print } $ , 'nl : , 'println : '{ write nl ! } $ '{ "\n" prin
+         -t } $ , 'nl : '{ print nl ! } $ '{ "\n" print } $ , 'nl : , 'pr
+         -intln : , 'writeln : ,                                         
+      12 +'{ 1 2 + } $ '{ write nl ! } $ '{ "\n" print } $ , 'nl : '{ pri
+         +nt nl ! } $ '{ "\n" print } $ , 'nl : , 'println : , 'writeln :
+         + '{ "\n" print } $ , 'nl : '{ print nl ! } $ '{ "\n" print } $ 
+         +, 'nl : , 'println : ,                                         
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  PASS: add                     
+     PASS: apply_op
+     PASS: arithmetic
+     … +38 lines (ctrl+o to expand)
+
+● All 39 tests pass. The BaseDir fix is complete. The changes made:
+
+  1. Updated run_file and run_file_then_repl to extract BaseDir from the filename and pass it down
+  2. Updated run and run_then_repl to accept BaseDir as a parameter
+  3. Updated the expected files for env and write tests to reflect current map iteration order
+
+  Now when running with -n, import paths like ../lib/io.froth correctly resolve relative to the test file's directory rather than defaulting to ..
+
+> I have staged our changes to implement the `import` operator, please 
+commit 
+
+● Bash(git status)
+  ⎿  On branch master                                   
+     Changes to be committed:
+       (use "git restore --staged <file>..." to unstage)
+     … +28 lines (ctrl+o to expand)
+
+● Bash(git diff --cached --stat)
+  ⎿   lib/core-lib.froth         |   2 - 
+      lib/stdlib.froth           |   6 +-
+      run_tests.sh               |  10 +-
+     … +21 lines (ctrl+o to expand)
+
+● Bash(git log --oneline -5)
+  ⎿  9410d80 Add stdlib with auto-loading and remove trailing newlines from
+     print/write
+     60cf097 add transcripts 12 and 13, rename for double digits
+     … +3 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Add import operator for file-based module loading…)
+  ⎿  [master ba27d16] Add import operator for file-based module loading
+      22 files changed, 455 insertions(+), 434 deletions(-)
+      delete mode 100644 lib/core-lib.froth
+     … +8 lines (ctrl+o to expand)
+
+● Bash(git status)
+  ⎿  On branch master                                                
+     Untracked files:
+       (use "git add <file>..." to include in what will be committed)
+     … +6 lines (ctrl+o to expand)
+
+● Committed as ba27d16. The import operator implementation includes:
+
+  - import operator with relative path resolution via BaseDir threading
+  - Stdlib using import statements instead of special loading
+  - Removal of -l option and .lib file mechanism
+  - Per-test .opts files for test-specific options
+  - Consolidation of core-lib.froth into stdlib.froth
+
+> update FROTH.md with the import operator 
+
+● Read(FROTH.md)
+  ⎿  Read 252 lines
+
+● I'll add the import operator to the I/O section and update the Library section:
+
+● Update(FROTH.md)
+  ⎿  Added 3 lines                                                       
+      184  | `print` | `( a -- )` | Pop and print a value |
+      185  | `write` | `( a -- )` | Print in executable (round-trippable)
+            form |
+      186  | `fwrite` | `( value file -- )` | Write value to file in exec
+           utable form |
+      187 +| `import` | `( path -- )` | Load and evaluate a Froth file | 
+      188  
+      189 +The `import` operator loads a file relative to the current fil
+          +e's directory. Definitions from imported files are added to th
+          +e current environment.                                        
+      190 +                                                              
+      191  ### Metaprogramming
+      192  
+      193  | Name | Stack Effect | Description |
+
+● Update(FROTH.md)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      202  | `arity` | `( 'ident -- int )` | Get arity (input count) of a
+           n operator |
+      203  | `stack` | `( ... -- array )` | Convert entire stack to an ar
+           ray |
+      204  
+      205 -## Library                                                    
+      205 +## Standard Library                                           
+      206  
+      207 -Load with `froth -l lib/core-lib.froth`.                      
+      207 +The standard library (`lib/stdlib.froth`) loads automatically 
+          +unless `-n` is given. It imports the following modules:       
+      208  
+      209  ### Array (array.froth)
+      210  
+
+● Read(lib/stdlib.froth)
+  ⎿  Read 6 lines
+
+● Read(lib/io.froth)
+  ⎿  Read 11 lines
+
+● Update(FROTH.md)
+  ⎿  Added 8 lines                                                       
+      206  
+      207  The standard library (`lib/stdlib.froth`) loads automatically 
+           unless `-n` is given. It imports the following modules:
+      208  
+      209 +### I/O Utilities (io.froth)                                  
+      210 +                                                              
+      211 +| Name | Stack Effect | Description |                         
+      212 +|------|--------------|-------------|                         
+      213 +| `nl` | `( -- )` | Print a newline |                         
+      214 +| `println` | `( a -- )` | Print a value followed by a newline
+          + |                                                            
+      215 +| `writeln` | `( a -- )` | Write in executable form followed b
+          +y a newline |                                                 
+      216 +                                                              
+      217  ### Array (array.froth)
+      218  
+      219  | Name | Stack Effect | Description |
+
+● Read(FROTH.md)
+  ⎿  Read 64 lines
+
+● Updated FROTH.md with:
+
+  1. Added import operator to the I/O section with description of relative path resolution
+  2. Renamed "Library" section to "Standard Library"
+  3. Updated intro to explain stdlib auto-loads unless -n is given
+  4. Added new "I/O Utilities (io.froth)" subsection documenting nl, println, and writeln
+
+> Let's update the README.md for consistency with recent changes 
+
+● Read(README.md)
+  ⎿  Read 209 lines
+
+● I'll update the README.md to reflect the recent changes:
+
+● Update(README.md)
+  ⎿  Added 5 lines, removed 3 lines                                      
+      10  froth/
+      11  ├── bin/                  # Compiled binary
+      12  ├── lib/                  # Standard library
+      13 -│   ├── core-lib.froth    # Library manifest                   
+      14 -│   └── array.froth       # Array utilities (fold)             
+      13 +│   ├── stdlib.froth      # Standard library (auto-loaded)     
+      14 +│   ├── io.froth          # I/O utilities (nl, println, writeln
+         +)                                                              
+      15 +│   ├── array.froth       # Array utilities (fold, map, filter)
+      16 +│   └── eval.froth        # Meta-interpreter                   
+      17  ├── src/                  # Mercury source
+      18  │   ├── froth.m           # Main entry point, REPL
+      19  │   ├── lexer.m           # Tokenizer
+     ...
+      24  ├── tests/                # Regression tests
+      25  │   ├── *.froth           # Test programs
+      26  │   ├── *.expected        # Expected outputs
+      25 -│   └── lib/              # Library loading tests              
+      27 +│   └── lib/              # Test library files                 
+      28  ├── FROTH.md              # Language reference
+      29  ├── Makefile              # Build: make, make test, make clean
+      30  └── run_tests.sh          # Test runner script
+
+● Update(README.md)
+  ⎿  Added 7 lines, removed 13 lines                                     
+      36  Usage: froth [options] [filename]
+      37  
+      38  Options:
+      39 +  -n         No stdlib (don't auto-load standard library)      
+      40    -e FILE    Execute FILE then start REPL
+      41    -f FILE    Run FILE
+      41 -  -l LIB     Load library LIB (contains string paths to import)
+      42    -h, --help Show this help
+      43  
+      44  With no arguments, starts an interactive REPL.
+      45  ```
+      46  
+      47  ```bash
+      48 -froth                    # Start interactive REPL              
+      48 +froth                    # Start interactive REPL (with stdlib)
+      49  froth program.froth      # Run a file
+      50  froth -f program.froth   # Run a file (explicit)
+      51  froth -e prelude.froth   # Load file then start REPL
+      52 -froth -l lib/core.froth  # Load library then start REPL        
+      53 -froth -l lib/core.froth program.froth  # Load library then run 
+         -file                                                           
+      52 +froth -n program.froth   # Run without standard library        
+      53  ```
+      54  
+      56 -### Libraries                                                  
+      55 +### Importing Files                                            
+      56  
+      58 -A library file contains a sequence of string tokens, each speci
+         -fying a `.froth` file to import. Paths are relative to the libr
+         -ary file's directory.                                          
+      57 +Use the `import` operator to load additional Froth files:      
+      58  
+      59  ```
+      61 -; lib/core.froth                                               
+      62 -"math.froth"                                                   
+      63 -"string.froth"                                                 
+      64 -"list.froth"                                                   
+      60 +"utils.froth" import     ; Load utils.froth relative to current
+         + file                                                          
+      61  ```
+      62  
+      67 -```bash                                                        
+      68 -froth -l lib/core.froth  # Loads lib/math.froth, lib/string.fro
+         -th, lib/list.froth                                             
+      69 -```                                                            
+      63 +The standard library (`lib/stdlib.froth`) is loaded automatical
+         +ly unless `-n` is given.                                       
+      64  
+      65  ### REPL
+      66  
+
+● Updated README.md with:
+
+  1. Project structure - Updated lib/ to show stdlib.froth, io.froth, array.froth, and eval.froth
+  2. Usage options - Replaced -l LIB with -n (no stdlib)
+  3. Examples - Updated to show -n instead of -l
+  4. Importing Files - New section explaining the import operator, replacing the old "Libraries" section about .lib files
+
+> Let's add a delete operator for deleting entries from a map. 
+
+● I'll add a delete operator for maps. Let me first check how similar map operators are implemented:
+
+● Read(src/operators.m)
+  ⎿  Read 1063 lines
+
+● Read(src/types.m)
+  ⎿  Read 255 lines
+
+● I'll add the delete operator. First, add it to types.m:
+
+● Update(src/types.m)
+  ⎿  Added 1 line                                                        
+      41      ;       op_keys         % keys   ( map -- array )
+      42      ;       op_store        % :      ( map val 'key -- map )
+      43      ;       op_in           % in     ( map 'key -- int )
+      44 +    ;       op_delete       % delete ( map 'key -- map )       
+      45      ;       op_is_int       % isInt    ( a -- int )
+      46      ;       op_is_string    % isString ( a -- int )
+      47      ;       op_is_array     % isArray  ( a -- int )
+
+● Now update operators.m - add the operator mapping, arity, interface, init list, dispatch, and implementation:
+
+● Update(src/operators.m)
+  ⎿  Added 1 line                                                        
+      125  operator("keys", op_keys).
+      126  operator(":", op_store).
+      127  operator("in", op_in).
+      128 +operator("delete", op_delete).                                
+      129  operator("isInt", op_is_int).
+      130  operator("isString", op_is_string).
+      131  operator("isArray", op_is_array).
+
+● Update(src/operators.m)
+  ⎿  Added 1 line                                                        
+      178  operator_arity(op_keys) = 1.
+      179  operator_arity(op_store) = 3.
+      180  operator_arity(op_in) = 2.
+      181 +operator_arity(op_delete) = 2.                                
+      182  operator_arity(op_is_int) = 1.
+      183  operator_arity(op_is_string) = 1.
+      184  operator_arity(op_is_array) = 1.
+
+● Update(src/operators.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      214          "@", "#", "=", "?",
+      215          ".", ",", "fst", "snd",
+      216          "write", "fwrite",
+      217 -        "$", "keys", ":", "in",                               
+      217 +        "$", "keys", ":", "in", "delete",                     
+      218          "isInt", "isString", "isArray", "isMap", "isNil", "isC
+           ons",
+      219          "isIdent", "isBinder", "isFunc", "isGen", "isQuote", "
+           isApply",
+      220          "isValue", "unwrap", "intern",
+
+● Update(src/operators.m)
+  ⎿  Added 1 line                                                        
+      58  :- pred operator_keys(stack::in, stack::out) is det.
+      59  :- pred operator_store(stack::in, stack::out) is det.
+      60  :- pred operator_in(stack::in, stack::out) is det.
+      61 +:- pred operator_delete(stack::in, stack::out) is det.         
+      62  :- pred operator_is_int(stack::in, stack::out) is det.
+      63  :- pred operator_is_string(stack::in, stack::out) is det.
+      64  :- pred operator_is_array(stack::in, stack::out) is det.
+
+● Update(src/operators.m)
+  ⎿  Added 3 lines                                                       
+      311          Op = op_in,
+      312          operator_in(!Stack)
+      313      ;
+      314 +        Op = op_delete,                                       
+      315 +        operator_delete(!Stack)                               
+      316 +    ;                                                         
+      317          Op = op_is_int,
+      318          operator_is_int(!Stack)
+      319      ;
+
+● Now add the implementation after operator_in:
+
+● Update(src/operators.m)
+  ⎿  Added 16 lines                                                      
+      872      ).
+      873  
+      874  %-------------------------------------------------------------
+           ----------%
+      875 +% delete: ( map 'key -- map ) Remove key from map, return new 
+          +map                                                           
+      876 +%-------------------------------------------------------------
+          +----------%                                                   
+      877 +                                                              
+      878 +operator_delete(!Stack) :-                                    
+      879 +    pop("delete", KeyVal, !Stack),                            
+      880 +    pop("delete", MapVal, !Stack),                            
+      881 +    ( if MapVal = mapval(Map), KeyVal = termval(identifier(Nam
+          +eId)) then                                                    
+      882 +        map.delete(NameId, Map, NewMap),                      
+      883 +        push(mapval(NewMap), !Stack)                          
+      884 +    else if MapVal = mapval(_) then                           
+      885 +        throw(type_error("term", KeyVal))                     
+      886 +    else                                                      
+      887 +        throw(type_error("map", MapVal))                      
+      888 +    ).                                                        
+      889 +                                                              
+      890 +%-------------------------------------------------------------
+          +----------%                                                   
+      891  % Type testing predicates
+      892  % Each returns 0 if true, 1 if false (following Froth's boolea
+           n convention)
+      893  %-------------------------------------------------------------
+           ----------%
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth         
+     Making Mercury/int3s/types.int3
+     Making Mercury/int3s/operators.int3
+     … +20 lines (ctrl+o to expand)
+
+● Bash(echo '$ 1 '\''x : 2 '\''y : 3 '\''z : /m m # println! m '\''y delete /m2
+      m2 # println! m2 '\''x @ println!' | ./bin/froth)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > 1:38: invalid token: '\'
+     >
+
+● Write(tests/delete.froth)
+  ⎿  Wrote 27 lines to tests/delete.froth
+      1 ; Test delete operator
+      2 ; Create a map with 3 entries
+      3 $ 1 'x : 2 'y : 3 'z : /m
+      4 ; Check initial size
+      5 m # println!
+      6 ; Delete 'y key
+      7 m 'y delete /m2
+     … +17 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/delete.froth)
+  ⎿  3                            
+     2
+     1
+     … +4 lines (ctrl+o to expand)
+
+● Write(tests/delete.expected)
+  ⎿  Wrote 8 lines to tests/delete.expected
+      1 3
+      2 2
+      3 1
+      4 1
+      5 3
+      6 2
+      7 3
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  PASS: add                     
+     PASS: apply_op
+     PASS: arithmetic
+     … +39 lines (ctrl+o to expand)
+
+● All tests pass. Now update FROTH.md:
+
+● Update(FROTH.md)
+  ⎿  Added 1 line                                                        
+      158  | `#` | `( container -- int )` | Get length of array, map, or 
+           quoted function/generator |
+      159  | `keys` | `( map -- array )` | Get map keys as array of quote
+           d identifiers |
+      160  | `in` | `( map 'key -- int )` | Test if key exists in map: 0 
+           if yes, 1 if no |
+      161 +| `delete` | `( map 'key -- map )` | Remove key from map, retu
+          +rn new map |                                                  
+      162  
+      163  ### Type Testing
+      164  
+
+● Done. Added the delete operator:
+
+  - types.m: Added op_delete to operator type
+  - operators.m: Added operator mapping, arity (2), dispatch, and implementation
+  - tests/delete.froth: Regression test covering deletion, non-existent key handling, and immutability
+  - FROTH.md: Documented in Data Structures section
+
+  The operator takes a map and a quoted key, returns a new map with that key removed. Deleting a non-existent key is a no-op (returns the same map). All 40 tests pass.
+
+> Let's simplify our command line. Does the following make sense? Can you 
+suggest any improvements?
+1. It should be of the form `froth OPTION*`.
+2. Options are:
+ - -n, --no-stdlib: don't load stdlib (default is to load)
+ - -q, --quiet: don't show the REPL opening message
+ - -e CODE, --exec CODE: execute CODE then exit
+ - -f FILE, --run-file FILE: load and run FILE, then exit
+ - -h, --help: show usage
+3. If neither `-e` or `-f` is given, start the REPL 
+
+● Your proposal is clean and sensible. A few suggestions:
+
+  1. Allow froth FILE as shorthand for froth -f FILE - It's very common to just run froth script.froth. Could treat a non-option argument as an implicit -f.
+  2. Consider -i, --interactive to force REPL after -e/-f - This replaces the current -e FILE behavior (run file then REPL). Matches Python's -i flag.
+  3. Allow multiple -e and -f in sequence - Process them in order. Useful for loading a library then running code:
+  froth -f lib.froth -e "1 2 + println!"
+  4. The -e name change is good - Current -e FILE (execute file then REPL) is non-standard. Your -e CODE (execute string) matches Perl, Ruby, etc. Much more intuitive.
+
+  So the refined version might be:
+
+  froth [OPTIONS] [FILE]
+
+  Options:
+    -n, --no-stdlib   Don't auto-load standard library
+    -q, --quiet       Suppress REPL banner
+    -e, --exec CODE   Execute CODE
+    -f, --file FILE   Execute FILE
+    -i, --interactive Start REPL after -e/-f
+    -h, --help        Show help
+
+  If FILE given without -f, treat as -f FILE.
+  If no -e/-f/FILE, start REPL.
+  Multiple -e/-f processed in order.
+
+  Do you want all of these, or prefer to keep it simpler with just your original proposal?
+
+> Let's do all of these. 
+
+● I'll refactor the command line handling in froth.m. Let me plan this out:
+
+● Read(src/froth.m)
+  ⎿  Read 645 lines
+
+● Now I'll rewrite froth.m with the new command line structure:
+
+● Write(src/froth.m)
+  ⎿  Added 301 lines, removed 388 lines                                  
+      14  
+      15  :- implementation.
+      16  
+      17 +:- import_module bool.                                         
+      18  :- import_module dir.
+      19  :- import_module eval.
+      20  :- import_module exception.
+     ...
+       29  :- import_module univ.
+       30  
+       31  %-------------------------------------------------------------
+           ----------%
+       32 +% Command line options                                        
+       33 +%-------------------------------------------------------------
+          +----------%                                                   
+       34  
+       32 -    % Initialize tables: string table with operator names pre-
+          -interned,                                                     
+       33 -    % and operator table for dispatch.                        
+       34 -    %                                                         
+       35 +:- type action                                                
+       36 +    --->    exec_code(string)       % -e CODE: execute code st
+          +ring                                                          
+       37 +    ;       exec_file(string).      % -f FILE: execute file   
+       38 +                                                              
+       39 +:- type options                                               
+       40 +    --->    options(                                          
+       41 +                opt_no_stdlib    :: bool,       % -n: don't lo
+          +ad stdlib                                                     
+       42 +                opt_quiet        :: bool,       % -q: suppress
+          + REPL banner                                                  
+       43 +                opt_interactive  :: bool,       % -i: force RE
+          +PL after actions                                              
+       44 +                opt_actions      :: list(action)              
+       45 +            ).                                                
+       46 +                                                              
+       47 +:- type parse_result                                          
+       48 +    --->    parsed(options)                                   
+       49 +    ;       help_requested                                    
+       50 +    ;       parse_error(string).                              
+       51 +                                                              
+       52 +:- func default_options = options.                            
+       53 +                                                              
+       54 +default_options = options(no, no, no, []).                    
+       55 +                                                              
+       56 +%-------------------------------------------------------------
+          +----------%                                                   
+       57 +% Argument parsing                                            
+       58 +%-------------------------------------------------------------
+          +----------%                                                   
+       59 +                                                              
+       60 +:- pred parse_args(list(string)::in, parse_result::out) is det
+          +.                                                             
+       61 +                                                              
+       62 +parse_args(Args, Result) :-                                   
+       63 +    parse_args_loop(Args, default_options, Result).           
+       64 +                                                              
+       65 +:- pred parse_args_loop(list(string)::in, options::in, parse_r
+          +esult::out) is det.                                           
+       66 +                                                              
+       67 +parse_args_loop([], Opts, parsed(FinalOpts)) :-               
+       68 +    % Reverse actions to get them in command-line order       
+       69 +    FinalOpts = Opts ^ opt_actions := list.reverse(Opts ^ opt_
+          +actions).                                                     
+       70 +parse_args_loop([Arg | Rest], Opts0, Result) :-               
+       71 +    ( if Arg = "-h" ; Arg = "--help" then                     
+       72 +        Result = help_requested                               
+       73 +    else if Arg = "-n" ; Arg = "--no-stdlib" then             
+       74 +        Opts = Opts0 ^ opt_no_stdlib := yes,                  
+       75 +        parse_args_loop(Rest, Opts, Result)                   
+       76 +    else if Arg = "-q" ; Arg = "--quiet" then                 
+       77 +        Opts = Opts0 ^ opt_quiet := yes,                      
+       78 +        parse_args_loop(Rest, Opts, Result)                   
+       79 +    else if Arg = "-i" ; Arg = "--interactive" then           
+       80 +        Opts = Opts0 ^ opt_interactive := yes,                
+       81 +        parse_args_loop(Rest, Opts, Result)                   
+       82 +    else if Arg = "-e" ; Arg = "--exec" then                  
+       83 +        ( if Rest = [Code | Rest2] then                       
+       84 +            Actions = [exec_code(Code) | Opts0 ^ opt_actions],
+       85 +            Opts = Opts0 ^ opt_actions := Actions,            
+       86 +            parse_args_loop(Rest2, Opts, Result)              
+       87 +        else                                                  
+       88 +            Result = parse_error("option " ++ Arg ++ " require
+          +s an argument")                                               
+       89 +        )                                                     
+       90 +    else if Arg = "-f" ; Arg = "--file" then                  
+       91 +        ( if Rest = [File | Rest2] then                       
+       92 +            Actions = [exec_file(File) | Opts0 ^ opt_actions],
+       93 +            Opts = Opts0 ^ opt_actions := Actions,            
+       94 +            parse_args_loop(Rest2, Opts, Result)              
+       95 +        else                                                  
+       96 +            Result = parse_error("option " ++ Arg ++ " require
+          +s an argument")                                               
+       97 +        )                                                     
+       98 +    else if string.prefix(Arg, "-") then                      
+       99 +        Result = parse_error("unknown option: " ++ Arg)       
+      100 +    else                                                      
+      101 +        % Positional argument treated as -f FILE              
+      102 +        Actions = [exec_file(Arg) | Opts0 ^ opt_actions],     
+      103 +        Opts = Opts0 ^ opt_actions := Actions,                
+      104 +        parse_args_loop(Rest, Opts, Result)                   
+      105 +    ).                                                        
+      106 +                                                              
+      107 +%-------------------------------------------------------------
+          +----------%                                                   
+      108 +% Initialize tables                                           
+      109 +%-------------------------------------------------------------
+          +----------%                                                   
+      110 +                                                              
+      111  :- pred init_tables(string_table::out, operator_table::out) is
+            det.
+      112  
+      113  init_tables(ST, OpTable) :-
+     ...
+      117  % Standard library loading
+      118  %-------------------------------------------------------------
+           ----------%
+      119  
+       44 -    % Get the path to the standard library relative to the exe
+          -cutable.                                                      
+       45 -    %                                                         
+      120  :- pred get_stdlib_path(string::out, io::di, io::uo) is det.
+      121  
+      122  get_stdlib_path(StdlibPath, !IO) :-
+      123      io.progname("froth", ProgName, !IO),
+      124      ExeDir = dir.dirname(ProgName),
+       51 -    % Go up one level from bin/ to find lib/                  
+      125      BaseDir = dir.dirname(ExeDir),
+      126      StdlibPath = dir.make_path_name(BaseDir,
+      127                       dir.make_path_name("lib", "stdlib.froth")
+           ).
+      128  
+       56 -%-------------------------------------------------------------
+          -----------%                                                   
+      129 +:- type init_result                                           
+      130 +    --->    init_ok(operator_table, string_table, env)        
+      131 +    ;       init_error.                                       
+      132  
+       58 -main(!IO) :-                                                  
+       59 -    io.command_line_arguments(Args, !IO),                     
+       60 -    process_args(Args, !IO).                                  
+      133 +:- pred init_with_stdlib(init_result::out, io::di, io::uo) is 
+          +cc_multi.                                                     
+      134  
+       62 -:- pred process_args(list(string)::in, io::di, io::uo) is cc_m
+          -ulti.                                                         
+       63 -                                                              
+       64 -process_args(Args, !IO) :-                                    
+       65 -    ( if Args = ["-n" | RestArgs] then                        
+       66 -        % -n: no stdlib                                       
+       67 -        process_args_no_stdlib(RestArgs, !IO)                 
+       68 -    else                                                      
+       69 -        % Default: load stdlib first                          
+       70 -        get_stdlib_path(StdlibPath, !IO),                     
+       71 -        load_stdlib_and_run(StdlibPath, Args, !IO)            
+       72 -    ).                                                        
+       73 -                                                              
+       74 -:- pred process_args_no_stdlib(list(string)::in, io::di, io::u
+          -o) is cc_multi.                                               
+       75 -                                                              
+       76 -process_args_no_stdlib(Args, !IO) :-                          
+       77 -    (                                                         
+       78 -        Args = [],                                            
+       79 -        repl_no_stdlib(!IO)                                   
+       80 -    ;                                                         
+       81 -        Args = [Arg],                                         
+       82 -        ( if ( Arg = "-h" ; Arg = "--help" ) then             
+       83 -            print_usage(!IO)                                  
+       84 -        else                                                  
+       85 -            run_file_no_stdlib(Arg, !IO)                      
+       86 -        )                                                     
+       87 -    ;                                                         
+       88 -        Args = [First, Second | Rest],                        
+       89 -        ( if First = "-f", Rest = [] then                     
+       90 -            run_file_no_stdlib(Second, !IO)                   
+       91 -        else if First = "-e", Rest = [] then                  
+       92 -            run_file_then_repl_no_stdlib(Second, !IO)         
+       93 -        else                                                  
+       94 -            print_usage(!IO),                                 
+       95 -            io.set_exit_status(1, !IO)                        
+       96 -        )                                                     
+       97 -    ).                                                        
+       98 -                                                              
+       99 -:- pred load_stdlib_and_run(string::in, list(string)::in,     
+      100 -    io::di, io::uo) is cc_multi.                              
+      101 -                                                              
+      102 -load_stdlib_and_run(StdlibPath, Args, !IO) :-                 
+      135 +init_with_stdlib(Result, !IO) :-                              
+      136 +    get_stdlib_path(StdlibPath, !IO),                         
+      137      io.file.check_file_accessibility(StdlibPath, [read], Acces
+           sResult, !IO),
+      138      (
+      139          AccessResult = ok,
+      106 -        % Load stdlib by evaluating it as normal Froth code   
+      140          eval_stdlib(StdlibPath, EvalResult, !IO),
+      141          (
+      109 -            EvalResult = ok({OpTable, ST, Env}),              
+      110 -            % Then process remaining args with stdlib state   
+      111 -            process_args_with_state(OpTable, ST, Env, Args, !I
+          -O)                                                            
+      142 +            EvalResult = stdlib_ok(OpTable, ST, Env),         
+      143 +            Result = init_ok(OpTable, ST, Env)                
+      144          ;
+      113 -            EvalResult = error,                               
+      114 -            io.set_exit_status(1, !IO)                        
+      145 +            EvalResult = stdlib_error,                        
+      146 +            Result = init_error                               
+      147          )
+      148      ;
+      149          AccessResult = error(_),
+      118 -        % Stdlib not found, run without it                    
+      119 -        process_args_no_stdlib(Args, !IO)                     
+      150 +        % Stdlib not found, initialize without it             
+      151 +        init_tables(ST, OpTable),                             
+      152 +        Result = init_ok(OpTable, ST, map.init)               
+      153      ).
+      154  
+      122 -:- type eval_result                                           
+      123 -    --->    ok({operator_table, string_table, env})           
+      124 -    ;       error.                                            
+      155 +:- pred init_without_stdlib(operator_table::out, string_table:
+          +:out,                                                         
+      156 +    env::out) is det.                                         
+      157  
+      126 -    % Evaluate stdlib.froth as normal Froth code.             
+      127 -    % The BaseDir is set to the directory containing stdlib.fr
+          -oth                                                           
+      128 -    % so that relative imports work correctly.                
+      129 -    %                                                         
+      130 -:- pred eval_stdlib(string::in, eval_result::out, io::di, io::
+          -uo) is cc_multi.                                              
+      158 +init_without_stdlib(OpTable, ST, Env) :-                      
+      159 +    init_tables(ST, OpTable),                                 
+      160 +    Env = map.init.                                           
+      161  
+      162 +:- type stdlib_result                                         
+      163 +    --->    stdlib_ok(operator_table, string_table, env)      
+      164 +    ;       stdlib_error.                                     
+      165 +                                                              
+      166 +:- pred eval_stdlib(string::in, stdlib_result::out, io::di, io
+          +::uo) is cc_multi.                                            
+      167 +                                                              
+      168  eval_stdlib(StdlibPath, Result, !IO) :-
+      169      LibDir = dir.dirname(StdlibPath),
+      170      io.read_named_file_as_string(StdlibPath, ReadResult, !IO),
+     ...
+      181                      map.init, []), EvalResult, !IO),
+      182                  (
+      183                      EvalResult = succeeded({ST, Env, _Stack}),
+      148 -                    Result = ok({OpTable, ST, Env})           
+      184 +                    Result = stdlib_ok(OpTable, ST, Env)      
+      185                  ;
+      186                      EvalResult = exception(Exn),
+      187                      ( if univ_to_type(Exn, EvalError) then
+      188                          io.format("Runtime error in stdlib: %s
+           \n",
+      189                              [s(types.format_error(ST1, EvalErr
+           or))], !IO),
+      154 -                        Result = error                        
+      190 +                        Result = stdlib_error                 
+      191                      else
+      192                          rethrow(EvalResult)
+      193                      )
+     ...
+      196                  ParseResult = error(ParseError),
+      197                  io.format("In stdlib: ", [], !IO),
+      198                  report_parse_error(ParseError, !IO),
+      163 -                Result = error                                
+      199 +                Result = stdlib_error                         
+      200              )
+      201          ;
+      202              LexResult = error(LexError),
+      203              io.format("In stdlib: ", [], !IO),
+      204              report_lex_error(LexError, !IO),
+      169 -            Result = error                                    
+      205 +            Result = stdlib_error                             
+      206          )
+      207      ;
+      208          ReadResult = error(Error),
+      209          io.format("Error reading stdlib '%s': %s\n",
+      210              [s(StdlibPath), s(io.error_message(Error))], !IO),
+      175 -        Result = error                                        
+      211 +        Result = stdlib_error                                 
+      212      ).
+      213  
+      178 -:- pred process_args_with_state(operator_table::in, string_tab
+          -le::in,                                                       
+      179 -    env::in, list(string)::in, io::di, io::uo) is cc_multi.   
+      214 +%-------------------------------------------------------------
+          +----------%                                                   
+      215 +% Main entry point                                            
+      216 +%-------------------------------------------------------------
+          +----------%                                                   
+      217  
+      181 -process_args_with_state(OpTable, ST, Env, Args, !IO) :-       
+      218 +main(!IO) :-                                                  
+      219 +    io.command_line_arguments(Args, !IO),                     
+      220 +    parse_args(Args, ParseResult),                            
+      221      (
+      183 -        Args = [],                                            
+      184 -        % No arguments: start REPL with stdlib loaded         
+      185 -        io.write_string("Froth REPL. Press Ctrl-D to exit.\n",
+          - !IO),                                                        
+      186 -        repl_loop(OpTable, ST, Env, [], !IO)                  
+      222 +        ParseResult = help_requested,                         
+      223 +        print_usage(!IO)                                      
+      224      ;
+      188 -        Args = [Arg],                                         
+      189 -        ( if ( Arg = "-h" ; Arg = "--help" ) then             
+      190 -            print_usage(!IO)                                  
+      191 -        else                                                  
+      192 -            run_file_with_state(OpTable, ST, Env, Arg, !IO)   
+      193 -        )                                                     
+      225 +        ParseResult = parse_error(Msg),                       
+      226 +        io.format("Error: %s\n", [s(Msg)], !IO),              
+      227 +        io.write_string("Try 'froth --help' for usage.\n", !IO
+          +),                                                            
+      228 +        io.set_exit_status(1, !IO)                            
+      229      ;
+      195 -        Args = [First, Second | Rest],                        
+      196 -        ( if First = "-f", Rest = [] then                     
+      197 -            run_file_with_state(OpTable, ST, Env, Second, !IO)
+      198 -        else if First = "-e", Rest = [] then                  
+      199 -            run_file_then_repl_with_state(OpTable, ST, Env, Se
+          -cond, !IO)                                                    
+      200 -        else                                                  
+      201 -            print_usage(!IO),                                 
+      230 +        ParseResult = parsed(Opts),                           
+      231 +        run_with_options(Opts, !IO)                           
+      232 +    ).                                                        
+      233 +                                                              
+      234 +:- pred run_with_options(options::in, io::di, io::uo) is cc_mu
+          +lti.                                                          
+      235 +                                                              
+      236 +run_with_options(Opts, !IO) :-                                
+      237 +    % Initialize state                                        
+      238 +    ( if Opts ^ opt_no_stdlib = yes then                      
+      239 +        init_without_stdlib(OpTable, ST0, Env0),              
+      240 +        run_actions(Opts, OpTable, ST0, Env0, [], !IO)        
+      241 +    else                                                      
+      242 +        init_with_stdlib(InitResult, !IO),                    
+      243 +        (                                                     
+      244 +            InitResult = init_ok(OpTable, ST0, Env0),         
+      245 +            run_actions(Opts, OpTable, ST0, Env0, [], !IO)    
+      246 +        ;                                                     
+      247 +            InitResult = init_error,                          
+      248              io.set_exit_status(1, !IO)
+      249          )
+      250      ).
+      251  
+      206 -:- pred repl_no_stdlib(io::di, io::uo) is cc_multi.           
+      252 +%-------------------------------------------------------------
+          +----------%                                                   
+      253 +% Action execution                                            
+      254 +%-------------------------------------------------------------
+          +----------%                                                   
+      255  
+      208 -repl_no_stdlib(!IO) :-                                        
+      209 -    io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO
+          -),                                                            
+      210 -    Env0 = map.init,                                          
+      211 -    Stack0 = [],                                              
+      212 -    init_tables(ST0, OpTable),                                
+      213 -    repl_loop(OpTable, ST0, Env0, Stack0, !IO).               
+      256 +:- pred run_actions(options::in, operator_table::in,          
+      257 +    string_table::in, env::in, stack::in, io::di, io::uo) is c
+          +c_multi.                                                      
+      258  
+      215 -:- pred run_file_no_stdlib(string::in, io::di, io::uo) is cc_m
+          -ulti.                                                         
+      259 +run_actions(Opts, OpTable, ST0, Env0, Stack0, !IO) :-         
+      260 +    Actions = Opts ^ opt_actions,                             
+      261 +    (                                                         
+      262 +        Actions = [],                                         
+      263 +        % No actions: start REPL                              
+      264 +        start_repl(Opts, OpTable, ST0, Env0, Stack0, !IO)     
+      265 +    ;                                                         
+      266 +        Actions = [_ | _],                                    
+      267 +        execute_actions(Actions, OpTable, ST0, ST, Env0, Env, 
+          +Stack0, Stack,                                                
+      268 +            yes, Success, !IO),                               
+      269 +        (                                                     
+      270 +            Success = yes,                                    
+      271 +            ( if Opts ^ opt_interactive = yes then            
+      272 +                start_repl(Opts, OpTable, ST, Env, Stack, !IO)
+      273 +            else                                              
+      274 +                true                                          
+      275 +            )                                                 
+      276 +        ;                                                     
+      277 +            Success = no,                                     
+      278 +            io.set_exit_status(1, !IO)                        
+      279 +        )                                                     
+      280 +    ).                                                        
+      281  
+      217 -run_file_no_stdlib(Filename, !IO) :-                          
+      218 -    BaseDir = dir.dirname(Filename),                          
+      219 -    io.read_named_file_as_string(Filename, ReadResult, !IO),  
+      282 +:- pred execute_actions(list(action)::in, operator_table::in, 
+      283 +    string_table::in, string_table::out,                      
+      284 +    env::in, env::out, stack::in, stack::out,                 
+      285 +    bool::in, bool::out, io::di, io::uo) is cc_multi.         
+      286 +                                                              
+      287 +execute_actions([], _, !ST, !Env, !Stack, !Success, !IO).     
+      288 +execute_actions([Action | Rest], OpTable, !ST, !Env, !Stack, !
+          +Success, !IO) :-                                              
+      289      (
+      221 -        ReadResult = ok(Input),                               
+      222 -        run_no_stdlib(BaseDir, Input, !IO)                    
+      290 +        !.Success = no                                        
+      291 +        % Skip remaining actions if we already failed         
+      292      ;
+      224 -        ReadResult = error(Error),                            
+      225 -        io.format("Error reading '%s': %s\n",                 
+      226 -            [s(Filename), s(io.error_message(Error))], !IO),  
+      227 -        io.set_exit_status(1, !IO)                            
+      293 +        !.Success = yes,                                      
+      294 +        (                                                     
+      295 +            Action = exec_code(Code),                         
+      296 +            execute_code(OpTable, Code, !ST, !Env, !Stack, !Su
+          +ccess, !IO)                                                   
+      297 +        ;                                                     
+      298 +            Action = exec_file(File),                         
+      299 +            execute_file(OpTable, File, !ST, !Env, !Stack, !Su
+          +ccess, !IO)                                                   
+      300 +        ),                                                    
+      301 +        execute_actions(Rest, OpTable, !ST, !Env, !Stack, !Suc
+          +cess, !IO)                                                    
+      302      ).
+      303  
+      230 -:- pred run_no_stdlib(string::in, string::in, io::di, io::uo) 
+          -is cc_multi.                                                  
+      304 +:- pred execute_code(operator_table::in, string::in,          
+      305 +    string_table::in, string_table::out,                      
+      306 +    env::in, env::out, stack::in, stack::out,                 
+      307 +    bool::in, bool::out, io::di, io::uo) is cc_multi.         
+      308  
+      232 -run_no_stdlib(BaseDir, Input, !IO) :-                         
+      233 -    init_tables(ST0, OpTable),                                
+      234 -    lexer.tokenize(Input, ST0, LexResult),                    
+      309 +execute_code(OpTable, Code, ST0, ST, Env0, Env, Stack0, Stack,
+          + _, Success, !IO) :-                                          
+      310 +    lexer.tokenize(Code, ST0, LexResult),                     
+      311      (
+      236 -        LexResult = ok(Tokens, ST),                           
+      312 +        LexResult = ok(Tokens, ST1),                          
+      313          parser.parse(Tokens, ParseResult),
+      314          (
+      315              ParseResult = ok(Terms),
+      240 -            execute(OpTable, BaseDir, ST, Terms, !IO)         
+      316 +            % Use "." as BaseDir for code strings (current dir
+          +ectory)                                                       
+      317 +            try_io(eval_terms_wrapper(OpTable, ".", ST1, Terms
+          +, Env0, Stack0),                                              
+      318 +                EvalResult, !IO),                             
+      319 +            (                                                 
+      320 +                EvalResult = succeeded({ST, Env, Stack}),     
+      321 +                Success = yes                                 
+      322 +            ;                                                 
+      323 +                EvalResult = exception(Exn),                  
+      324 +                ( if univ_to_type(Exn, EvalError) then        
+      325 +                    io.format("Runtime error: %s\n",          
+      326 +                        [s(types.format_error(ST1, EvalError))
+          +], !IO),                                                      
+      327 +                    ST = ST1, Env = Env0, Stack = Stack0,     
+      328 +                    Success = no                              
+      329 +                else                                          
+      330 +                    rethrow(EvalResult)                       
+      331 +                )                                             
+      332 +            )                                                 
+      333          ;
+      334              ParseResult = error(ParseError),
+      335              report_parse_error(ParseError, !IO),
+      244 -            io.set_exit_status(1, !IO)                        
+      336 +            ST = ST1, Env = Env0, Stack = Stack0,             
+      337 +            Success = no                                      
+      338          )
+      339      ;
+      340          LexResult = error(LexError),
+      341          report_lex_error(LexError, !IO),
+      249 -        io.set_exit_status(1, !IO)                            
+      342 +        ST = ST0, Env = Env0, Stack = Stack0,                 
+      343 +        Success = no                                          
+      344      ).
+      345  
+      252 -:- pred run_file_then_repl_no_stdlib(string::in, io::di, io::u
+          -o) is cc_multi.                                               
+      346 +:- pred execute_file(operator_table::in, string::in,          
+      347 +    string_table::in, string_table::out,                      
+      348 +    env::in, env::out, stack::in, stack::out,                 
+      349 +    bool::in, bool::out, io::di, io::uo) is cc_multi.         
+      350  
+      254 -run_file_then_repl_no_stdlib(Filename, !IO) :-                
+      255 -    BaseDir = dir.dirname(Filename),                          
+      351 +execute_file(OpTable, Filename, ST0, ST, Env0, Env, Stack0, St
+          +ack, _, Success, !IO) :-                                      
+      352      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      353      (
+      258 -        ReadResult = ok(Input),                               
+      259 -        run_then_repl_no_stdlib(BaseDir, Input, !IO)          
+      354 +        ReadResult = ok(Content),                             
+      355 +        BaseDir = dir.dirname(Filename),                      
+      356 +        lexer.tokenize(Content, ST0, LexResult),              
+      357 +        (                                                     
+      358 +            LexResult = ok(Tokens, ST1),                      
+      359 +            parser.parse(Tokens, ParseResult),                
+      360 +            (                                                 
+      361 +                ParseResult = ok(Terms),                      
+      362 +                try_io(eval_terms_wrapper(OpTable, BaseDir, ST
+          +1, Terms, Env0, Stack0),                                      
+      363 +                    EvalResult, !IO),                         
+      364 +                (                                             
+      365 +                    EvalResult = succeeded({ST, Env, Stack}), 
+      366 +                    Success = yes                             
+      367 +                ;                                             
+      368 +                    EvalResult = exception(Exn),              
+      369 +                    ( if univ_to_type(Exn, EvalError) then    
+      370 +                        io.format("Runtime error: %s\n",      
+      371 +                            [s(types.format_error(ST1, EvalErr
+          +or))], !IO),                                                  
+      372 +                        ST = ST1, Env = Env0, Stack = Stack0, 
+      373 +                        Success = no                          
+      374 +                    else                                      
+      375 +                        rethrow(EvalResult)                   
+      376 +                    )                                         
+      377 +                )                                             
+      378 +            ;                                                 
+      379 +                ParseResult = error(ParseError),              
+      380 +                report_parse_error(ParseError, !IO),          
+      381 +                ST = ST1, Env = Env0, Stack = Stack0,         
+      382 +                Success = no                                  
+      383 +            )                                                 
+      384 +        ;                                                     
+      385 +            LexResult = error(LexError),                      
+      386 +            report_lex_error(LexError, !IO),                  
+      387 +            ST = ST0, Env = Env0, Stack = Stack0,             
+      388 +            Success = no                                      
+      389 +        )                                                     
+      390      ;
+      391          ReadResult = error(Error),
+      392          io.format("Error reading '%s': %s\n",
+      393              [s(Filename), s(io.error_message(Error))], !IO),
+      264 -        io.set_exit_status(1, !IO)                            
+      394 +        ST = ST0, Env = Env0, Stack = Stack0,                 
+      395 +        Success = no                                          
+      396      ).
+      397  
+      267 -:- pred run_then_repl_no_stdlib(string::in, string::in, io::di
+          -, io::uo) is cc_multi.                                        
+      398 +%-------------------------------------------------------------
+          +----------%                                                   
+      399 +% REPL                                                        
+      400 +%-------------------------------------------------------------
+          +----------%                                                   
+      401  
+      269 -run_then_repl_no_stdlib(BaseDir, Input, !IO) :-               
+      270 -    init_tables(ST0, OpTable),                                
+      271 -    lexer.tokenize(Input, ST0, LexResult),                    
+      272 -    (                                                         
+      273 -        LexResult = ok(Tokens, ST),                           
+      274 -        parser.parse(Tokens, ParseResult),                    
+      275 -        (                                                     
+      276 -            ParseResult = ok(Terms),                          
+      277 -            execute_then_repl(OpTable, BaseDir, ST, Terms, !IO
+          -)                                                             
+      278 -        ;                                                     
+      279 -            ParseResult = error(ParseError),                  
+      280 -            report_parse_error(ParseError, !IO),              
+      281 -            io.set_exit_status(1, !IO)                        
+      282 -        )                                                     
+      283 -    ;                                                         
+      284 -        LexResult = error(LexError),                          
+      285 -        report_lex_error(LexError, !IO),                      
+      286 -        io.set_exit_status(1, !IO)                            
+      287 -    ).                                                        
+      402 +:- pred start_repl(options::in, operator_table::in, string_tab
+          +le::in,                                                       
+      403 +    env::in, stack::in, io::di, io::uo) is cc_multi.          
+      404  
+      289 -:- pred print_usage(io::di, io::uo) is det.                   
+      405 +start_repl(Opts, OpTable, ST, Env, Stack, !IO) :-             
+      406 +    ( if Opts ^ opt_quiet = no then                           
+      407 +        io.write_string("Froth REPL. Press Ctrl-D to exit.\n",
+          + !IO)                                                         
+      408 +    else                                                      
+      409 +        true                                                  
+      410 +    ),                                                        
+      411 +    repl_loop(OpTable, ST, Env, Stack, !IO).                  
+      412  
+      291 -print_usage(!IO) :-                                           
+      292 -    io.write_string("Usage: froth [options] [filename]\n", !IO
+          -),                                                            
+      293 -    io.write_string("\n", !IO),                               
+      294 -    io.write_string("Options:\n", !IO),                       
+      295 -    io.write_string("  -n         No stdlib (don't auto-load s
+          -tandard library)\n", !IO),                                    
+      296 -    io.write_string("  -e FILE    Execute FILE then start REPL
+          -\n", !IO),                                                    
+      297 -    io.write_string("  -f FILE    Run FILE\n", !IO),          
+      298 -    io.write_string("  -h, --help Show this help\n", !IO),    
+      299 -    io.write_string("\n", !IO),                               
+      300 -    io.write_string("With no arguments, starts an interactive 
+          -REPL.\n", !IO).                                               
+      301 -                                                              
+      413  :- pred repl_loop(operator_table::in, string_table::in, env::i
+           n, stack::in,
+      414      io::di, io::uo) is cc_multi.
+      415  
+     ...
+      442          parser.parse(Tokens, ParseResult),
+      443          (
+      444              ParseResult = ok(Terms),
+      334 -            execute_repl(OpTable, ST1, Terms, Env0, Env, Stack
+          -0, Stack, !IO),                                               
+      335 -            ST = ST1                                          
+      445 +            try_io(eval_terms_wrapper(OpTable, ".", ST1, Terms
+          +, Env0, Stack0),                                              
+      446 +                Result, !IO),                                 
+      447 +            (                                                 
+      448 +                Result = succeeded({ST, Env, Stack})          
+      449 +            ;                                                 
+      450 +                Result = exception(Exn),                      
+      451 +                ( if univ_to_type(Exn, EvalError) then        
+      452 +                    io.format("Runtime error: %s\n",          
+      453 +                        [s(types.format_error(ST1, EvalError))
+          +], !IO),                                                      
+      454 +                    ST = ST1, Env = Env0, Stack = Stack0      
+      455 +                else                                          
+      456 +                    rethrow(Result)                           
+      457 +                )                                             
+      458 +            )                                                 
+      459          ;
+      460              ParseResult = error(ParseError),
+      461              report_parse_error(ParseError, !IO),
+      339 -            ST = ST1,                                         
+      340 -            Env = Env0,                                       
+      341 -            Stack = Stack0                                    
+      462 +            ST = ST1, Env = Env0, Stack = Stack0              
+      463          )
+      464      ;
+      465          LexResult = error(LexError),
+      466          report_lex_error(LexError, !IO),
+      346 -        ST = ST0,                                             
+      347 -        Env = Env0,                                           
+      348 -        Stack = Stack0                                        
+      467 +        ST = ST0, Env = Env0, Stack = Stack0                  
+      468      ).
+      469  
+      351 -:- pred execute_repl(operator_table::in, string_table::in, lis
+          -t(term)::in,                                                  
+      352 -    env::in, env::out, stack::in, stack::out, io::di, io::uo) 
+          -is cc_multi.                                                  
+      353 -                                                              
+      354 -execute_repl(OpTable, ST, Terms, Env0, Env, Stack0, Stack, !IO
+          -) :-                                                          
+      355 -    try_io(eval_terms_wrapper(OpTable, ".", ST, Terms, Env0, S
+          -tack0), Result, !IO),                                         
+      356 -    (                                                         
+      357 -        Result = succeeded({_, Env, Stack})                   
+      358 -    ;                                                         
+      359 -        Result = exception(Exn),                              
+      360 -        ( if univ_to_type(Exn, EvalError) then                
+      361 -            io.format("Runtime error: %s\n",                  
+      362 -                [s(types.format_error(ST, EvalError))], !IO), 
+      363 -            Env = Env0,                                       
+      364 -            Stack = Stack0                                    
+      365 -        else                                                  
+      366 -            rethrow(Result)                                   
+      367 -        )                                                     
+      368 -    ).                                                        
+      369 -                                                              
+      470  %-------------------------------------------------------------
+           ----------%
+      371 -% File execution                                              
+      471 +% Help                                                        
+      472  %-------------------------------------------------------------
+           ----------%
+      473  
+      374 -:- pred run_file(string::in, io::di, io::uo) is cc_multi.     
+      474 +:- pred print_usage(io::di, io::uo) is det.                   
+      475  
+      376 -run_file(Filename, !IO) :-                                    
+      377 -    BaseDir = dir.dirname(Filename),                          
+      378 -    io.read_named_file_as_string(Filename, ReadResult, !IO),  
+      379 -    (                                                         
+      380 -        ReadResult = ok(Input),                               
+      381 -        run(BaseDir, Input, !IO)                              
+      382 -    ;                                                         
+      383 -        ReadResult = error(Error),                            
+      384 -        io.format("Error reading '%s': %s\n",                 
+      385 -            [s(Filename), s(io.error_message(Error))], !IO),  
+      386 -        io.set_exit_status(1, !IO)                            
+      387 -    ).                                                        
+      476 +print_usage(!IO) :-                                           
+      477 +    io.write_string("Usage: froth [OPTIONS] [FILE]\n", !IO),  
+      478 +    io.write_string("\n", !IO),                               
+      479 +    io.write_string("Options:\n", !IO),                       
+      480 +    io.write_string("  -n, --no-stdlib    Don't auto-load stan
+          +dard library\n", !IO),                                        
+      481 +    io.write_string("  -q, --quiet        Suppress REPL banner
+          +\n", !IO),                                                    
+      482 +    io.write_string("  -e, --exec CODE    Execute CODE\n", !IO
+          +),                                                            
+      483 +    io.write_string("  -f, --file FILE    Execute FILE\n", !IO
+          +),                                                            
+      484 +    io.write_string("  -i, --interactive  Start REPL after -e/
+          +-f\n", !IO),                                                  
+      485 +    io.write_string("  -h, --help         Show this help\n", !
+          +IO),                                                          
+      486 +    io.write_string("\n", !IO),                               
+      487 +    io.write_string("If FILE given without -f, treat as -f FIL
+          +E.\n", !IO),                                                  
+      488 +    io.write_string("If no -e/-f/FILE, start REPL.\n", !IO),  
+      489 +    io.write_string("Multiple -e/-f processed in order.\n", !I
+          +O).                                                           
+      490  
+      389 -:- pred run_file_then_repl(string::in, io::di, io::uo) is cc_m
+          -ulti.                                                         
+      491 +%-------------------------------------------------------------
+          +----------%                                                   
+      492 +% Evaluation wrapper                                          
+      493 +%-------------------------------------------------------------
+          +----------%                                                   
+      494  
+      391 -run_file_then_repl(Filename, !IO) :-                          
+      392 -    BaseDir = dir.dirname(Filename),                          
+      393 -    io.read_named_file_as_string(Filename, ReadResult, !IO),  
+      394 -    (                                                         
+      395 -        ReadResult = ok(Input),                               
+      396 -        run_then_repl(BaseDir, Input, !IO)                    
+      397 -    ;                                                         
+      398 -        ReadResult = error(Error),                            
+      399 -        io.format("Error reading '%s': %s\n",                 
+      400 -            [s(Filename), s(io.error_message(Error))], !IO),  
+      401 -        io.set_exit_status(1, !IO)                            
+      402 -    ).                                                        
+      403 -                                                              
+      404 -:- pred run_then_repl(string::in, string::in, io::di, io::uo) 
+          -is cc_multi.                                                  
+      405 -                                                              
+      406 -run_then_repl(BaseDir, Input, !IO) :-                         
+      407 -    init_tables(ST0, OpTable),                                
+      408 -    lexer.tokenize(Input, ST0, LexResult),                    
+      409 -    (                                                         
+      410 -        LexResult = ok(Tokens, ST),                           
+      411 -        parser.parse(Tokens, ParseResult),                    
+      412 -        (                                                     
+      413 -            ParseResult = ok(Terms),                          
+      414 -            execute_then_repl(OpTable, BaseDir, ST, Terms, !IO
+          -)                                                             
+      415 -        ;                                                     
+      416 -            ParseResult = error(ParseError),                  
+      417 -            report_parse_error(ParseError, !IO),              
+      418 -            io.set_exit_status(1, !IO)                        
+      419 -        )                                                     
+      420 -    ;                                                         
+      421 -        LexResult = error(LexError),                          
+      422 -        report_lex_error(LexError, !IO),                      
+      423 -        io.set_exit_status(1, !IO)                            
+      424 -    ).                                                        
+      425 -                                                              
+      426 -:- pred execute_then_repl(operator_table::in, string::in, stri
+          -ng_table::in,                                                 
+      427 -    list(term)::in, io::di, io::uo) is cc_multi.              
+      428 -                                                              
+      429 -execute_then_repl(OpTable, BaseDir, ST0, Terms, !IO) :-       
+      430 -    Env0 = map.init,                                          
+      431 -    Stack0 = [],                                              
+      432 -    try_io(eval_terms_wrapper(OpTable, BaseDir, ST0, Terms, En
+          -v0, Stack0), Result, !IO),                                    
+      433 -    (                                                         
+      434 -        Result = succeeded({ST, Env, Stack}),                 
+      435 -        io.write_string("Froth REPL. Press Ctrl-D to exit.\n",
+          - !IO),                                                        
+      436 -        repl_loop(OpTable, ST, Env, Stack, !IO)               
+      437 -    ;                                                         
+      438 -        Result = exception(Exn),                              
+      439 -        ( if univ_to_type(Exn, EvalError) then                
+      440 -            io.format("Runtime error: %s\n",                  
+      441 -                [s(types.format_error(ST0, EvalError))], !IO),
+      442 -            io.set_exit_status(1, !IO)                        
+      443 -        else                                                  
+      444 -            rethrow(Result)                                   
+      445 -        )                                                     
+      446 -    ).                                                        
+      447 -                                                              
+      448 -:- pred run(string::in, string::in, io::di, io::uo) is cc_mult
+          -i.                                                            
+      449 -                                                              
+      450 -run(BaseDir, Input, !IO) :-                                   
+      451 -    init_tables(ST0, OpTable),                                
+      452 -    lexer.tokenize(Input, ST0, LexResult),                    
+      453 -    (                                                         
+      454 -        LexResult = ok(Tokens, ST),                           
+      455 -        parser.parse(Tokens, ParseResult),                    
+      456 -        (                                                     
+      457 -            ParseResult = ok(Terms),                          
+      458 -            execute(OpTable, BaseDir, ST, Terms, !IO)         
+      459 -        ;                                                     
+      460 -            ParseResult = error(ParseError),                  
+      461 -            report_parse_error(ParseError, !IO),              
+      462 -            io.set_exit_status(1, !IO)                        
+      463 -        )                                                     
+      464 -    ;                                                         
+      465 -        LexResult = error(LexError),                          
+      466 -        report_lex_error(LexError, !IO),                      
+      467 -        io.set_exit_status(1, !IO)                            
+      468 -    ).                                                        
+      469 -                                                              
+      470 -:- pred execute(operator_table::in, string::in, string_table::
+          -in, list(term)::in,                                           
+      471 -    io::di, io::uo) is cc_multi.                              
+      472 -                                                              
+      473 -execute(OpTable, BaseDir, ST, Terms, !IO) :-                  
+      474 -    Env0 = map.init,                                          
+      475 -    Stack0 = [],                                              
+      476 -    try_io(eval_terms_wrapper(OpTable, BaseDir, ST, Terms, Env
+          -0, Stack0), Result, !IO),                                     
+      477 -    (                                                         
+      478 -        Result = succeeded({_, _, _})                         
+      479 -    ;                                                         
+      480 -        Result = exception(Exn),                              
+      481 -        ( if univ_to_type(Exn, EvalError) then                
+      482 -            io.format("Runtime error: %s\n",                  
+      483 -                [s(types.format_error(ST, EvalError))], !IO), 
+      484 -            io.set_exit_status(1, !IO)                        
+      485 -        else                                                  
+      486 -            rethrow(Result)                                   
+      487 -        )                                                     
+      488 -    ).                                                        
+      489 -                                                              
+      490 -:- pred run_file_with_state(operator_table::in, string_table::
+          -in, env::in,                                                  
+      491 -    string::in, io::di, io::uo) is cc_multi.                  
+      492 -                                                              
+      493 -run_file_with_state(OpTable, ST0, Env0, Filename, !IO) :-     
+      494 -    BaseDir = dir.dirname(Filename),                          
+      495 -    io.read_named_file_as_string(Filename, ReadResult, !IO),  
+      496 -    (                                                         
+      497 -        ReadResult = ok(Input),                               
+      498 -        lexer.tokenize(Input, ST0, LexResult),                
+      499 -        (                                                     
+      500 -            LexResult = ok(Tokens, ST),                       
+      501 -            parser.parse(Tokens, ParseResult),                
+      502 -            (                                                 
+      503 -                ParseResult = ok(Terms),                      
+      504 -                try_io(eval_terms_wrapper(OpTable, BaseDir, ST
+          -, Terms, Env0, []),                                           
+      505 -                    Result, !IO),                             
+      506 -                (                                             
+      507 -                    Result = succeeded({_, _, _})             
+      508 -                ;                                             
+      509 -                    Result = exception(Exn),                  
+      510 -                    ( if univ_to_type(Exn, EvalError) then    
+      511 -                        io.format("Runtime error: %s\n",      
+      512 -                            [s(types.format_error(ST, EvalErro
+          -r))], !IO),                                                   
+      513 -                        io.set_exit_status(1, !IO)            
+      514 -                    else                                      
+      515 -                        rethrow(Result)                       
+      516 -                    )                                         
+      517 -                )                                             
+      518 -            ;                                                 
+      519 -                ParseResult = error(ParseError),              
+      520 -                report_parse_error(ParseError, !IO),          
+      521 -                io.set_exit_status(1, !IO)                    
+      522 -            )                                                 
+      523 -        ;                                                     
+      524 -            LexResult = error(LexError),                      
+      525 -            report_lex_error(LexError, !IO),                  
+      526 -            io.set_exit_status(1, !IO)                        
+      527 -        )                                                     
+      528 -    ;                                                         
+      529 -        ReadResult = error(Error),                            
+      530 -        io.format("Error reading '%s': %s\n",                 
+      531 -            [s(Filename), s(io.error_message(Error))], !IO),  
+      532 -        io.set_exit_status(1, !IO)                            
+      533 -    ).                                                        
+      534 -                                                              
+      535 -:- pred run_file_then_repl_with_state(operator_table::in, stri
+          -ng_table::in,                                                 
+      536 -    env::in, string::in, io::di, io::uo) is cc_multi.         
+      537 -                                                              
+      538 -run_file_then_repl_with_state(OpTable, ST0, Env0, Filename, !I
+          -O) :-                                                         
+      539 -    BaseDir = dir.dirname(Filename),                          
+      540 -    io.read_named_file_as_string(Filename, ReadResult, !IO),  
+      541 -    (                                                         
+      542 -        ReadResult = ok(Input),                               
+      543 -        lexer.tokenize(Input, ST0, LexResult),                
+      544 -        (                                                     
+      545 -            LexResult = ok(Tokens, ST),                       
+      546 -            parser.parse(Tokens, ParseResult),                
+      547 -            (                                                 
+      548 -                ParseResult = ok(Terms),                      
+      549 -                try_io(eval_terms_wrapper(OpTable, BaseDir, ST
+          -, Terms, Env0, []),                                           
+      550 -                    Result, !IO),                             
+      551 -                (                                             
+      552 -                    Result = succeeded({ST1, Env, Stack}),    
+      553 -                    io.write_string("Froth REPL. Press Ctrl-D 
+          -to exit.\n", !IO),                                            
+      554 -                    repl_loop(OpTable, ST1, Env, Stack, !IO)  
+      555 -                ;                                             
+      556 -                    Result = exception(Exn),                  
+      557 -                    ( if univ_to_type(Exn, EvalError) then    
+      558 -                        io.format("Runtime error: %s\n",      
+      559 -                            [s(types.format_error(ST, EvalErro
+          -r))], !IO),                                                   
+      560 -                        io.set_exit_status(1, !IO)            
+      561 -                    else                                      
+      562 -                        rethrow(Result)                       
+      563 -                    )                                         
+      564 -                )                                             
+      565 -            ;                                                 
+      566 -                ParseResult = error(ParseError),              
+      567 -                report_parse_error(ParseError, !IO),          
+      568 -                io.set_exit_status(1, !IO)                    
+      569 -            )                                                 
+      570 -        ;                                                     
+      571 -            LexResult = error(LexError),                      
+      572 -            report_lex_error(LexError, !IO),                  
+      573 -            io.set_exit_status(1, !IO)                        
+      574 -        )                                                     
+      575 -    ;                                                         
+      576 -        ReadResult = error(Error),                            
+      577 -        io.format("Error reading '%s': %s\n",                 
+      578 -            [s(Filename), s(io.error_message(Error))], !IO),  
+      579 -        io.set_exit_status(1, !IO)                            
+      580 -    ).                                                        
+      581 -                                                              
+      495  :- pred eval_terms_wrapper(operator_table::in, string::in, str
+           ing_table::in,
+      496      list(term)::in, env::in, stack::in, {string_table, env, st
+           ack}::out,
+      497      io::di, io::uo) is det.
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/froth.int3
+     Making Mercury/ints/froth.int
+     Making Mercury/cs/froth.c
+     froth.m:060: In declaration of predicate `parse_args'/2:
+     froth.m:060:   ambiguity error: there are several possible matches for type
+     froth.m:060:   `parse_result'/0.
+     froth.m:060:   The possible matches are in modules `froth' and `parser'.
+     froth.m:065: In declaration of predicate `parse_args_loop'/3:
+     … +6 lines (ctrl+o to see all)
+
+● Need to rename parse_result to avoid collision with parser module:
+
+● Update(src/froth.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      44                  opt_actions      :: list(action)
+      45              ).
+      46  
+      47 -:- type parse_result                                           
+      48 -    --->    parsed(options)                                    
+      49 -    ;       help_requested                                     
+      50 -    ;       parse_error(string).                               
+      47 +:- type args_result                                            
+      48 +    --->    args_parsed(options)                               
+      49 +    ;       args_help                                          
+      50 +    ;       args_error(string).                                
+      51  
+      52  :- func default_options = options.
+      53  
+
+● Update(src/froth.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      57  % Argument parsing
+      58  %--------------------------------------------------------------
+          ---------%
+      59  
+      60 -:- pred parse_args(list(string)::in, parse_result::out) is det.
+      60 +:- pred parse_args(list(string)::in, args_result::out) is det. 
+      61  
+      62  parse_args(Args, Result) :-
+      63      parse_args_loop(Args, default_options, Result).
+      64  
+      65 -:- pred parse_args_loop(list(string)::in, options::in, parse_re
+         -sult::out) is det.                                             
+      65 +:- pred parse_args_loop(list(string)::in, options::in, args_res
+         +ult::out) is det.                                              
+      66  
+      67 -parse_args_loop([], Opts, parsed(FinalOpts)) :-                
+      67 +parse_args_loop([], Opts, args_parsed(FinalOpts)) :-           
+      68      % Reverse actions to get them in command-line order
+      69      FinalOpts = Opts ^ opt_actions := list.reverse(Opts ^ opt_a
+          ctions).
+      70  parse_args_loop([Arg | Rest], Opts0, Result) :-
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      69      FinalOpts = Opts ^ opt_actions := list.reverse(Opts ^ opt_a
+          ctions).
+      70  parse_args_loop([Arg | Rest], Opts0, Result) :-
+      71      ( if Arg = "-h" ; Arg = "--help" then
+      72 -        Result = help_requested                                
+      72 +        Result = args_help                                     
+      73      else if Arg = "-n" ; Arg = "--no-stdlib" then
+      74          Opts = Opts0 ^ opt_no_stdlib := yes,
+      75          parse_args_loop(Rest, Opts, Result)
+
+● Update(src/froth.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      85              Opts = Opts0 ^ opt_actions := Actions,
+      86              parse_args_loop(Rest2, Opts, Result)
+      87          else
+      88 -            Result = parse_error("option " ++ Arg ++ " requires
+         - an argument")                                                 
+      88 +            Result = args_error("option " ++ Arg ++ " requires 
+         +an argument")                                                  
+      89          )
+      90      else if Arg = "-f" ; Arg = "--file" then
+      91          ( if Rest = [File | Rest2] then
+     ...
+       93              Opts = Opts0 ^ opt_actions := Actions,
+       94              parse_args_loop(Rest2, Opts, Result)
+       95          else
+       96 -            Result = parse_error("option " ++ Arg ++ " require
+          -s an argument")                                               
+       96 +            Result = args_error("option " ++ Arg ++ " requires
+          + an argument")                                                
+       97          )
+       98      else if string.prefix(Arg, "-") then
+       99 -        Result = parse_error("unknown option: " ++ Arg)       
+       99 +        Result = args_error("unknown option: " ++ Arg)        
+      100      else
+      101          % Positional argument treated as -f FILE
+      102          Actions = [exec_file(Arg) | Opts0 ^ opt_actions],
+
+● Update(src/froth.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      217  
+      218  main(!IO) :-
+      219      io.command_line_arguments(Args, !IO),
+      220 -    parse_args(Args, ParseResult),                            
+      220 +    parse_args(Args, ArgsResult),                             
+      221      (
+      222 -        ParseResult = help_requested,                         
+      222 +        ArgsResult = args_help,                               
+      223          print_usage(!IO)
+      224      ;
+      225 -        ParseResult = parse_error(Msg),                       
+      225 +        ArgsResult = args_error(Msg),                         
+      226          io.format("Error: %s\n", [s(Msg)], !IO),
+      227          io.write_string("Try 'froth --help' for usage.\n", !IO
+           ),
+      228          io.set_exit_status(1, !IO)
+      229      ;
+      230 -        ParseResult = parsed(Opts),                           
+      230 +        ArgsResult = args_parsed(Opts),                       
+      231          run_with_options(Opts, !IO)
+      232      ).
+      233  
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth     
+     Making Mercury/int3s/froth.int3
+     Making Mercury/ints/froth.int
+     … +4 lines (ctrl+o to expand)
+
+● Now let's test the new command line:
+
+● Bash(./bin/froth --help)
+  ⎿  Usage: froth [OPTIONS] [FILE] 
+
+     Options:
+     … +10 lines (ctrl+o to expand)
+
+● Bash(./bin/froth -e '1 2 + println!')
+  ⎿  Error: Exit code 1
+     1:14: invalid token: '\'
+
+● Bash(./bin/froth tests/add.froth)
+  ⎿  8
+
+● The shell quoting is causing issues. Let me test with different quoting:
+
+● Bash(./bin/froth -e "1 2 + println!")
+  ⎿  3
+
+● Bash(./bin/froth -n -e "1 2 + print")
+  ⎿  3
+
+● Bash(./bin/froth -f tests/add.froth -e "10 println!")
+  ⎿  8 
+     10
+
+● Excellent! Let me run the full test suite and test a few more edge cases:
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  PASS: add                     
+     PASS: apply_op
+     PASS: arithmetic
+     … +39 lines (ctrl+o to expand)
+
+● Bash(./bin/froth --unknown-option 2>&1; echo "Exit: $?")
+  ⎿  Error: unknown option: --unknown-option
+     Try 'froth --help' for usage.
+     Exit: 1
+
+● Bash(./bin/froth -e 2>&1; echo "Exit: $?")
+  ⎿  Error: option -e requires an argument
+     Try 'froth --help' for usage.
+     Exit: 1
+
+● Bash(echo "5 println!" | ./bin/froth -q)
+  ⎿  > 1:10: invalid token: '\'
+     >
+
+● Bash(echo "5 print" | ./bin/froth -q)
+  ⎿  > 5>
+
+● All tests pass. Now let me update the documentation:
+
+● Update(README.md)
+  ⎿  Added 17 lines, removed 11 lines                                    
+      33  ## Usage
+      34  
+      35  ```
+      36 -Usage: froth [options] [filename]                              
+      36 +Usage: froth [OPTIONS] [FILE]                                  
+      37  
+      38  Options:
+      39 -  -n         No stdlib (don't auto-load standard library)      
+      40 -  -e FILE    Execute FILE then start REPL                      
+      41 -  -f FILE    Run FILE                                          
+      42 -  -h, --help Show this help                                    
+      39 +  -n, --no-stdlib    Don't auto-load standard library          
+      40 +  -q, --quiet        Suppress REPL banner                      
+      41 +  -e, --exec CODE    Execute CODE                              
+      42 +  -f, --file FILE    Execute FILE                              
+      43 +  -i, --interactive  Start REPL after -e/-f                    
+      44 +  -h, --help         Show this help                            
+      45  
+      44 -With no arguments, starts an interactive REPL.                 
+      46 +If FILE given without -f, treat as -f FILE.                    
+      47 +If no -e/-f/FILE, start REPL.                                  
+      48 +Multiple -e/-f processed in order.                             
+      49  ```
+      50  
+      51  ```bash
+      48 -froth                    # Start interactive REPL (with stdlib)
+      49 -froth program.froth      # Run a file                          
+      50 -froth -f program.froth   # Run a file (explicit)               
+      51 -froth -e prelude.froth   # Load file then start REPL           
+      52 -froth -n program.froth   # Run without standard library        
+      52 +froth                           # Start interactive REPL (with 
+         +stdlib)                                                        
+      53 +froth program.froth             # Run a file                   
+      54 +froth -e "1 2 + println!"       # Execute code string          
+      55 +froth -f lib.froth -e "go!"     # Load file, then execute code 
+      56 +froth -i program.froth          # Run file, then start REPL    
+      57 +froth -n -e "1 2 + print"       # Execute without stdlib       
+      58 +froth -q                        # Start REPL without banner    
+      59  ```
+      60  
+      61  ### Importing Files
+
+● Bash(./run_tests.sh 2>&1 | tail -5)
+  ⎿  PASS: type_error             
+     PASS: type_tests
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● Done! The new command line interface is complete:
+
+  New options:
+  - -n, --no-stdlib - Don't auto-load standard library
+  - -q, --quiet - Suppress REPL banner
+  - -e, --exec CODE - Execute code string
+  - -f, --file FILE - Execute file
+  - -i, --interactive - Start REPL after -e/-f
+  - -h, --help - Show help
+
+  Key features:
+  - Positional FILE argument treated as -f FILE
+  - Multiple -e and -f options processed in order
+  - State (environment, stack) persists across actions
+  - -i forces REPL after executing actions
+
+  Examples:
+  froth                           # REPL with stdlib
+  froth script.froth              # Run file
+  froth -e "1 2 + println!"       # Execute code string  
+  froth -f lib.froth -e "go!"     # Load file, then run code
+  froth -i script.froth           # Run file, then REPL
+  froth -n -e "1 2 + print"       # Without stdlib
+
+  All 40 tests pass. README.md updated with new usage documentation.
+
+> I have staged our changes, please commit 
+
+● Bash(git status)
+  ⎿  On branch master                                   
+     Changes to be committed:
+       (use "git restore --staged <file>..." to unstage)
+     … +7 lines (ctrl+o to expand)
+
+● Bash(git diff --cached --stat)
+  ⎿  FROTH.md              |  16 +-                                        
+     README.md             |  50 ++--
+     src/froth.m           | 689 ++++++++++++++++++++++--------------------
+    … +6 lines (ctrl+o to expand)
+
+
+● Bash(git log --oneline -3)
+  ⎿  413863b add transcripts 14-16                                         
+     ba27d16 Add import operator for file-based module loading
+     9410d80 Add stdlib with auto-loading and remove trailing newlines from
+     print/write
+
+● Bash(git commit -m "Add delete operator and refactor command line interface…)
+  ⎿ [master 679f7ac] Add delete operator and refactor command line interfac
+    e
+     7 files changed, 398 insertions(+), 415 deletions(-)
+    … +2 lines (ctrl+o to expand)
+
+
+● Bash(git status)
+  ⎿  On branch master                     
+     nothing to commit, working tree clean
+
+● Committed as 679f7ac:
+
+  - delete operator: ( map 'key -- map ) - removes key from map
+  - Refactored CLI:
+    - -e CODE executes inline code
+    - -f FILE executes file (positional FILE works too)
+    - -i starts REPL after actions
+    - -q suppresses REPL banner
+    - Multiple -e/-f processed in order
+
+> Let's create a lib/list.froth module for list operations. Write a `fold` 
+function that traverses the list from head to tail, running a closure on 
+each list element (similar to `foldl` in lib/array.froth). 
+
+● Read(lib/array.froth)
+  ⎿  Read 97 lines
+
+● Write(lib/list.froth)
+  ⎿  Wrote 30 lines to lib/list.froth                                    
+      1 ; list.froth - Cons list utilities
+      2 ;
+      3 ; Lists are built from cons cells:
+      4 ;   .              ; empty list (nil)
+      5 ;   . 3 , 2 , 1 ,  ; list [1, 2, 3] (1 is head)
+      6 ;
+      7 ; Use fst/snd to access head/tail, isNil to test for empty.
+      8 ; fold: Apply a function to each element head-to-tail, leaving re
+        sults on stack
+      9 ; (list fn -- ...results...)
+     … +20 lines (ctrl+o to expand)
+
+● Let me test it:
+
+● Bash(./bin/froth -e '"lib/list.froth" import  . 3 , 2 , 1 , {println!} fold!')
+  ⎿  Error: Exit code 1
+     1:48: invalid token: '\'
+
+● Bash(./bin/froth -e '"lib/list.froth" import  [ . 3 , 2 , 1 , {1 +} fold! ]
+      println!')
+  ⎿  Error: Exit code 1
+     1:52: invalid token: '\'
+
+● Shell quoting issues. Let me create a test file:
+
+● Write(tests/list.froth)
+  ⎿  Wrote 21 lines to tests/list.froth       
+      1 ; Test list fold operation
+      2 "../lib/list.froth" import
+      3 ; Build a list [1, 2, 3]
+      4 . 3 , 2 , 1 , /xs
+      5 ; fold with print - should print 1 2 3
+      6 xs {print " " print} fold!
+      7 nl!
+     … +11 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/list.froth)
+  ⎿  1 2 3
+     234
+     6
+     done
+
+● Works correctly. Let me create the expected file:
+
+● Write(tests/list.expected)
+  ⎿  Wrote 5 lines to tests/list.expected
+      1 1 2 3
+      2 234
+      3 6
+      4 done
+
+● Bash(./bin/froth tests/list.froth | xxd | head -20)
+  ⎿  00000000: 3120 3220 3320 0a32 3334 0a36 0a64 6f6e  1 2 3 .234.6.don
+     00000010: 650a                                     e.
+
+● Write(tests/list.expected)
+  ⎿  
+
+● Bash(./bin/froth tests/list.froth > /tmp/list.out && diff /tmp/list.out
+      tests/list.expected)
+  ⎿  1c1    
+     < 1 2 3
+     ---
+     > 1 2 3
+
+● Bash(./bin/froth tests/list.froth > tests/list.expected)
+  ⎿  (No content)
+
+● Bash(./run_tests.sh 2>&1 | tail -10)
+  ⎿  PASS: shadow                 
+     PASS: stack
+     PASS: stack_underflow
+     … +7 lines (ctrl+o to expand)
+
+● All 41 tests pass. Created lib/list.froth with fold:
+
+  ; fold: (list fn -- ...results...)
+  ; Applies fn to each element head-to-tail
+
+  . 3 , 2 , 1 , {print} fold!     ; prints 1 2 3
+  [ . 3 , 2 , 1 , {1 +} fold! ]   ; produces [2 3 4]
+  0 . 3 , 2 , 1 , {+} fold!       ; sums to 6
+
+> add list.froth to stdlib 
+
+● Read(lib/stdlib.froth)
+  ⎿  Read 6 lines
+
+● Update(lib/stdlib.froth)
+  ⎿  Added 1 line                                                        
+      2  
+      3  "io.froth" import
+      4  "array.froth" import
+      5 +"list.froth" import                                             
+      6  "eval.froth" import
+
+● Bash(./run_tests.sh 2>&1 | grep -E "(PASS|FAIL): list|Results:")
+  ⎿  PASS: list                  
+     Results: 41 passed, 0 failed
+
+● Done. All 41 tests still pass. The fold function is now available automatically with stdlib.
+
+> Use fold to implement list reverse 
+
+● Read(lib/list.froth)
+  ⎿  Read 30 lines
+
+● Update(lib/list.froth)
+  ⎿  Added 8 lines                                                       
+      27    } /impl
+      28    list impl impl!
+      29  } /fold
+      30 +                                                               
+      31 +; reverse: Reverse a list                                      
+      32 +; (list -- list)                                               
+      33 +;                                                              
+      34 +; Example:                                                     
+      35 +;   . 3 , 2 , 1 , reverse!  ; produces . 1 , 2 , 3 , (i.e., [3,
+         + 2, 1])                                                        
+      36 +                                                               
+      37 +{ . {,} fold! } /reverse                                       
+
+● Update(tests/list.froth)
+  ⎿  Added 8 lines                                                       
+      17  
+      18  ; Empty list fold - should do nothing
+      19  . {println!} fold!
+      20 +                                                               
+      21 +; reverse list [1, 2, 3] to [3, 2, 1]                          
+      22 +xs reverse! {print " " print} fold!                            
+      23 +nl!                                                            
+      24 +                                                               
+      25 +; reverse empty list                                           
+      26 +. reverse! isNil println!                                      
+      27 +                                                               
+      28  "done" println!
+
+● Bash(./bin/froth tests/list.froth)
+  ⎿  1 2 3                        
+     234
+     6
+     … +3 lines (ctrl+o to expand)
+
+● That looks wrong - reverse should produce "3 2 1". Let me check:
+
+● Bash(./bin/froth -e '. 3 , 2 , 1 , reverse! writeln!')
+  ⎿  Error: Exit code 1
+     1:22: invalid token: '\'
+
+● Bash(echo '. 3 , 2 , 1 , reverse! writeln!' | ./bin/froth -q)
+  ⎿  > 1:22: invalid token: '\'
+     >
+
+● Bash(cat > /tmp/rev_test.froth << 'EOF'
+      . 3 , 2 , 1 , /xs…)
+  ⎿  . 3 , 2 , 1 ,
+     . 3 , 2 , 1 ,
+
+● I see the bug - the fold is receiving . (nil) as the list instead of the actual list. Need to fix the argument order:
+
+● Update(lib/list.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      34  ; Example:
+      35  ;   . 3 , 2 , 1 , reverse!  ; produces . 1 , 2 , 3 , (i.e., [3,
+           2, 1])
+      36  
+      37 -{ . {,} fold! } /reverse                                       
+      37 +{/xs . xs {,} fold!} /reverse                                  
+
+● Bash(cat > /tmp/rev_test.froth << 'EOF'
+      . 3 , 2 , 1 , /xs…)
+  ⎿  . 3 , 2 , 1 ,
+     . 1 , 2 , 3 ,
+
+● Now let me update the test expected output:
+
+● Bash(./bin/froth tests/list.froth)
+  ⎿  1 2 3                        
+     234
+     6
+     … +3 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/list.froth > tests/list.expected && ./run_tests.sh 2>&1
+       | grep -E "list|Results")
+  ⎿  PASS: list                  
+     Results: 40 passed, 1 failed
+
+● Bash(./run_tests.sh 2>&1 | grep FAIL)
+  ⎿  FAIL: array
+
+● Bash(./run_tests.sh 2>&1 | grep -A20 "=== array ===")
+  ⎿  === array ===                 
+     Expected:
+     1
+     … +18 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/array.froth > /tmp/array.out && diff
+      tests/array.expected /tmp/array.out)
+  ⎿  Files differ
+
+● Bash(./run_tests.sh 2>&1 | tail -5)
+  ⎿  11                           
+     31
+     31
+     … +2 lines (ctrl+o to expand)
+
+● Read(tests/array.froth)
+  ⎿  Read 52 lines
+
+● There's a name collision - reverse is defined in both array.froth and list.froth. Since list.froth loads after array.froth, it shadows the array version. Let me rename the list version:
+
+● Update(lib/list.froth)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      28    list impl impl!
+      29  } /fold
+      30  
+      31 -; reverse: Reverse a list                                      
+      31 +; lreverse: Reverse a list                                     
+      32  ; (list -- list)
+      33  ;
+      34  ; Example:
+      35 -;   . 3 , 2 , 1 , reverse!  ; produces . 1 , 2 , 3 , (i.e., [3,
+         - 2, 1])                                                        
+      35 +;   . 3 , 2 , 1 , lreverse!  ; produces . 1 , 2 , 3 , (i.e., [3
+         +, 2, 1])                                                       
+      36  
+      37 -{/xs . xs {,} fold!} /reverse                                  
+      37 +{/xs . xs {,} fold!} /lreverse                                 
+
+● Update(tests/list.froth)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      18  ; Empty list fold - should do nothing
+      19  . {println!} fold!
+      20  
+      21 -; reverse list [1, 2, 3] to [3, 2, 1]                          
+      22 -xs reverse! {print " " print} fold!                            
+      21 +; lreverse list [1, 2, 3] to [3, 2, 1]                         
+      22 +xs lreverse! {print " " print} fold!                           
+      23  nl!
+      24  
+      25 -; reverse empty list                                           
+      26 -. reverse! isNil println!                                      
+      25 +; lreverse empty list                                          
+      26 +. lreverse! isNil println!                                     
+      27  
+      28  "done" println!
+
+● Bash(./bin/froth tests/list.froth > tests/list.expected && ./run_tests.sh 2>&1
+       | tail -3)
+  ⎿  PASS: write                 
+
+     Results: 41 passed, 0 failed
+
+● All 41 tests pass. Added lreverse (prefixed with l to avoid collision with array's reverse):
+
+  ; lreverse: (list -- list)
+  {/xs . xs {,} fold!} /lreverse
+
+  . 3 , 2 , 1 , lreverse!  ; produces [3, 2, 1]
+
+> commit these changes 
+
+● Bash(git status)
+  ⎿  On branch master                                   
+     Changes to be committed:
+       (use "git restore --staged <file>..." to unstage)
+     … +4 lines (ctrl+o to expand)
+
+● Bash(git diff --stat)
+  ⎿  (No content)
+
+● Bash(git log --oneline -3)
+  ⎿  679f7ac Add delete operator and refactor command line interface
+     413863b add transcripts 14-16
+     ba27d16 Add import operator for file-based module loading
+
+● Bash(git commit -m "Add list.froth module with fold and lreverse…)
+  ⎿  [master be677c5] Add list.froth module with fold and lreverse
+      4 files changed, 72 insertions(+)
+      create mode 100644 lib/list.froth
+     … +2 lines (ctrl+o to expand)
+
+● Committed as be677c5.
+
+> update FROTH.md with list module 
+
+● Read(FROTH.md)
+  ⎿  Read 65 lines
+
+● Update(FROTH.md)
+  ⎿  Added 20 lines                                                      
+      236  [1 2 3] {print} foldr!         ; prints 3, 2, 1
+      237  ```
+      238  
+      239 +### List (list.froth)                                         
+      240 +                                                              
+      241 +Utilities for cons lists. Lists are built with `.` (nil) and `
+          +,` (cons):                                                    
+      242 +                                                              
+      243 +```                                                           
+      244 +.              ; empty list                                   
+      245 +. 3 , 2 , 1 ,  ; list [1, 2, 3] (1 is head)                   
+      246 +```                                                           
+      247 +                                                              
+      248 +| Name | Stack Effect | Description |                         
+      249 +|------|--------------|-------------|                         
+      250 +| `fold` | `( list fn -- ... )` | Apply fn to each element hea
+          +d-to-tail |                                                   
+      251 +| `lreverse` | `( list -- list )` | Reverse a list |          
+      252 +                                                              
+      253 +```                                                           
+      254 +. 3 , 2 , 1 , {print} fold!    ; prints 1, 2, 3               
+      255 +. 3 , 2 , 1 , lreverse!        ; produces [3, 2, 1]           
+      256 +0 . 3 , 2 , 1 , {+} fold!      ; sums to 6                    
+      257 +```                                                           
+      258 +                                                              
+      259  ### Eval (eval.froth)
+      260  
+      261  A meta-interpreter that evaluates Froth closures.
+
+● Bash(./run_tests.sh 2>&1 | tail -3)
+  ⎿  PASS: write                 
+
+     Results: 41 passed, 0 failed
+
+● Done. Added List section to FROTH.md documenting fold and lreverse with examples.
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀   claude-opus-4-5-20251101 · 183k/200k tokens (91%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 74 tokens (0.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 119.6k tokens (59.8%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 17k (8.7%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 19 tokens
+     └ MERCURY.md: 55 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> You were having problems with `\` due to escapes, possibly because the `!`
+ character is causing a problem. Can you understand what is going wrong? 
+
+● The issue is bash's history expansion. In interactive bash, ! triggers history substitution (e.g., !! repeats last command, !$ gets last argument).
+
+  When you write:
+  ./bin/froth -e '1 2 + println!'
+
+  Bash sees the ! and tries to expand it. Even in single quotes, some bash configurations still process !. The shell is inserting \ to escape characters, which then gets passed to Froth as an invalid token.
+
+  Solutions:
+
+  1. Disable history expansion:
+  set +H
+  ./bin/froth -e '1 2 + println!'
+  2. Use heredoc to pipe input:
+  ./bin/froth -e "$(cat <<'EOF'
+  1 2 + println!
+  EOF
+  )"
+  3. Use a temp file (what I've been doing)
+  4. Escape the ! in double quotes:
+  ./bin/froth -e "1 2 + println\!"
+
+  The test runner (run_tests.sh) uses #!/bin/sh which typically doesn't have history expansion enabled, so the tests pass fine. It's only interactive bash that has this issue.
+
+> Please amend the previous commit with the changes to FROTH 
+
+● Bash(git status)
+  ⎿  On branch master                                   
+     Changes to be committed:
+       (use "git restore --staged <file>..." to unstage)
+     	modified:   FROTH.md
+
+● Bash(git log -1 --format='%an %ae')
+  ⎿  Mark Brown mark@mercurylang.org
+
+● Bash(git log -1 --oneline)
+  ⎿  be677c5 Add list.froth module with fold and lreverse
+
+● Bash(git status -s)
+  ⎿  M  FROTH.md
+
+● Bash(git commit --amend --no-edit)
+  ⎿  [master 22a9576] Add list.froth module with fold and lreverse
+      Date: Mon Dec 22 16:29:54 2025 +1100
+      5 files changed, 92 insertions(+)
+     … +3 lines (ctrl+o to expand)
+
+● Amended commit 22a9576 now includes FROTH.md documentation (5 files changed, 92 insertions).
+
+
+
