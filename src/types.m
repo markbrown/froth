@@ -19,7 +19,6 @@
     %
 :- type operator
     --->    op_print        % print  ( a -- )
-    ;       op_dump         % dump   ( -- )
     ;       op_env          % env    ( -- map )
     ;       op_add          % +      ( a b -- a+b )
     ;       op_sub          % -      ( a b -- a-b )

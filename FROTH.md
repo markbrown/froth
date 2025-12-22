@@ -81,7 +81,7 @@ literal     ::= number | string
 
 Closures are represented as cons pairs of `(environment-map, quoted-function)`. This means:
 
-- `{ terms }` is equivalent to `env '{ terms } ,`
+- `{ terms }` is equivalent to `'{ terms } env ,`
 - Closures can be inspected with `fst` (get environment) and `snd` (get quoted function body)
 - Closures can be compared for equality with `=`
 
@@ -184,7 +184,6 @@ Evaluation maintains three pieces of state:
 | `print` | `( a -- )` | Pop and print a value |
 | `write` | `( a -- )` | Print in executable (round-trippable) form |
 | `fwrite` | `( value file -- )` | Write value to file in executable form |
-| `dump` | `( -- )` | Print the entire stack (for debugging) |
 
 ### Metaprogramming
 
@@ -241,7 +240,7 @@ The stack is represented as a cons list (nil-terminated). Push with `, `:
 . 3 , 2 , 1 ,      ; stack [1, 2, 3] (1 on top)
 ```
 
-Returns a cons pair: `(result-stack, 0)` on success, or `(error-message, 1)` on error.
+Returns two values: `result-stack` and `0` on success, or `error-message` and `1` on error.
 
 ```
 . { 3 4 + } eval!              ; returns (. 7 ,) 0

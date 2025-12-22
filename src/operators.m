@@ -31,7 +31,6 @@
     %
 :- pred operator_print(intern_table::in, stack::in, stack::out,
     io::di, io::uo) is det.
-:- pred operator_dump(intern_table::in, stack::in, io::di, io::uo) is det.
 :- pred operator_env(env::in, stack::in, stack::out) is det.
 :- pred operator_add(stack::in, stack::out) is det.
 :- pred operator_sub(stack::in, stack::out) is det.
@@ -96,7 +95,6 @@
 %-----------------------------------------------------------------------%
 
 operator("print", op_print).
-operator("dump", op_dump).
 operator("env", op_env).
 operator("+", op_add).
 operator("-", op_sub).
@@ -148,7 +146,6 @@ operator("stack", op_stack).
 :- func operator_arity(operator) = int.
 
 operator_arity(op_print) = 1.
-operator_arity(op_dump) = 0.
 operator_arity(op_env) = 0.
 operator_arity(op_add) = 2.
 operator_arity(op_sub) = 2.
@@ -199,7 +196,7 @@ operator_arity(op_stack) = 0.
 
 init_operators(!IT) :-
     OpNames = [
-        "print", "dump", "env",
+        "print", "env",
         "+", "-", "*",
         ">", "<", ">=", "<=",
         "@", "#", "=", "?",
@@ -237,9 +234,6 @@ eval_operator(IT, Op, Env, !Stack, !IO) :-
     (
         Op = op_print,
         operator_print(IT, !Stack, !IO)
-    ;
-        Op = op_dump,
-        operator_dump(IT, !.Stack, !IO)
     ;
         Op = op_env,
         operator_env(Env, !Stack)
@@ -377,8 +371,7 @@ eval_operator(IT, Op, Env, !Stack, !IO) :-
 
 operator_print(IT, !Stack, !IO) :-
     pop("print", V, !Stack),
-    io.write_string(value_to_string(IT, V), !IO),
-    io.nl(!IO).
+    io.write_string(value_to_string(IT, V), !IO).
 
 %-----------------------------------------------------------------------%
 % value_to_string: convert a value to its string representation
@@ -413,54 +406,6 @@ term_to_string(_, apply_term) = "!".
 terms_to_string(_, []) = "".
 terms_to_string(IT, [T | Ts]) =
     term_to_string(IT, T) ++ " " ++ terms_to_string(IT, Ts).
-
-%-----------------------------------------------------------------------%
-% dump: ( -- ) Print the entire stack (for debugging)
-%-----------------------------------------------------------------------%
-
-operator_dump(IT, Stack, !IO) :-
-    io.write_string("--- stack ---\n", !IO),
-    list.foldl(print_stack_entry(IT), Stack, !IO),
-    io.write_string("-------------\n", !IO).
-
-:- pred print_stack_entry(intern_table::in, value::in, io::di, io::uo) is det.
-
-print_stack_entry(IT, V, !IO) :-
-    io.write_string("  ", !IO),
-    print_value_debug(IT, V, !IO),
-    io.nl(!IO).
-
-:- pred print_value_debug(intern_table::in, value::in, io::di, io::uo) is det.
-
-print_value_debug(_, intval(I), !IO) :-
-    io.format("int(%d)", [i(I)], !IO).
-print_value_debug(IT, stringval(Id), !IO) :-
-    io.format("string(\"%s\")", [s(lookup_string(IT ^ it_strings, Id))], !IO).
-print_value_debug(IT, arrayval(A), !IO) :-
-    io.write_string("array(", !IO),
-    array.foldl(print_array_elem_debug(IT), A, !IO),
-    io.write_string(")", !IO).
-print_value_debug(_, mapval(M), !IO) :-
-    io.format("map(%d)", [i(map.count(M))], !IO).
-print_value_debug(IT, termval(T), !IO) :-
-    io.write_string("term(", !IO),
-    io.write_string(term_to_string(IT, T), !IO),
-    io.write_string(")", !IO).
-print_value_debug(_, nilval, !IO) :-
-    io.write_string("nil", !IO).
-print_value_debug(IT, consval(H, T), !IO) :-
-    io.write_string("cons(", !IO),
-    print_value_debug(IT, H, !IO),
-    io.write_string(", ", !IO),
-    print_value_debug(IT, T, !IO),
-    io.write_string(")", !IO).
-
-:- pred print_array_elem_debug(intern_table::in, value::in,
-    io::di, io::uo) is det.
-
-print_array_elem_debug(IT, V, !IO) :-
-    print_value_debug(IT, V, !IO),
-    io.write_string(" ", !IO).
 
 %-----------------------------------------------------------------------%
 % env: ( -- map ) Push the current environment as a map
@@ -785,8 +730,7 @@ operator_snd(!Stack) :-
 
 operator_write(IT, !Stack, !IO) :-
     pop("write", V, !Stack),
-    io.write_string(value_to_write_string(IT, V), !IO),
-    io.nl(!IO).
+    io.write_string(value_to_write_string(IT, V), !IO).
 
 %-----------------------------------------------------------------------%
 % value_to_write_string: convert a value to executable string form

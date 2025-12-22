@@ -17,6 +17,7 @@
 :- import_module dir.
 :- import_module eval.
 :- import_module exception.
+:- import_module io.file.
 :- import_module lexer.
 :- import_module list.
 :- import_module map.
@@ -36,6 +37,22 @@ init_intern_table = IT :-
     operators.init_operators(empty_intern_table, IT).
 
 %-----------------------------------------------------------------------%
+% Standard library loading
+%-----------------------------------------------------------------------%
+
+    % Get the path to the standard library relative to the executable.
+    %
+:- pred get_stdlib_path(string::out, io::di, io::uo) is det.
+
+get_stdlib_path(StdlibPath, !IO) :-
+    io.progname("froth", ProgName, !IO),
+    ExeDir = dir.dirname(ProgName),
+    % Go up one level from bin/ to find lib/
+    BaseDir = dir.dirname(ExeDir),
+    StdlibPath = dir.make_path_name(BaseDir,
+                     dir.make_path_name("lib", "stdlib.froth")).
+
+%-----------------------------------------------------------------------%
 
 main(!IO) :-
     io.command_line_arguments(Args, !IO),
@@ -44,24 +61,34 @@ main(!IO) :-
 :- pred process_args(list(string)::in, io::di, io::uo) is cc_multi.
 
 process_args(Args, !IO) :-
+    ( if Args = ["-n" | RestArgs] then
+        % -n: no stdlib
+        process_args_no_stdlib(RestArgs, !IO)
+    else
+        % Default: load stdlib first
+        get_stdlib_path(StdlibPath, !IO),
+        load_stdlib_and_run(StdlibPath, Args, !IO)
+    ).
+
+:- pred process_args_no_stdlib(list(string)::in, io::di, io::uo) is cc_multi.
+
+process_args_no_stdlib(Args, !IO) :-
     (
         Args = [],
-        % No arguments: start REPL
-        repl(!IO)
+        repl_no_stdlib(!IO)
     ;
         Args = [Arg],
         ( if ( Arg = "-h" ; Arg = "--help" ) then
             print_usage(!IO)
         else
-            % Single argument: treat as filename
-            run_file(Arg, !IO)
+            run_file_no_stdlib(Arg, !IO)
         )
     ;
         Args = [First, Second | Rest],
         ( if First = "-f", Rest = [] then
-            run_file(Second, !IO)
+            run_file_no_stdlib(Second, !IO)
         else if First = "-e", Rest = [] then
-            run_file_then_repl(Second, !IO)
+            run_file_then_repl_no_stdlib(Second, !IO)
         else if First = "-l" then
             run_with_library(Second, Rest, !IO)
         else
@@ -70,31 +97,197 @@ process_args(Args, !IO) :-
         )
     ).
 
+:- pred load_stdlib_and_run(string::in, list(string)::in,
+    io::di, io::uo) is cc_multi.
+
+load_stdlib_and_run(StdlibPath, Args, !IO) :-
+    io.file.check_file_accessibility(StdlibPath, [read], AccessResult, !IO),
+    (
+        AccessResult = ok,
+        % Load stdlib first
+        load_library(StdlibPath, LoadResult, !IO),
+        (
+            LoadResult = ok({IT, Env}),
+            % Then process remaining args with stdlib state
+            process_args_with_state(IT, Env, Args, !IO)
+        ;
+            LoadResult = error,
+            io.set_exit_status(1, !IO)
+        )
+    ;
+        AccessResult = error(_),
+        % Stdlib not found, run without it
+        process_args_no_stdlib(Args, !IO)
+    ).
+
+:- pred process_args_with_state(intern_table::in, env::in, list(string)::in,
+    io::di, io::uo) is cc_multi.
+
+process_args_with_state(IT, Env, Args, !IO) :-
+    (
+        Args = [],
+        % No arguments: start REPL with stdlib loaded
+        io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO),
+        repl_loop(IT, Env, [], !IO)
+    ;
+        Args = [Arg],
+        ( if ( Arg = "-h" ; Arg = "--help" ) then
+            print_usage(!IO)
+        else
+            run_file_with_state(IT, Env, Arg, !IO)
+        )
+    ;
+        Args = [First, Second | Rest],
+        ( if First = "-f", Rest = [] then
+            run_file_with_state(IT, Env, Second, !IO)
+        else if First = "-e", Rest = [] then
+            run_file_then_repl_with_state(IT, Env, Second, !IO)
+        else if First = "-l" then
+            % Load additional library on top of stdlib
+            run_with_library_and_state(IT, Env, Second, Rest, !IO)
+        else
+            print_usage(!IO),
+            io.set_exit_status(1, !IO)
+        )
+    ).
+
+:- pred run_with_library_and_state(intern_table::in, env::in, string::in,
+    list(string)::in, io::di, io::uo) is cc_multi.
+
+run_with_library_and_state(IT0, Env0, LibFile, RestArgs, !IO) :-
+    load_library_with_state(IT0, Env0, LibFile, LoadResult, !IO),
+    (
+        LoadResult = ok({IT, Env}),
+        process_args_with_state(IT, Env, RestArgs, !IO)
+    ;
+        LoadResult = error,
+        io.set_exit_status(1, !IO)
+    ).
+
+:- pred load_library_with_state(intern_table::in, env::in, string::in,
+    load_result::out, io::di, io::uo) is cc_multi.
+
+load_library_with_state(IT0, Env0, LibFile, Result, !IO) :-
+    io.read_named_file_as_string(LibFile, ReadResult, !IO),
+    (
+        ReadResult = ok(Content),
+        LibDir = dir.dirname(LibFile),
+        lexer.tokenize(Content, IT0, LexResult),
+        (
+            LexResult = ok(Tokens, IT1),
+            extract_string_tokens(IT1, Tokens, FilePaths),
+            load_files(LibDir, FilePaths, IT1, Env0, [], LoadFilesResult, !IO),
+            (
+                LoadFilesResult = ok({IT, Env}),
+                Result = ok({IT, Env})
+            ;
+                LoadFilesResult = error,
+                Result = error
+            )
+        ;
+            LexResult = error(LexError),
+            report_lex_error(LexError, !IO),
+            Result = error
+        )
+    ;
+        ReadResult = error(Error),
+        io.format("Error reading library '%s': %s\n",
+            [s(LibFile), s(io.error_message(Error))], !IO),
+        Result = error
+    ).
+
+:- pred repl_no_stdlib(io::di, io::uo) is cc_multi.
+
+repl_no_stdlib(!IO) :-
+    io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO),
+    Env0 = map.init,
+    Stack0 = [],
+    IT0 = init_intern_table,
+    repl_loop(IT0, Env0, Stack0, !IO).
+
+:- pred run_file_no_stdlib(string::in, io::di, io::uo) is cc_multi.
+
+run_file_no_stdlib(Filename, !IO) :-
+    io.read_named_file_as_string(Filename, ReadResult, !IO),
+    (
+        ReadResult = ok(Input),
+        run_no_stdlib(Input, !IO)
+    ;
+        ReadResult = error(Error),
+        io.format("Error reading '%s': %s\n",
+            [s(Filename), s(io.error_message(Error))], !IO),
+        io.set_exit_status(1, !IO)
+    ).
+
+:- pred run_no_stdlib(string::in, io::di, io::uo) is cc_multi.
+
+run_no_stdlib(Input, !IO) :-
+    lexer.tokenize(Input, init_intern_table, LexResult),
+    (
+        LexResult = ok(Tokens, IT),
+        parser.parse(Tokens, ParseResult),
+        (
+            ParseResult = ok(Terms),
+            execute(IT, Terms, !IO)
+        ;
+            ParseResult = error(ParseError),
+            report_parse_error(ParseError, !IO),
+            io.set_exit_status(1, !IO)
+        )
+    ;
+        LexResult = error(LexError),
+        report_lex_error(LexError, !IO),
+        io.set_exit_status(1, !IO)
+    ).
+
+:- pred run_file_then_repl_no_stdlib(string::in, io::di, io::uo) is cc_multi.
+
+run_file_then_repl_no_stdlib(Filename, !IO) :-
+    io.read_named_file_as_string(Filename, ReadResult, !IO),
+    (
+        ReadResult = ok(Input),
+        run_then_repl_no_stdlib(Input, !IO)
+    ;
+        ReadResult = error(Error),
+        io.format("Error reading '%s': %s\n",
+            [s(Filename), s(io.error_message(Error))], !IO),
+        io.set_exit_status(1, !IO)
+    ).
+
+:- pred run_then_repl_no_stdlib(string::in, io::di, io::uo) is cc_multi.
+
+run_then_repl_no_stdlib(Input, !IO) :-
+    lexer.tokenize(Input, init_intern_table, LexResult),
+    (
+        LexResult = ok(Tokens, IT),
+        parser.parse(Tokens, ParseResult),
+        (
+            ParseResult = ok(Terms),
+            execute_then_repl(IT, Terms, !IO)
+        ;
+            ParseResult = error(ParseError),
+            report_parse_error(ParseError, !IO),
+            io.set_exit_status(1, !IO)
+        )
+    ;
+        LexResult = error(LexError),
+        report_lex_error(LexError, !IO),
+        io.set_exit_status(1, !IO)
+    ).
+
 :- pred print_usage(io::di, io::uo) is det.
 
 print_usage(!IO) :-
     io.write_string("Usage: froth [options] [filename]\n", !IO),
     io.write_string("\n", !IO),
     io.write_string("Options:\n", !IO),
+    io.write_string("  -n         No stdlib (don't auto-load standard library)\n", !IO),
     io.write_string("  -e FILE    Execute FILE then start REPL\n", !IO),
     io.write_string("  -f FILE    Run FILE\n", !IO),
     io.write_string("  -l LIB     Load library LIB (contains string paths to import)\n", !IO),
     io.write_string("  -h, --help Show this help\n", !IO),
     io.write_string("\n", !IO),
     io.write_string("With no arguments, starts an interactive REPL.\n", !IO).
-
-%-----------------------------------------------------------------------%
-% REPL
-%-----------------------------------------------------------------------%
-
-:- pred repl(io::di, io::uo) is cc_multi.
-
-repl(!IO) :-
-    io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO),
-    Env0 = map.init,
-    Stack0 = [],
-    IT0 = init_intern_table,
-    repl_loop(IT0, Env0, Stack0, !IO).
 
 :- pred repl_loop(intern_table::in, env::in, stack::in,
     io::di, io::uo) is cc_multi.
