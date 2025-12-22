@@ -29,12 +29,13 @@
 
 %-----------------------------------------------------------------------%
 
-    % Create an intern table with operator names pre-interned.
+    % Initialize tables: string table with operator names pre-interned,
+    % and operator table for dispatch.
     %
-:- func init_intern_table = intern_table.
+:- pred init_tables(string_table::out, operator_table::out) is det.
 
-init_intern_table = IT :-
-    operators.init_operators(empty_intern_table, IT).
+init_tables(ST, OpTable) :-
+    operators.init_operators(empty_string_table, ST, OpTable).
 
 %-----------------------------------------------------------------------%
 % Standard library loading
@@ -89,8 +90,6 @@ process_args_no_stdlib(Args, !IO) :-
             run_file_no_stdlib(Second, !IO)
         else if First = "-e", Rest = [] then
             run_file_then_repl_no_stdlib(Second, !IO)
-        else if First = "-l" then
-            run_with_library(Second, Rest, !IO)
         else
             print_usage(!IO),
             io.set_exit_status(1, !IO)
@@ -104,14 +103,14 @@ load_stdlib_and_run(StdlibPath, Args, !IO) :-
     io.file.check_file_accessibility(StdlibPath, [read], AccessResult, !IO),
     (
         AccessResult = ok,
-        % Load stdlib first
-        load_library(StdlibPath, LoadResult, !IO),
+        % Load stdlib by evaluating it as normal Froth code
+        eval_stdlib(StdlibPath, EvalResult, !IO),
         (
-            LoadResult = ok({IT, Env}),
+            EvalResult = ok({OpTable, ST, Env}),
             % Then process remaining args with stdlib state
-            process_args_with_state(IT, Env, Args, !IO)
+            process_args_with_state(OpTable, ST, Env, Args, !IO)
         ;
-            LoadResult = error,
+            EvalResult = error,
             io.set_exit_status(1, !IO)
         )
     ;
@@ -120,80 +119,88 @@ load_stdlib_and_run(StdlibPath, Args, !IO) :-
         process_args_no_stdlib(Args, !IO)
     ).
 
-:- pred process_args_with_state(intern_table::in, env::in, list(string)::in,
-    io::di, io::uo) is cc_multi.
+:- type eval_result
+    --->    ok({operator_table, string_table, env})
+    ;       error.
 
-process_args_with_state(IT, Env, Args, !IO) :-
-    (
-        Args = [],
-        % No arguments: start REPL with stdlib loaded
-        io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO),
-        repl_loop(IT, Env, [], !IO)
-    ;
-        Args = [Arg],
-        ( if ( Arg = "-h" ; Arg = "--help" ) then
-            print_usage(!IO)
-        else
-            run_file_with_state(IT, Env, Arg, !IO)
-        )
-    ;
-        Args = [First, Second | Rest],
-        ( if First = "-f", Rest = [] then
-            run_file_with_state(IT, Env, Second, !IO)
-        else if First = "-e", Rest = [] then
-            run_file_then_repl_with_state(IT, Env, Second, !IO)
-        else if First = "-l" then
-            % Load additional library on top of stdlib
-            run_with_library_and_state(IT, Env, Second, Rest, !IO)
-        else
-            print_usage(!IO),
-            io.set_exit_status(1, !IO)
-        )
-    ).
+    % Evaluate stdlib.froth as normal Froth code.
+    % The BaseDir is set to the directory containing stdlib.froth
+    % so that relative imports work correctly.
+    %
+:- pred eval_stdlib(string::in, eval_result::out, io::di, io::uo) is cc_multi.
 
-:- pred run_with_library_and_state(intern_table::in, env::in, string::in,
-    list(string)::in, io::di, io::uo) is cc_multi.
-
-run_with_library_and_state(IT0, Env0, LibFile, RestArgs, !IO) :-
-    load_library_with_state(IT0, Env0, LibFile, LoadResult, !IO),
-    (
-        LoadResult = ok({IT, Env}),
-        process_args_with_state(IT, Env, RestArgs, !IO)
-    ;
-        LoadResult = error,
-        io.set_exit_status(1, !IO)
-    ).
-
-:- pred load_library_with_state(intern_table::in, env::in, string::in,
-    load_result::out, io::di, io::uo) is cc_multi.
-
-load_library_with_state(IT0, Env0, LibFile, Result, !IO) :-
-    io.read_named_file_as_string(LibFile, ReadResult, !IO),
+eval_stdlib(StdlibPath, Result, !IO) :-
+    LibDir = dir.dirname(StdlibPath),
+    io.read_named_file_as_string(StdlibPath, ReadResult, !IO),
     (
         ReadResult = ok(Content),
-        LibDir = dir.dirname(LibFile),
-        lexer.tokenize(Content, IT0, LexResult),
+        init_tables(ST0, OpTable),
+        lexer.tokenize(Content, ST0, LexResult),
         (
-            LexResult = ok(Tokens, IT1),
-            extract_string_tokens(IT1, Tokens, FilePaths),
-            load_files(LibDir, FilePaths, IT1, Env0, [], LoadFilesResult, !IO),
+            LexResult = ok(Tokens, ST1),
+            parser.parse(Tokens, ParseResult),
             (
-                LoadFilesResult = ok({IT, Env}),
-                Result = ok({IT, Env})
+                ParseResult = ok(Terms),
+                try_io(eval_terms_wrapper(OpTable, LibDir, ST1, Terms,
+                    map.init, []), EvalResult, !IO),
+                (
+                    EvalResult = succeeded({ST, Env, _Stack}),
+                    Result = ok({OpTable, ST, Env})
+                ;
+                    EvalResult = exception(Exn),
+                    ( if univ_to_type(Exn, EvalError) then
+                        io.format("Runtime error in stdlib: %s\n",
+                            [s(types.format_error(ST1, EvalError))], !IO),
+                        Result = error
+                    else
+                        rethrow(EvalResult)
+                    )
+                )
             ;
-                LoadFilesResult = error,
+                ParseResult = error(ParseError),
+                io.format("In stdlib: ", [], !IO),
+                report_parse_error(ParseError, !IO),
                 Result = error
             )
         ;
             LexResult = error(LexError),
+            io.format("In stdlib: ", [], !IO),
             report_lex_error(LexError, !IO),
             Result = error
         )
     ;
         ReadResult = error(Error),
-        io.format("Error reading library '%s': %s\n",
-            [s(LibFile), s(io.error_message(Error))], !IO),
+        io.format("Error reading stdlib '%s': %s\n",
+            [s(StdlibPath), s(io.error_message(Error))], !IO),
         Result = error
+    ).
+
+:- pred process_args_with_state(operator_table::in, string_table::in,
+    env::in, list(string)::in, io::di, io::uo) is cc_multi.
+
+process_args_with_state(OpTable, ST, Env, Args, !IO) :-
+    (
+        Args = [],
+        % No arguments: start REPL with stdlib loaded
+        io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO),
+        repl_loop(OpTable, ST, Env, [], !IO)
+    ;
+        Args = [Arg],
+        ( if ( Arg = "-h" ; Arg = "--help" ) then
+            print_usage(!IO)
+        else
+            run_file_with_state(OpTable, ST, Env, Arg, !IO)
+        )
+    ;
+        Args = [First, Second | Rest],
+        ( if First = "-f", Rest = [] then
+            run_file_with_state(OpTable, ST, Env, Second, !IO)
+        else if First = "-e", Rest = [] then
+            run_file_then_repl_with_state(OpTable, ST, Env, Second, !IO)
+        else
+            print_usage(!IO),
+            io.set_exit_status(1, !IO)
+        )
     ).
 
 :- pred repl_no_stdlib(io::di, io::uo) is cc_multi.
@@ -202,16 +209,17 @@ repl_no_stdlib(!IO) :-
     io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO),
     Env0 = map.init,
     Stack0 = [],
-    IT0 = init_intern_table,
-    repl_loop(IT0, Env0, Stack0, !IO).
+    init_tables(ST0, OpTable),
+    repl_loop(OpTable, ST0, Env0, Stack0, !IO).
 
 :- pred run_file_no_stdlib(string::in, io::di, io::uo) is cc_multi.
 
 run_file_no_stdlib(Filename, !IO) :-
+    BaseDir = dir.dirname(Filename),
     io.read_named_file_as_string(Filename, ReadResult, !IO),
     (
         ReadResult = ok(Input),
-        run_no_stdlib(Input, !IO)
+        run_no_stdlib(BaseDir, Input, !IO)
     ;
         ReadResult = error(Error),
         io.format("Error reading '%s': %s\n",
@@ -219,16 +227,17 @@ run_file_no_stdlib(Filename, !IO) :-
         io.set_exit_status(1, !IO)
     ).
 
-:- pred run_no_stdlib(string::in, io::di, io::uo) is cc_multi.
+:- pred run_no_stdlib(string::in, string::in, io::di, io::uo) is cc_multi.
 
-run_no_stdlib(Input, !IO) :-
-    lexer.tokenize(Input, init_intern_table, LexResult),
+run_no_stdlib(BaseDir, Input, !IO) :-
+    init_tables(ST0, OpTable),
+    lexer.tokenize(Input, ST0, LexResult),
     (
-        LexResult = ok(Tokens, IT),
+        LexResult = ok(Tokens, ST),
         parser.parse(Tokens, ParseResult),
         (
             ParseResult = ok(Terms),
-            execute(IT, Terms, !IO)
+            execute(OpTable, BaseDir, ST, Terms, !IO)
         ;
             ParseResult = error(ParseError),
             report_parse_error(ParseError, !IO),
@@ -243,10 +252,11 @@ run_no_stdlib(Input, !IO) :-
 :- pred run_file_then_repl_no_stdlib(string::in, io::di, io::uo) is cc_multi.
 
 run_file_then_repl_no_stdlib(Filename, !IO) :-
+    BaseDir = dir.dirname(Filename),
     io.read_named_file_as_string(Filename, ReadResult, !IO),
     (
         ReadResult = ok(Input),
-        run_then_repl_no_stdlib(Input, !IO)
+        run_then_repl_no_stdlib(BaseDir, Input, !IO)
     ;
         ReadResult = error(Error),
         io.format("Error reading '%s': %s\n",
@@ -254,16 +264,17 @@ run_file_then_repl_no_stdlib(Filename, !IO) :-
         io.set_exit_status(1, !IO)
     ).
 
-:- pred run_then_repl_no_stdlib(string::in, io::di, io::uo) is cc_multi.
+:- pred run_then_repl_no_stdlib(string::in, string::in, io::di, io::uo) is cc_multi.
 
-run_then_repl_no_stdlib(Input, !IO) :-
-    lexer.tokenize(Input, init_intern_table, LexResult),
+run_then_repl_no_stdlib(BaseDir, Input, !IO) :-
+    init_tables(ST0, OpTable),
+    lexer.tokenize(Input, ST0, LexResult),
     (
-        LexResult = ok(Tokens, IT),
+        LexResult = ok(Tokens, ST),
         parser.parse(Tokens, ParseResult),
         (
             ParseResult = ok(Terms),
-            execute_then_repl(IT, Terms, !IO)
+            execute_then_repl(OpTable, BaseDir, ST, Terms, !IO)
         ;
             ParseResult = error(ParseError),
             report_parse_error(ParseError, !IO),
@@ -284,22 +295,21 @@ print_usage(!IO) :-
     io.write_string("  -n         No stdlib (don't auto-load standard library)\n", !IO),
     io.write_string("  -e FILE    Execute FILE then start REPL\n", !IO),
     io.write_string("  -f FILE    Run FILE\n", !IO),
-    io.write_string("  -l LIB     Load library LIB (contains string paths to import)\n", !IO),
     io.write_string("  -h, --help Show this help\n", !IO),
     io.write_string("\n", !IO),
     io.write_string("With no arguments, starts an interactive REPL.\n", !IO).
 
-:- pred repl_loop(intern_table::in, env::in, stack::in,
+:- pred repl_loop(operator_table::in, string_table::in, env::in, stack::in,
     io::di, io::uo) is cc_multi.
 
-repl_loop(IT0, Env0, Stack0, !IO) :-
+repl_loop(OpTable, ST0, Env0, Stack0, !IO) :-
     io.write_string("> ", !IO),
     io.flush_output(!IO),
     io.read_line_as_string(ReadResult, !IO),
     (
         ReadResult = ok(Line),
-        repl_eval(Line, IT0, IT, Env0, Env, Stack0, Stack, !IO),
-        repl_loop(IT, Env, Stack, !IO)
+        repl_eval(OpTable, Line, ST0, ST, Env0, Env, Stack0, Stack, !IO),
+        repl_loop(OpTable, ST, Env, Stack, !IO)
     ;
         ReadResult = eof,
         io.nl(!IO)
@@ -310,45 +320,46 @@ repl_loop(IT0, Env0, Stack0, !IO) :-
         io.set_exit_status(1, !IO)
     ).
 
-:- pred repl_eval(string::in, intern_table::in, intern_table::out,
+:- pred repl_eval(operator_table::in, string::in,
+    string_table::in, string_table::out,
     env::in, env::out, stack::in, stack::out, io::di, io::uo) is cc_multi.
 
-repl_eval(Input, IT0, IT, Env0, Env, Stack0, Stack, !IO) :-
-    lexer.tokenize(Input, IT0, LexResult),
+repl_eval(OpTable, Input, ST0, ST, Env0, Env, Stack0, Stack, !IO) :-
+    lexer.tokenize(Input, ST0, LexResult),
     (
-        LexResult = ok(Tokens, IT1),
+        LexResult = ok(Tokens, ST1),
         parser.parse(Tokens, ParseResult),
         (
             ParseResult = ok(Terms),
-            execute_repl(IT1, Terms, Env0, Env, Stack0, Stack, !IO),
-            IT = IT1
+            execute_repl(OpTable, ST1, Terms, Env0, Env, Stack0, Stack, !IO),
+            ST = ST1
         ;
             ParseResult = error(ParseError),
             report_parse_error(ParseError, !IO),
-            IT = IT1,
+            ST = ST1,
             Env = Env0,
             Stack = Stack0
         )
     ;
         LexResult = error(LexError),
         report_lex_error(LexError, !IO),
-        IT = IT0,
+        ST = ST0,
         Env = Env0,
         Stack = Stack0
     ).
 
-:- pred execute_repl(intern_table::in, list(term)::in,
+:- pred execute_repl(operator_table::in, string_table::in, list(term)::in,
     env::in, env::out, stack::in, stack::out, io::di, io::uo) is cc_multi.
 
-execute_repl(IT, Terms, Env0, Env, Stack0, Stack, !IO) :-
-    try_io(eval_terms_wrapper(IT, Terms, Env0, Stack0), Result, !IO),
+execute_repl(OpTable, ST, Terms, Env0, Env, Stack0, Stack, !IO) :-
+    try_io(eval_terms_wrapper(OpTable, ".", ST, Terms, Env0, Stack0), Result, !IO),
     (
-        Result = succeeded({Env, Stack})
+        Result = succeeded({_, Env, Stack})
     ;
         Result = exception(Exn),
         ( if univ_to_type(Exn, EvalError) then
             io.format("Runtime error: %s\n",
-                [s(types.format_error(IT, EvalError))], !IO),
+                [s(types.format_error(ST, EvalError))], !IO),
             Env = Env0,
             Stack = Stack0
         else
@@ -363,10 +374,11 @@ execute_repl(IT, Terms, Env0, Env, Stack0, Stack, !IO) :-
 :- pred run_file(string::in, io::di, io::uo) is cc_multi.
 
 run_file(Filename, !IO) :-
+    BaseDir = dir.dirname(Filename),
     io.read_named_file_as_string(Filename, ReadResult, !IO),
     (
         ReadResult = ok(Input),
-        run(Input, !IO)
+        run(BaseDir, Input, !IO)
     ;
         ReadResult = error(Error),
         io.format("Error reading '%s': %s\n",
@@ -377,10 +389,11 @@ run_file(Filename, !IO) :-
 :- pred run_file_then_repl(string::in, io::di, io::uo) is cc_multi.
 
 run_file_then_repl(Filename, !IO) :-
+    BaseDir = dir.dirname(Filename),
     io.read_named_file_as_string(Filename, ReadResult, !IO),
     (
         ReadResult = ok(Input),
-        run_then_repl(Input, !IO)
+        run_then_repl(BaseDir, Input, !IO)
     ;
         ReadResult = error(Error),
         io.format("Error reading '%s': %s\n",
@@ -388,16 +401,17 @@ run_file_then_repl(Filename, !IO) :-
         io.set_exit_status(1, !IO)
     ).
 
-:- pred run_then_repl(string::in, io::di, io::uo) is cc_multi.
+:- pred run_then_repl(string::in, string::in, io::di, io::uo) is cc_multi.
 
-run_then_repl(Input, !IO) :-
-    lexer.tokenize(Input, init_intern_table, LexResult),
+run_then_repl(BaseDir, Input, !IO) :-
+    init_tables(ST0, OpTable),
+    lexer.tokenize(Input, ST0, LexResult),
     (
-        LexResult = ok(Tokens, IT),
+        LexResult = ok(Tokens, ST),
         parser.parse(Tokens, ParseResult),
         (
             ParseResult = ok(Terms),
-            execute_then_repl(IT, Terms, !IO)
+            execute_then_repl(OpTable, BaseDir, ST, Terms, !IO)
         ;
             ParseResult = error(ParseError),
             report_parse_error(ParseError, !IO),
@@ -409,38 +423,39 @@ run_then_repl(Input, !IO) :-
         io.set_exit_status(1, !IO)
     ).
 
-:- pred execute_then_repl(intern_table::in, list(term)::in,
-    io::di, io::uo) is cc_multi.
+:- pred execute_then_repl(operator_table::in, string::in, string_table::in,
+    list(term)::in, io::di, io::uo) is cc_multi.
 
-execute_then_repl(IT, Terms, !IO) :-
+execute_then_repl(OpTable, BaseDir, ST0, Terms, !IO) :-
     Env0 = map.init,
     Stack0 = [],
-    try_io(eval_terms_wrapper(IT, Terms, Env0, Stack0), Result, !IO),
+    try_io(eval_terms_wrapper(OpTable, BaseDir, ST0, Terms, Env0, Stack0), Result, !IO),
     (
-        Result = succeeded({Env, Stack}),
+        Result = succeeded({ST, Env, Stack}),
         io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO),
-        repl_loop(IT, Env, Stack, !IO)
+        repl_loop(OpTable, ST, Env, Stack, !IO)
     ;
         Result = exception(Exn),
         ( if univ_to_type(Exn, EvalError) then
             io.format("Runtime error: %s\n",
-                [s(types.format_error(IT, EvalError))], !IO),
+                [s(types.format_error(ST0, EvalError))], !IO),
             io.set_exit_status(1, !IO)
         else
             rethrow(Result)
         )
     ).
 
-:- pred run(string::in, io::di, io::uo) is cc_multi.
+:- pred run(string::in, string::in, io::di, io::uo) is cc_multi.
 
-run(Input, !IO) :-
-    lexer.tokenize(Input, init_intern_table, LexResult),
+run(BaseDir, Input, !IO) :-
+    init_tables(ST0, OpTable),
+    lexer.tokenize(Input, ST0, LexResult),
     (
-        LexResult = ok(Tokens, IT),
+        LexResult = ok(Tokens, ST),
         parser.parse(Tokens, ParseResult),
         (
             ParseResult = ok(Terms),
-            execute(IT, Terms, !IO)
+            execute(OpTable, BaseDir, ST, Terms, !IO)
         ;
             ParseResult = error(ParseError),
             report_parse_error(ParseError, !IO),
@@ -452,182 +467,49 @@ run(Input, !IO) :-
         io.set_exit_status(1, !IO)
     ).
 
-:- pred execute(intern_table::in, list(term)::in, io::di, io::uo) is cc_multi.
+:- pred execute(operator_table::in, string::in, string_table::in, list(term)::in,
+    io::di, io::uo) is cc_multi.
 
-execute(IT, Terms, !IO) :-
+execute(OpTable, BaseDir, ST, Terms, !IO) :-
     Env0 = map.init,
     Stack0 = [],
-    try_io(eval_terms_wrapper(IT, Terms, Env0, Stack0), Result, !IO),
+    try_io(eval_terms_wrapper(OpTable, BaseDir, ST, Terms, Env0, Stack0), Result, !IO),
     (
-        Result = succeeded({_, _})
+        Result = succeeded({_, _, _})
     ;
         Result = exception(Exn),
         ( if univ_to_type(Exn, EvalError) then
             io.format("Runtime error: %s\n",
-                [s(types.format_error(IT, EvalError))], !IO),
+                [s(types.format_error(ST, EvalError))], !IO),
             io.set_exit_status(1, !IO)
         else
             rethrow(Result)
         )
     ).
 
-%-----------------------------------------------------------------------%
-% Library loading
-%-----------------------------------------------------------------------%
+:- pred run_file_with_state(operator_table::in, string_table::in, env::in,
+    string::in, io::di, io::uo) is cc_multi.
 
-:- pred run_with_library(string::in, list(string)::in,
-    io::di, io::uo) is cc_multi.
-
-run_with_library(LibFile, RestArgs, !IO) :-
-    load_library(LibFile, LoadResult, !IO),
-    (
-        LoadResult = ok({IT, Env}),
-        run_with_state(IT, Env, RestArgs, !IO)
-    ;
-        LoadResult = error,
-        io.set_exit_status(1, !IO)
-    ).
-
-:- type load_result
-    --->    ok({intern_table, env})
-    ;       error.
-
-:- pred load_library(string::in, load_result::out, io::di, io::uo) is cc_multi.
-
-load_library(LibFile, Result, !IO) :-
-    io.read_named_file_as_string(LibFile, ReadResult, !IO),
-    (
-        ReadResult = ok(Content),
-        LibDir = dir.dirname(LibFile),
-        lexer.tokenize(Content, init_intern_table, LexResult),
-        (
-            LexResult = ok(Tokens, IT0),
-            extract_string_tokens(IT0, Tokens, FilePaths),
-            load_files(LibDir, FilePaths, IT0, map.init, [], LoadFilesResult, !IO),
-            (
-                LoadFilesResult = ok({IT, Env}),
-                Result = ok({IT, Env})
-            ;
-                LoadFilesResult = error,
-                Result = error
-            )
-        ;
-            LexResult = error(LexError),
-            report_lex_error(LexError, !IO),
-            Result = error
-        )
-    ;
-        ReadResult = error(Error),
-        io.format("Error reading library '%s': %s\n",
-            [s(LibFile), s(io.error_message(Error))], !IO),
-        Result = error
-    ).
-
-:- pred extract_string_tokens(intern_table::in, list(located(token))::in,
-    list(string)::out) is det.
-
-extract_string_tokens(IT, Tokens, Paths) :-
-    list.filter_map(
-        (pred(located(_, Tok)::in, Path::out) is semidet :-
-            Tok = string(StrId),
-            Path = lookup_string(IT ^ it_strings, StrId)
-        ),
-        Tokens, Paths).
-
-:- pred load_files(string::in, list(string)::in,
-    intern_table::in, env::in, stack::in, load_result::out,
-    io::di, io::uo) is cc_multi.
-
-load_files(_, [], IT, Env, _, ok({IT, Env}), !IO).
-load_files(LibDir, [File | Files], IT0, Env0, Stack0, Result, !IO) :-
-    FullPath = dir.make_path_name(LibDir, File),
-    io.read_named_file_as_string(FullPath, ReadResult, !IO),
-    (
-        ReadResult = ok(Content),
-        lexer.tokenize(Content, IT0, LexResult),
-        (
-            LexResult = ok(Tokens, IT1),
-            parser.parse(Tokens, ParseResult),
-            (
-                ParseResult = ok(Terms),
-                try_io(eval_terms_wrapper(IT1, Terms, Env0, Stack0), EvalResult, !IO),
-                (
-                    EvalResult = succeeded({Env1, Stack1}),
-                    load_files(LibDir, Files, IT1, Env1, Stack1, Result, !IO)
-                ;
-                    EvalResult = exception(Exn),
-                    ( if univ_to_type(Exn, EvalError) then
-                        io.format("Runtime error in '%s': %s\n",
-                            [s(FullPath), s(types.format_error(IT1, EvalError))], !IO),
-                        Result = error
-                    else
-                        rethrow(EvalResult)
-                    )
-                )
-            ;
-                ParseResult = error(ParseError),
-                io.format("In '%s': ", [s(FullPath)], !IO),
-                report_parse_error(ParseError, !IO),
-                Result = error
-            )
-        ;
-            LexResult = error(LexError),
-            io.format("In '%s': ", [s(FullPath)], !IO),
-            report_lex_error(LexError, !IO),
-            Result = error
-        )
-    ;
-        ReadResult = error(Error),
-        io.format("Error reading '%s': %s\n",
-            [s(FullPath), s(io.error_message(Error))], !IO),
-        Result = error
-    ).
-
-:- pred run_with_state(intern_table::in, env::in, list(string)::in,
-    io::di, io::uo) is cc_multi.
-
-run_with_state(IT, Env, Args, !IO) :-
-    (
-        Args = [],
-        % No more arguments: start REPL with loaded state
-        io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO),
-        repl_loop(IT, Env, [], !IO)
-    ;
-        Args = [File],
-        run_file_with_state(IT, Env, File, !IO)
-    ;
-        Args = [First, Second | Rest],
-        ( if First = "-f", Rest = [] then
-            run_file_with_state(IT, Env, Second, !IO)
-        else if First = "-e", Rest = [] then
-            run_file_then_repl_with_state(IT, Env, Second, !IO)
-        else
-            print_usage(!IO),
-            io.set_exit_status(1, !IO)
-        )
-    ).
-
-:- pred run_file_with_state(intern_table::in, env::in, string::in,
-    io::di, io::uo) is cc_multi.
-
-run_file_with_state(IT0, Env0, Filename, !IO) :-
+run_file_with_state(OpTable, ST0, Env0, Filename, !IO) :-
+    BaseDir = dir.dirname(Filename),
     io.read_named_file_as_string(Filename, ReadResult, !IO),
     (
         ReadResult = ok(Input),
-        lexer.tokenize(Input, IT0, LexResult),
+        lexer.tokenize(Input, ST0, LexResult),
         (
-            LexResult = ok(Tokens, IT),
+            LexResult = ok(Tokens, ST),
             parser.parse(Tokens, ParseResult),
             (
                 ParseResult = ok(Terms),
-                try_io(eval_terms_wrapper(IT, Terms, Env0, []), Result, !IO),
+                try_io(eval_terms_wrapper(OpTable, BaseDir, ST, Terms, Env0, []),
+                    Result, !IO),
                 (
-                    Result = succeeded({_, _})
+                    Result = succeeded({_, _, _})
                 ;
                     Result = exception(Exn),
                     ( if univ_to_type(Exn, EvalError) then
                         io.format("Runtime error: %s\n",
-                            [s(types.format_error(IT, EvalError))], !IO),
+                            [s(types.format_error(ST, EvalError))], !IO),
                         io.set_exit_status(1, !IO)
                     else
                         rethrow(Result)
@@ -650,29 +532,31 @@ run_file_with_state(IT0, Env0, Filename, !IO) :-
         io.set_exit_status(1, !IO)
     ).
 
-:- pred run_file_then_repl_with_state(intern_table::in, env::in, string::in,
-    io::di, io::uo) is cc_multi.
+:- pred run_file_then_repl_with_state(operator_table::in, string_table::in,
+    env::in, string::in, io::di, io::uo) is cc_multi.
 
-run_file_then_repl_with_state(IT0, Env0, Filename, !IO) :-
+run_file_then_repl_with_state(OpTable, ST0, Env0, Filename, !IO) :-
+    BaseDir = dir.dirname(Filename),
     io.read_named_file_as_string(Filename, ReadResult, !IO),
     (
         ReadResult = ok(Input),
-        lexer.tokenize(Input, IT0, LexResult),
+        lexer.tokenize(Input, ST0, LexResult),
         (
-            LexResult = ok(Tokens, IT),
+            LexResult = ok(Tokens, ST),
             parser.parse(Tokens, ParseResult),
             (
                 ParseResult = ok(Terms),
-                try_io(eval_terms_wrapper(IT, Terms, Env0, []), Result, !IO),
+                try_io(eval_terms_wrapper(OpTable, BaseDir, ST, Terms, Env0, []),
+                    Result, !IO),
                 (
-                    Result = succeeded({Env, Stack}),
+                    Result = succeeded({ST1, Env, Stack}),
                     io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO),
-                    repl_loop(IT, Env, Stack, !IO)
+                    repl_loop(OpTable, ST1, Env, Stack, !IO)
                 ;
                     Result = exception(Exn),
                     ( if univ_to_type(Exn, EvalError) then
                         io.format("Runtime error: %s\n",
-                            [s(types.format_error(IT, EvalError))], !IO),
+                            [s(types.format_error(ST, EvalError))], !IO),
                         io.set_exit_status(1, !IO)
                     else
                         rethrow(Result)
@@ -695,11 +579,12 @@ run_file_then_repl_with_state(IT0, Env0, Filename, !IO) :-
         io.set_exit_status(1, !IO)
     ).
 
-:- pred eval_terms_wrapper(intern_table::in, list(term)::in,
-    env::in, stack::in, {env, stack}::out, io::di, io::uo) is det.
+:- pred eval_terms_wrapper(operator_table::in, string::in, string_table::in,
+    list(term)::in, env::in, stack::in, {string_table, env, stack}::out,
+    io::di, io::uo) is det.
 
-eval_terms_wrapper(IT, Terms, Env0, Stack0, {Env, Stack}, !IO) :-
-    eval.eval_terms(IT, Terms, Env0, Env, Stack0, Stack, !IO).
+eval_terms_wrapper(OpTable, BaseDir, ST0, Terms, Env0, Stack0, {ST, Env, Stack}, !IO) :-
+    eval.eval_terms(OpTable, BaseDir, Terms, Env0, Env, Stack0, Stack, ST0, ST, !IO).
 
 %-----------------------------------------------------------------------%
 % Error reporting

@@ -11,25 +11,28 @@
 
 %-----------------------------------------------------------------------%
 
-    % init_operators(!IT):
+    % init_operators(!ST, OpTable):
     % Initialize the operator table by interning all operator names.
+    % Returns the operator table and updated string table.
     %
-:- pred init_operators(intern_table::in, intern_table::out) is det.
+:- pred init_operators(string_table::in, string_table::out,
+    operator_table::out) is det.
 
     % operator(Name, Op):
     % Map a name to an operator.
     %
 :- pred operator(string::in, operator::out) is semidet.
 
-    % eval_operator(IT, Op, Env, !Stack, !IO):
-    % Execute an operator. Env is read-only (for the env operator).
+    % eval_operator(OpTable, ST, Op, Env, !Stack, !IO):
+    % Execute an operator. OpTable and ST are read-only.
+    % Env is read-only (for the env operator).
     %
-:- pred eval_operator(intern_table::in, operator::in, env::in,
-    stack::in, stack::out, io::di, io::uo) is det.
+:- pred eval_operator(operator_table::in, string_table::in, operator::in,
+    env::in, stack::in, stack::out, io::di, io::uo) is det.
 
     % Individual operator implementations.
     %
-:- pred operator_print(intern_table::in, stack::in, stack::out,
+:- pred operator_print(string_table::in, stack::in, stack::out,
     io::di, io::uo) is det.
 :- pred operator_env(env::in, stack::in, stack::out) is det.
 :- pred operator_add(stack::in, stack::out) is det.
@@ -47,9 +50,9 @@
 :- pred operator_cons(stack::in, stack::out) is det.
 :- pred operator_fst(stack::in, stack::out) is det.
 :- pred operator_snd(stack::in, stack::out) is det.
-:- pred operator_write(intern_table::in, stack::in, stack::out,
+:- pred operator_write(string_table::in, stack::in, stack::out,
     io::di, io::uo) is det.
-:- pred operator_fwrite(intern_table::in, stack::in, stack::out,
+:- pred operator_fwrite(string_table::in, stack::in, stack::out,
     io::di, io::uo) is det.
 :- pred operator_empty(stack::in, stack::out) is det.
 :- pred operator_keys(stack::in, stack::out) is det.
@@ -73,9 +76,14 @@
 :- pred operator_id_to_string(stack::in, stack::out) is det.
 :- pred operator_id_to_ident(stack::in, stack::out) is det.
 :- pred operator_id_to_binder(stack::in, stack::out) is det.
-:- pred operator_is_operator(intern_table::in, stack::in, stack::out) is det.
-:- pred operator_arity_op(intern_table::in, stack::in, stack::out) is det.
+:- pred operator_is_operator(operator_table::in, stack::in, stack::out) is det.
+:- pred operator_arity_op(operator_table::in, stack::in, stack::out) is det.
 :- pred operator_stack(stack::in, stack::out) is det.
+
+    % value_to_string(ST, Value) = String:
+    % Convert a value to its string representation (for print/import).
+    %
+:- func value_to_string(string_table, value) = string.
 
 %-----------------------------------------------------------------------%
 
@@ -138,6 +146,7 @@ operator("idToBinder", op_id_to_binder).
 operator("isOperator", op_is_operator).
 operator("arity", op_arity).
 operator("stack", op_stack).
+operator("import", op_import).
 
 %-----------------------------------------------------------------------%
 % Operator arity (number of values popped from stack)
@@ -189,12 +198,13 @@ operator_arity(op_id_to_binder) = 1.
 operator_arity(op_is_operator) = 1.
 operator_arity(op_arity) = 1.
 operator_arity(op_stack) = 0.
+operator_arity(op_import) = 1.
 
 %-----------------------------------------------------------------------%
 % init_operators: intern all operator names and build the operator table
 %-----------------------------------------------------------------------%
 
-init_operators(!IT) :-
+init_operators(!ST, OpTable) :-
     OpNames = [
         "print", "env",
         "+", "-", "*",
@@ -207,19 +217,16 @@ init_operators(!IT) :-
         "isIdent", "isBinder", "isFunc", "isGen", "isQuote", "isApply",
         "isValue", "unwrap", "intern",
         "idToString", "idToIdent", "idToBinder", "isOperator", "arity",
-        "stack"
+        "stack", "import"
     ],
-    list.foldl2(intern_operator, OpNames, map.init, OpTable, !IT),
-    !:IT = !.IT ^ it_operators := OpTable.
+    list.foldl2(intern_operator, OpNames, map.init, OpTable, !ST).
 
 :- pred intern_operator(string::in, operator_table::in, operator_table::out,
-    intern_table::in, intern_table::out) is det.
+    string_table::in, string_table::out) is det.
 
-intern_operator(Name, !OpTable, !IT) :-
+intern_operator(Name, !OpTable, !ST) :-
     ( if operator(Name, Op) then
-        Strings0 = !.IT ^ it_strings,
-        intern_string(Name, Id, Strings0, Strings),
-        !:IT = !.IT ^ it_strings := Strings,
+        intern_string(Name, Id, !ST),
         Arity = operator_arity(Op),
         map.det_insert(Id, operator_info(Op, Arity), !OpTable)
     else
@@ -230,10 +237,10 @@ intern_operator(Name, !OpTable, !IT) :-
 % eval_operator: dispatch to operator implementation
 %-----------------------------------------------------------------------%
 
-eval_operator(IT, Op, Env, !Stack, !IO) :-
+eval_operator(OpTable, ST, Op, Env, !Stack, !IO) :-
     (
         Op = op_print,
-        operator_print(IT, !Stack, !IO)
+        operator_print(ST, !Stack, !IO)
     ;
         Op = op_env,
         operator_env(Env, !Stack)
@@ -284,10 +291,10 @@ eval_operator(IT, Op, Env, !Stack, !IO) :-
         operator_snd(!Stack)
     ;
         Op = op_write,
-        operator_write(IT, !Stack, !IO)
+        operator_write(ST, !Stack, !IO)
     ;
         Op = op_fwrite,
-        operator_fwrite(IT, !Stack, !IO)
+        operator_fwrite(ST, !Stack, !IO)
     ;
         Op = op_empty,
         operator_empty(!Stack)
@@ -356,56 +363,58 @@ eval_operator(IT, Op, Env, !Stack, !IO) :-
         operator_id_to_binder(!Stack)
     ;
         Op = op_is_operator,
-        operator_is_operator(IT, !Stack)
+        operator_is_operator(OpTable, !Stack)
     ;
         Op = op_arity,
-        operator_arity_op(IT, !Stack)
+        operator_arity_op(OpTable, !Stack)
     ;
         Op = op_stack,
         operator_stack(!Stack)
+    ;
+        Op = op_import,
+        % import is handled specially in eval.m, should not reach here
+        unexpected($pred, "import should be handled in eval.m")
     ).
 
 %-----------------------------------------------------------------------%
 % print: ( a -- ) Pop and print a value
 %-----------------------------------------------------------------------%
 
-operator_print(IT, !Stack, !IO) :-
+operator_print(ST, !Stack, !IO) :-
     pop("print", V, !Stack),
-    io.write_string(value_to_string(IT, V), !IO).
+    io.write_string(value_to_string(ST, V), !IO).
 
 %-----------------------------------------------------------------------%
 % value_to_string: convert a value to its string representation
 %-----------------------------------------------------------------------%
 
-:- func value_to_string(intern_table, value) = string.
-
 value_to_string(_, intval(I)) = int_to_string(I).
-value_to_string(IT, stringval(StrId)) = lookup_string(IT ^ it_strings, StrId).
-value_to_string(IT, arrayval(A)) = String :-
+value_to_string(ST, stringval(StrId)) = lookup_string(ST, StrId).
+value_to_string(ST, arrayval(A)) = String :-
     array.to_list(A, List),
-    Strings = list.map(value_to_string(IT), List),
+    Strings = list.map(value_to_string(ST), List),
     String = string.append_list(Strings).
 value_to_string(_, mapval(M)) = string.format("<map:%d>", [i(map.count(M))]).
-value_to_string(IT, termval(T)) = term_to_string(IT, T).
+value_to_string(ST, termval(T)) = term_to_string(ST, T).
 value_to_string(_, nilval) = ".".
-value_to_string(IT, consval(H, T)) =
-    "(" ++ value_to_string(IT, H) ++ "," ++ value_to_string(IT, T) ++ ")".
+value_to_string(ST, consval(H, T)) =
+    "(" ++ value_to_string(ST, H) ++ "," ++ value_to_string(ST, T) ++ ")".
 
-:- func term_to_string(intern_table, term) = string.
+:- func term_to_string(string_table, term) = string.
 
-term_to_string(IT, identifier(NameId)) = lookup_string(IT ^ it_strings, NameId).
-term_to_string(IT, binder(NameId)) = "/" ++ lookup_string(IT ^ it_strings, NameId).
-term_to_string(IT, function(Terms)) = "{ " ++ terms_to_string(IT, Terms) ++ "}".
-term_to_string(IT, generator(Terms)) = "[ " ++ terms_to_string(IT, Terms) ++ "]".
-term_to_string(IT, quoted(T)) = "'" ++ term_to_string(IT, T).
-term_to_string(IT, value(V)) = value_to_string(IT, V).
+term_to_string(ST, identifier(NameId)) = lookup_string(ST, NameId).
+term_to_string(ST, binder(NameId)) = "/" ++ lookup_string(ST, NameId).
+term_to_string(ST, function(Terms)) = "{ " ++ terms_to_string(ST, Terms) ++ "}".
+term_to_string(ST, generator(Terms)) = "[ " ++ terms_to_string(ST, Terms) ++ "]".
+term_to_string(ST, quoted(T)) = "'" ++ term_to_string(ST, T).
+term_to_string(ST, value(V)) = value_to_string(ST, V).
 term_to_string(_, apply_term) = "!".
 
-:- func terms_to_string(intern_table, list(term)) = string.
+:- func terms_to_string(string_table, list(term)) = string.
 
 terms_to_string(_, []) = "".
-terms_to_string(IT, [T | Ts]) =
-    term_to_string(IT, T) ++ " " ++ terms_to_string(IT, Ts).
+terms_to_string(ST, [T | Ts]) =
+    term_to_string(ST, T) ++ " " ++ terms_to_string(ST, Ts).
 
 %-----------------------------------------------------------------------%
 % env: ( -- map ) Push the current environment as a map
@@ -728,64 +737,64 @@ operator_snd(!Stack) :-
 % write: ( a -- ) Pop and print value in executable (round-trippable) form
 %-----------------------------------------------------------------------%
 
-operator_write(IT, !Stack, !IO) :-
+operator_write(ST, !Stack, !IO) :-
     pop("write", V, !Stack),
-    io.write_string(value_to_write_string(IT, V), !IO).
+    io.write_string(value_to_write_string(ST, V), !IO).
 
 %-----------------------------------------------------------------------%
 % value_to_write_string: convert a value to executable string form
 %-----------------------------------------------------------------------%
 
-:- func value_to_write_string(intern_table, value) = string.
+:- func value_to_write_string(string_table, value) = string.
 
 value_to_write_string(_, intval(I)) = int_to_string(I).
-value_to_write_string(IT, stringval(StrId)) =
-    "\"" ++ escape_string(lookup_string(IT ^ it_strings, StrId)) ++ "\"".
-value_to_write_string(IT, arrayval(A)) = "[ " ++ ArrayElems ++ "]" :-
+value_to_write_string(ST, stringval(StrId)) =
+    "\"" ++ escape_string(lookup_string(ST, StrId)) ++ "\"".
+value_to_write_string(ST, arrayval(A)) = "[ " ++ ArrayElems ++ "]" :-
     array.to_list(A, List),
     ElemStrings = list.map(
-        (func(V) = value_to_write_string(IT, V) ++ " "),
+        (func(V) = value_to_write_string(ST, V) ++ " "),
         List),
     ArrayElems = string.append_list(ElemStrings).
-value_to_write_string(IT, mapval(M)) = Result :-
-    map.foldl(map_entry_to_string(IT), M, "$", Result).
-value_to_write_string(IT, termval(T)) = "'" ++ term_to_write_string(IT, T).
+value_to_write_string(ST, mapval(M)) = Result :-
+    map.foldl(map_entry_to_string(ST), M, "$", Result).
+value_to_write_string(ST, termval(T)) = "'" ++ term_to_write_string(ST, T).
 value_to_write_string(_, nilval) = ".".
-value_to_write_string(IT, consval(H, T)) =
-    value_to_write_string(IT, T) ++ " " ++ value_to_write_string(IT, H) ++ " ,".
+value_to_write_string(ST, consval(H, T)) =
+    value_to_write_string(ST, T) ++ " " ++ value_to_write_string(ST, H) ++ " ,".
 
-:- pred map_entry_to_string(intern_table::in, string_id::in, value::in,
+:- pred map_entry_to_string(string_table::in, string_id::in, value::in,
     string::in, string::out) is det.
 
-map_entry_to_string(IT, NameId, V, !Acc) :-
-    !:Acc = !.Acc ++ " " ++ value_to_write_string(IT, V) ++ " '" ++
-        lookup_string(IT ^ it_strings, NameId) ++ " :".
+map_entry_to_string(ST, NameId, V, !Acc) :-
+    !:Acc = !.Acc ++ " " ++ value_to_write_string(ST, V) ++ " '" ++
+        lookup_string(ST, NameId) ++ " :".
 
-:- func term_to_write_string(intern_table, term) = string.
+:- func term_to_write_string(string_table, term) = string.
 
-term_to_write_string(IT, identifier(NameId)) = lookup_string(IT ^ it_strings, NameId).
-term_to_write_string(IT, binder(NameId)) = "/" ++ lookup_string(IT ^ it_strings, NameId).
-term_to_write_string(IT, function(Terms)) = "{ " ++ terms_to_write_string(IT, Terms) ++ "}".
-term_to_write_string(IT, generator(Terms)) = "[ " ++ terms_to_write_string(IT, Terms) ++ "]".
-term_to_write_string(IT, quoted(T)) = "'" ++ term_to_write_string(IT, T).
-term_to_write_string(IT, value(V)) = value_to_write_string(IT, V).
+term_to_write_string(ST, identifier(NameId)) = lookup_string(ST, NameId).
+term_to_write_string(ST, binder(NameId)) = "/" ++ lookup_string(ST, NameId).
+term_to_write_string(ST, function(Terms)) = "{ " ++ terms_to_write_string(ST, Terms) ++ "}".
+term_to_write_string(ST, generator(Terms)) = "[ " ++ terms_to_write_string(ST, Terms) ++ "]".
+term_to_write_string(ST, quoted(T)) = "'" ++ term_to_write_string(ST, T).
+term_to_write_string(ST, value(V)) = value_to_write_string(ST, V).
 term_to_write_string(_, apply_term) = "!".
 
-:- func terms_to_write_string(intern_table, list(term)) = string.
+:- func terms_to_write_string(string_table, list(term)) = string.
 
 terms_to_write_string(_, []) = "".
-terms_to_write_string(IT, [T | Ts]) =
-    term_to_write_string(IT, T) ++ " " ++ terms_to_write_string(IT, Ts).
+terms_to_write_string(ST, [T | Ts]) =
+    term_to_write_string(ST, T) ++ " " ++ terms_to_write_string(ST, Ts).
 
 %-----------------------------------------------------------------------%
 % fwrite: ( value file -- ) Write value to file in executable form
 %-----------------------------------------------------------------------%
 
-operator_fwrite(IT, !Stack, !IO) :-
+operator_fwrite(ST, !Stack, !IO) :-
     pop("fwrite", FileVal, !Stack),
     pop("fwrite", V, !Stack),
-    Filename = value_to_string(IT, FileVal),
-    Content = value_to_write_string(IT, V),
+    Filename = value_to_string(ST, FileVal),
+    Content = value_to_write_string(ST, V),
     io.open_output(Filename, Result, !IO),
     (
         Result = ok(Stream),
@@ -1011,10 +1020,10 @@ operator_id_to_binder(!Stack) :-
 % isOperator: ( 'ident -- int ) Test if identifier is an operator name
 %-----------------------------------------------------------------------%
 
-operator_is_operator(IT, !Stack) :-
+operator_is_operator(OpTable, !Stack) :-
     pop("isOperator", V, !Stack),
     ( if V = termval(identifier(Id)) then
-        ( if map.contains(IT ^ it_operators, Id) then
+        ( if map.contains(OpTable, Id) then
             push(intval(0), !Stack)
         else
             push(intval(1), !Stack)
@@ -1027,10 +1036,10 @@ operator_is_operator(IT, !Stack) :-
 % arity: ( 'ident -- int ) Get the arity of an operator
 %-----------------------------------------------------------------------%
 
-operator_arity_op(IT, !Stack) :-
+operator_arity_op(OpTable, !Stack) :-
     pop("arity", V, !Stack),
     ( if V = termval(identifier(Id)) then
-        ( if map.search(IT ^ it_operators, Id, Info) then
+        ( if map.search(OpTable, Id, Info) then
             push(intval(Info ^ oi_arity), !Stack)
         else
             throw(type_error("operator", V))

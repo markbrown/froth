@@ -19,11 +19,11 @@ for test_file in "$TESTS_DIR"/*.froth; do
         continue
     fi
 
-    # Check for a .lib file specifying a library to load
-    lib_file="$TESTS_DIR/$test_name.lib"
-    if [ -f "$lib_file" ]; then
-        lib_path=$(cat "$lib_file" | tr -d '\n')
-        actual=$("$FROTH" -l "$lib_path" "$test_file" 2>&1) || true
+    # Check for per-test options file
+    opts_file="$TESTS_DIR/$test_name.opts"
+    if [ -f "$opts_file" ]; then
+        opts=$(cat "$opts_file" | tr -d '\n')
+        actual=$("$FROTH" $opts "$test_file" 2>&1) || true
     else
         actual=$("$FROTH" "$test_file" 2>&1) || true
     fi

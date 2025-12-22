@@ -61,7 +61,8 @@
     ;       op_id_to_binder % idToBinder ( int -- 'binder )
     ;       op_is_operator  % isOperator ( 'ident -- int )
     ;       op_arity        % arity      ( 'ident -- int )
-    ;       op_stack.       % stack      ( ... -- array )
+    ;       op_stack        % stack      ( ... -- array )
+    ;       op_import.      % import     ( filename -- )
 
 :- type operator_info
     --->    operator_info(
@@ -135,10 +136,10 @@
     ;       index_out_of_bounds(int, int)   % Index, array size
     ;       io_error(string, string, string).  % Operation, filename, message
 
-    % format_error(InternTable, Error) = Message:
+    % format_error(StringTable, Error) = Message:
     % Convert an eval_error to a human-readable message.
     %
-:- func format_error(intern_table, eval_error) = string.
+:- func format_error(string_table, eval_error) = string.
 
 %-----------------------------------------------------------------------%
 % Stack operations
@@ -219,8 +220,8 @@ format_error(_, stack_underflow(Op)) =
 format_error(_, type_error(Expected, Actual)) =
     string.format("type error: expected %s, got %s",
         [s(Expected), s(value_type_name(Actual))]).
-format_error(IT, undefined_name(NameId)) =
-    string.format("undefined name: %s", [s(lookup_string(IT ^ it_strings, NameId))]).
+format_error(ST, undefined_name(NameId)) =
+    string.format("undefined name: %s", [s(lookup_string(ST, NameId))]).
 format_error(_, index_out_of_bounds(Index, Size)) =
     string.format("index out of bounds: %d (array size: %d)", [i(Index), i(Size)]).
 format_error(_, io_error(Op, Filename, Msg)) =

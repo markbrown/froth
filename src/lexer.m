@@ -43,14 +43,14 @@
     ;       invalid_escape_sequence(position, char).
 
 :- type lex_result
-    --->    ok(list(located(token)), intern_table)
+    --->    ok(list(located(token)), string_table)
     ;       error(lex_error).
 
-    % tokenize(Input, InternTable, Result):
+    % tokenize(Input, StringTable, Result):
     % Tokenize the input string into a list of located tokens.
-    % Takes initial intern table (use empty_intern_table for fresh start).
+    % Takes initial string table (use empty_string_table for fresh start).
     %
-:- pred tokenize(string::in, intern_table::in, lex_result::out) is det.
+:- pred tokenize(string::in, string_table::in, lex_result::out) is det.
 
 %-----------------------------------------------------------------------%
 
@@ -67,7 +67,7 @@
                 ls_pos      :: int,         % Current position in string
                 ls_line     :: int,
                 ls_column   :: int,
-                ls_intern   :: intern_table
+                ls_strings  :: string_table
             ).
 
     % Internal result type to avoid ambiguity with other ok/error types.
@@ -77,8 +77,8 @@
 
 %-----------------------------------------------------------------------%
 
-tokenize(Input, InternTable, Result) :-
-    State0 = lex_state(Input, 0, 1, 1, InternTable),
+tokenize(Input, StringTable, Result) :-
+    State0 = lex_state(Input, 0, 1, 1, StringTable),
     tokenize_loop(State0, [], Result).
 
 :- pred tokenize_loop(lex_state::in, list(located(token))::in,
@@ -89,7 +89,7 @@ tokenize_loop(State0, RevTokens, Result) :-
     (
         SkipResult = ok(State1),
         ( if at_end(State1) then
-            Result = ok(list.reverse(RevTokens), State1 ^ ls_intern)
+            Result = ok(list.reverse(RevTokens), State1 ^ ls_strings)
         else
             Pos = position(State1 ^ ls_line, State1 ^ ls_column),
             read_token(State1, Pos, TokenResult),
@@ -274,9 +274,8 @@ is_graphical_char(Char) :-
 read_text_name(State0, Result) :-
     read_text_name_chars(State0, Chars, State1),
     NameStr = string.from_char_list(Chars),
-    IT0 = State1 ^ ls_intern,
-    intern_string(NameStr, NameId, IT0 ^ it_strings, NewStrings),
-    State2 = State1 ^ ls_intern := (IT0 ^ it_strings := NewStrings),
+    intern_string(NameStr, NameId, State1 ^ ls_strings, NewStrings),
+    State2 = State1 ^ ls_strings := NewStrings,
     Result = ok({name(NameId), State2}).
 
 :- pred read_text_name_chars(lex_state::in, list(char)::out,
@@ -302,9 +301,8 @@ read_text_name_chars(State0, Chars, State) :-
 read_graphical_name(State0, Result) :-
     read_graphical_chars(State0, Chars, State1),
     NameStr = string.from_char_list(Chars),
-    IT0 = State1 ^ ls_intern,
-    intern_string(NameStr, NameId, IT0 ^ it_strings, NewStrings),
-    State2 = State1 ^ ls_intern := (IT0 ^ it_strings := NewStrings),
+    intern_string(NameStr, NameId, State1 ^ ls_strings, NewStrings),
+    State2 = State1 ^ ls_strings := NewStrings,
     Result = ok({name(NameId), State2}).
 
 :- pred read_graphical_chars(lex_state::in, list(char)::out,
@@ -341,16 +339,14 @@ read_slash_name(State0, Result) :-
     ( if peek_char(State0, Char), is_text_name_start(Char) then
         read_text_name_chars(State0, Chars, State1),
         NameStr = string.from_char_list(Chars),
-        IT0 = State1 ^ ls_intern,
-        intern_string(NameStr, NameId, IT0 ^ it_strings, NewStrings),
-        State2 = State1 ^ ls_intern := (IT0 ^ it_strings := NewStrings),
+        intern_string(NameStr, NameId, State1 ^ ls_strings, NewStrings),
+        State2 = State1 ^ ls_strings := NewStrings,
         Result = ok({slash_name(NameId), State2})
     else if peek_char(State0, Char), is_graphical_char(Char) then
         read_graphical_chars(State0, Chars, State1),
         NameStr = string.from_char_list(Chars),
-        IT0 = State1 ^ ls_intern,
-        intern_string(NameStr, NameId, IT0 ^ it_strings, NewStrings),
-        State2 = State1 ^ ls_intern := (IT0 ^ it_strings := NewStrings),
+        intern_string(NameStr, NameId, State1 ^ ls_strings, NewStrings),
+        State2 = State1 ^ ls_strings := NewStrings,
         Result = ok({slash_name(NameId), State2})
     else
         % Just a slash followed by non-name, treat as junk
@@ -435,9 +431,8 @@ read_string(State0, StartPos, Result) :-
     (
         StringResult = ok(State1),
         String = string.from_char_list(Chars),
-        IT0 = State1 ^ ls_intern,
-        intern_string(String, Id, IT0 ^ it_strings, NewStrings),
-        State2 = State1 ^ ls_intern := (IT0 ^ it_strings := NewStrings),
+        intern_string(String, Id, State1 ^ ls_strings, NewStrings),
+        State2 = State1 ^ ls_strings := NewStrings,
         Result = ok({string(Id), State2})
     ;
         StringResult = error(Error),
