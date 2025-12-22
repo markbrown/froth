@@ -58,6 +58,7 @@
 :- pred operator_keys(stack::in, stack::out) is det.
 :- pred operator_store(stack::in, stack::out) is det.
 :- pred operator_in(stack::in, stack::out) is det.
+:- pred operator_delete(stack::in, stack::out) is det.
 :- pred operator_is_int(stack::in, stack::out) is det.
 :- pred operator_is_string(stack::in, stack::out) is det.
 :- pred operator_is_array(stack::in, stack::out) is det.
@@ -125,6 +126,7 @@ operator("$", op_empty).
 operator("keys", op_keys).
 operator(":", op_store).
 operator("in", op_in).
+operator("delete", op_delete).
 operator("isInt", op_is_int).
 operator("isString", op_is_string).
 operator("isArray", op_is_array).
@@ -177,6 +179,7 @@ operator_arity(op_empty) = 0.
 operator_arity(op_keys) = 1.
 operator_arity(op_store) = 3.
 operator_arity(op_in) = 2.
+operator_arity(op_delete) = 2.
 operator_arity(op_is_int) = 1.
 operator_arity(op_is_string) = 1.
 operator_arity(op_is_array) = 1.
@@ -212,7 +215,7 @@ init_operators(!ST, OpTable) :-
         "@", "#", "=", "?",
         ".", ",", "fst", "snd",
         "write", "fwrite",
-        "$", "keys", ":", "in",
+        "$", "keys", ":", "in", "delete",
         "isInt", "isString", "isArray", "isMap", "isNil", "isCons",
         "isIdent", "isBinder", "isFunc", "isGen", "isQuote", "isApply",
         "isValue", "unwrap", "intern",
@@ -307,6 +310,9 @@ eval_operator(OpTable, ST, Op, Env, !Stack, !IO) :-
     ;
         Op = op_in,
         operator_in(!Stack)
+    ;
+        Op = op_delete,
+        operator_delete(!Stack)
     ;
         Op = op_is_int,
         operator_is_int(!Stack)
@@ -859,6 +865,22 @@ operator_in(!Stack) :-
         else
             push(intval(1), !Stack)
         )
+    else if MapVal = mapval(_) then
+        throw(type_error("term", KeyVal))
+    else
+        throw(type_error("map", MapVal))
+    ).
+
+%-----------------------------------------------------------------------%
+% delete: ( map 'key -- map ) Remove key from map, return new map
+%-----------------------------------------------------------------------%
+
+operator_delete(!Stack) :-
+    pop("delete", KeyVal, !Stack),
+    pop("delete", MapVal, !Stack),
+    ( if MapVal = mapval(Map), KeyVal = termval(identifier(NameId)) then
+        map.delete(NameId, Map, NewMap),
+        push(mapval(NewMap), !Stack)
     else if MapVal = mapval(_) then
         throw(type_error("term", KeyVal))
     else

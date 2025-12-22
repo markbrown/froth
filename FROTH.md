@@ -158,6 +158,7 @@ Evaluation maintains three pieces of state:
 | `#` | `( container -- int )` | Get length of array, map, or quoted function/generator |
 | `keys` | `( map -- array )` | Get map keys as array of quoted identifiers |
 | `in` | `( map 'key -- int )` | Test if key exists in map: 0 if yes, 1 if no |
+| `delete` | `( map 'key -- map )` | Remove key from map, return new map |
 
 ### Type Testing
 
@@ -184,6 +185,9 @@ Evaluation maintains three pieces of state:
 | `print` | `( a -- )` | Pop and print a value |
 | `write` | `( a -- )` | Print in executable (round-trippable) form |
 | `fwrite` | `( value file -- )` | Write value to file in executable form |
+| `import` | `( path -- )` | Load and evaluate a Froth file |
+
+The `import` operator loads a file relative to the current file's directory. Definitions from imported files are added to the current environment.
 
 ### Metaprogramming
 
@@ -199,9 +203,17 @@ Evaluation maintains three pieces of state:
 | `arity` | `( 'ident -- int )` | Get arity (input count) of an operator |
 | `stack` | `( ... -- array )` | Convert entire stack to an array |
 
-## Library
+## Standard Library
 
-Load with `froth -l lib/core-lib.froth`.
+The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is given. It imports the following modules:
+
+### I/O Utilities (io.froth)
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `nl` | `( -- )` | Print a newline |
+| `println` | `( a -- )` | Print a value followed by a newline |
+| `writeln` | `( a -- )` | Write in executable form followed by a newline |
 
 ### Array (array.froth)
 

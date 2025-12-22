@@ -10,8 +10,10 @@ Froth is implemented in Mercury, a pure logic/functional programming language. T
 froth/
 ├── bin/                  # Compiled binary
 ├── lib/                  # Standard library
-│   ├── core-lib.froth    # Library manifest
-│   └── array.froth       # Array utilities (fold)
+│   ├── stdlib.froth      # Standard library (auto-loaded)
+│   ├── io.froth          # I/O utilities (nl, println, writeln)
+│   ├── array.froth       # Array utilities (fold, map, filter)
+│   └── eval.froth        # Meta-interpreter
 ├── src/                  # Mercury source
 │   ├── froth.m           # Main entry point, REPL
 │   ├── lexer.m           # Tokenizer
@@ -22,7 +24,7 @@ froth/
 ├── tests/                # Regression tests
 │   ├── *.froth           # Test programs
 │   ├── *.expected        # Expected outputs
-│   └── lib/              # Library loading tests
+│   └── lib/              # Test library files
 ├── FROTH.md              # Language reference
 ├── Makefile              # Build: make, make test, make clean
 └── run_tests.sh          # Test runner script
@@ -31,40 +33,40 @@ froth/
 ## Usage
 
 ```
-Usage: froth [options] [filename]
+Usage: froth [OPTIONS] [FILE]
 
 Options:
-  -e FILE    Execute FILE then start REPL
-  -f FILE    Run FILE
-  -l LIB     Load library LIB (contains string paths to import)
-  -h, --help Show this help
+  -n, --no-stdlib    Don't auto-load standard library
+  -q, --quiet        Suppress REPL banner
+  -e, --exec CODE    Execute CODE
+  -f, --file FILE    Execute FILE
+  -i, --interactive  Start REPL after -e/-f
+  -h, --help         Show this help
 
-With no arguments, starts an interactive REPL.
+If FILE given without -f, treat as -f FILE.
+If no -e/-f/FILE, start REPL.
+Multiple -e/-f processed in order.
 ```
 
 ```bash
-froth                    # Start interactive REPL
-froth program.froth      # Run a file
-froth -f program.froth   # Run a file (explicit)
-froth -e prelude.froth   # Load file then start REPL
-froth -l lib/core.froth  # Load library then start REPL
-froth -l lib/core.froth program.froth  # Load library then run file
+froth                           # Start interactive REPL (with stdlib)
+froth program.froth             # Run a file
+froth -e "1 2 + println!"       # Execute code string
+froth -f lib.froth -e "go!"     # Load file, then execute code
+froth -i program.froth          # Run file, then start REPL
+froth -n -e "1 2 + print"       # Execute without stdlib
+froth -q                        # Start REPL without banner
 ```
 
-### Libraries
+### Importing Files
 
-A library file contains a sequence of string tokens, each specifying a `.froth` file to import. Paths are relative to the library file's directory.
+Use the `import` operator to load additional Froth files:
 
 ```
-; lib/core.froth
-"math.froth"
-"string.froth"
-"list.froth"
+"utils.froth" import     ; Load utils.froth relative to current file
 ```
 
-```bash
-froth -l lib/core.froth  # Loads lib/math.froth, lib/string.froth, lib/list.froth
-```
+The standard library (`lib/stdlib.froth`) is loaded automatically unless `-n` is given.
 
 ### REPL
 

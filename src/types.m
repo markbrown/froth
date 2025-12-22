@@ -41,6 +41,7 @@
     ;       op_keys         % keys   ( map -- array )
     ;       op_store        % :      ( map val 'key -- map )
     ;       op_in           % in     ( map 'key -- int )
+    ;       op_delete       % delete ( map 'key -- map )
     ;       op_is_int       % isInt    ( a -- int )
     ;       op_is_string    % isString ( a -- int )
     ;       op_is_array     % isArray  ( a -- int )
