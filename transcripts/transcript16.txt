@@ -1,0 +1,1858 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read src/eval.m (263 lines)
+  ⎿  Referenced file src/operators.m
+  ⎿  Read tests/env.expected (4 lines)
+  ⎿  Read ../../../../../tmp/env.expected (4 lines)
+  ⎿  Read tests/write.expected (13 lines)
+  ⎿  Todo list read (5 items)
+
+> please continue 
+
+● I need to fix the multiply defined function error for value_to_string in operators.m. Let me read the relevant parts of that file to find and remove the duplicate declaration.
+
+● Read(src/operators.m)
+  ⎿  Read 30 lines
+
+● Found it. Line 391 has a duplicate declaration that needs to be removed since I already added it to the interface. Let me remove it:
+
+● Update(src/operators.m)
+  ⎿  Removed 2 lines                                                     
+      388  % value_to_string: convert a value to its string representatio
+           n
+      389  %-------------------------------------------------------------
+           ----------%
+      390  
+      391 -:- func value_to_string(string_table, value) = string.        
+      392 -                                                              
+      391  value_to_string(_, intval(I)) = int_to_string(I).
+      392  value_to_string(ST, stringval(StrId)) = lookup_string(ST, StrI
+           d).
+      393  value_to_string(ST, arrayval(A)) = String :-
+
+● Now let me build the project:
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth         
+     Making Mercury/int3s/operators.int3
+     Making Mercury/ints/operators.int
+     … +11 lines (ctrl+o to expand)
+
+● Build succeeded. Let me run the existing tests to make sure everything still works:
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  PASS: add                     
+     PASS: apply_op
+     PASS: arithmetic
+     … +37 lines (ctrl+o to expand)
+
+● All 38 tests pass. Now let me add an import test. I'll create a library file to import and a test that uses it:
+
+● Bash(ls /home/mark/Documents/projects/froth/tests/)
+  ⎿  add.expected                  
+     add.froth
+     apply_op.expected
+     … +77 lines (ctrl+o to expand)
+
+● Let me look at the existing library test to understand the pattern:
+
+● Read(tests/library.froth)
+  ⎿  Read 5 lines
+
+● Read(tests/library.lib)
+  ⎿  Read 2 lines
+
+● Read(tests/library.expected)
+  ⎿  Read 3 lines
+
+● I see - that test uses the -l flag (load at startup). I'll create a test for the new dynamic import operator. Let me first create a small library file to import, then the test:
+
+● Write(tests/import_lib.froth)
+  ⎿  Wrote 4 lines to tests/import_lib.froth
+      1 ; Library to be imported dynamically
+      2 { 2 * } 'double :
+      3 { 1 + } 'inc :
+
+● Write(tests/import.froth)
+  ⎿  Wrote 7 lines to tests/import.froth
+      1 ; Test dynamic import operator
+      2 "tests/import_lib.froth" import
+      3 5 double! println!
+      4 10 inc! println!
+
+● Write(tests/import.expected)
+  ⎿  Wrote 3 lines to tests/import.expected
+      1 10
+      2 11
+
+● Now let me run the tests:
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  Error: Exit code 1
+     PASS: add
+     PASS: apply_op
+     PASS: arithmetic
+     PASS: arity
+     PASS: array
+     PASS: array_ops
+     PASS: binder
+     PASS: closure
+     PASS: comments
+     … +40 lines (ctrl+o to see all)
+
+● The test failed with a stack underflow. Let me check how the existing library defines things:
+
+● Read(tests/lib/core.froth)
+  ⎿  Read 3 lines
+
+● Read(tests/closure.froth)
+  ⎿  Read 3 lines
+
+● Read(tests/env.froth)
+  ⎿  Read 13 lines
+
+● Search(pattern: "'[a-z]+ :", path: "tests", output_mode: "content")
+  ⎿  Found 9 lines (ctrl+o to expand)
+
+● I see the issue - I was using : (map insertion) syntax instead of binder syntax. The correct way to define globals is with /name:
+
+● Update(tests/import_lib.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      1  ; Library to be imported dynamically
+      2 -{ 2 * } 'double :                                               
+      3 -{ 1 + } 'inc :                                                  
+      2 +{ 2 * } /double                                                 
+      3 +{ 1 + } /inc                                                    
+
+● Bash(./run_tests.sh import 2>&1)
+  ⎿  PASS: add                     
+     PASS: apply_op
+     PASS: arithmetic
+     … +39 lines (ctrl+o to expand)
+
+● All 39 tests pass. Let me update the todo list:
+
+● The import operator is now complete:
+
+  Implementation Summary:
+  - Added op_import to the operator type in types.m
+  - Added operator mapping and arity in operators.m
+  - Exported value_to_string from operators.m for filename conversion
+  - Updated eval_identifier in eval.m to handle import specially (since it modifies Env and ST)
+  - Implemented eval_import which:
+    - Pops a value and converts it to a filename
+    - Reads the file
+    - Lexes and parses the content (threading the string table)
+    - Evaluates the resulting terms in the current environment
+
+  Test added:
+  - tests/import.froth - imports a library and uses its functions
+  - tests/import_lib.froth - a simple library defining double and inc
+
+  All 39 tests pass.
+
+> Let's review the tests directory. We have a number of mechanisms for using
+ libraries and files, however I think we can now remove the `-l` option 
+since tests can use `import` for this. We should still load "stdlib.froth" 
+unless the `-n` option is given. What do you think? 
+
+● That makes sense - simplifying to just import for explicit library loading and keeping stdlib as the default (with -n to skip it) is cleaner. Let me review the current state:
+
+● Bash(grep -l "\.lib" /home/mark/Documents/projects/froth/tests/ 2>/dev/null |
+      head -20)
+  ⎿  (No content)
+
+● Read(src/froth.m)
+  ⎿  Read 776 lines
+
+● I see. There's a lot of -l related code. Let me check what tests use .lib files:
+
+● Bash(ls /home/mark/Documents/projects/froth/tests/*.lib)
+  ⎿  /home/mark/Documents/projects/froth/tests/array.lib  
+     /home/mark/Documents/projects/froth/tests/eval.lib
+     /home/mark/Documents/projects/froth/tests/library.lib
+
+● Read(tests/eval.lib)
+  ⎿  Read 1 line
+
+● Read(tests/array.lib)
+  ⎿  Read 2 lines
+
+● Read(run_tests.sh)
+  ⎿  Read 49 lines
+
+● Read(tests/lib/core-lib.froth)
+  ⎿  Error reading file
+
+● Bash(ls -la /home/mark/Documents/projects/froth/tests/lib/)
+  ⎿  total 20                                   
+     drwxrwxr-x 2 mark mark 4096 Dec 21 15:22 .
+     drwxrwxr-x 3 mark mark 4096 Dec 22 12:45 ..
+     … +3 lines (ctrl+o to expand)
+
+● Bash(cat /home/mark/Documents/projects/froth/tests/lib/a.froth
+      /home/mark/Documents/projects/froth/tests/lib/b.froth)
+  ⎿  ; Define double function       
+     { 2 * } /double
+     ; Define quadruple using double
+     { double! double! } /quadruple
+
+● Bash(ls -la /home/mark/Documents/projects/froth/lib/)
+  ⎿  total 32                                   
+     drwxrwxr-x 2 mark mark 4096 Dec 22 10:45 .
+     drwxrwxr-x 9 mark mark 4096 Dec 22 12:42 ..
+     … +5 lines (ctrl+o to expand)
+
+● Read(lib/stdlib.froth)
+  ⎿  Read 2 lines
+
+● Read(lib/core-lib.froth)
+  ⎿  Read 3 lines
+
+● I agree. Looking at the current structure:
+
+  Current -l mechanism:
+  - .lib files contain just filenames (e.g., lib/core-lib.froth)
+  - load_library parses them specially and loads each file listed
+  - Only 3 tests use this: array.froth, eval.froth, library.froth
+
+  stdlib mechanism:
+  - stdlib.froth contains "io.froth" (relative path)
+  - Uses same load_library mechanism but resolves paths relative to lib/
+
+  Proposed changes:
+  1. Remove -l option and all related code from froth.m
+  2. Keep stdlib auto-loading as-is (it already works well)
+  3. Update the 3 tests to use import directly in their .froth files
+  4. Remove .lib files from tests/
+  5. Update run_tests.sh to remove .lib file handling
+
+  This simplifies the interface: stdlib loads automatically, and anything else uses explicit import. The only minor difference is that stdlib.froth still uses the file-listing format (parsed by load_library) rather than import statements - but that's fine since it's internal to the interpreter.
+
+  Should I proceed with this plan?
+
+> Let's make stdlib.froth import modules rather than using a special 
+mechanism for libraries. That should simpliy our code. 
+
+● Good idea. To make this work cleanly, import should resolve relative paths based on the importing file's directory (like most languages). Here's my plan:
+
+  1. Thread a base_dir through evaluation
+  2. import resolves relative paths using base_dir, then updates it for the imported file
+  3. stdlib.froth becomes normal Froth: "io.froth" import
+  4. When loading stdlib, set base_dir to the lib directory
+  5. Remove all the library-specific machinery (load_library, extract_string_tokens, load_files, -l handling)
+
+  This means the only special thing about stdlib is finding its path - after that, it's just evaluated like any other file.
+
+● Let me start by updating eval.m to thread base_dir:
+
+● Read(src/eval.m)
+  ⎿  Read 50 lines
+
+● Update(src/eval.m)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      12  
+      13  %--------------------------------------------------------------
+          ---------%
+      14  
+      15 -    % eval_terms(OpTable, Terms, !Env, !Stack, !ST, !IO):      
+      15 +    % eval_terms(OpTable, BaseDir, Terms, !Env, !Stack, !ST, !I
+         +O):                                                            
+      16      % Evaluate a list of terms, updating the environment and st
+          ack.
+      17      % OpTable is read-only (fixed at engine startup).
+      18 +    % BaseDir is used to resolve relative paths in imports.    
+      19      % StringTable is threaded through (may grow with dynamic im
+          ports).
+      20      % Throws eval_error on failure.
+      21      %
+      21 -:- pred eval_terms(operator_table::in, list(term)::in,         
+      22 +:- pred eval_terms(operator_table::in, string::in, list(term)::
+         +in,                                                            
+      23      env::in, env::out, stack::in, stack::out,
+      24      string_table::in, string_table::out, io::di, io::uo) is det
+          .
+      25  
+
+● Now update the implementation section:
+
+● Read(src/eval.m)
+  ⎿  Read 30 lines
+
+● Update(src/eval.m)
+  ⎿  Added 1 line                                                        
+      33  :- implementation.
+      34  
+      35  :- import_module array.
+      36 +:- import_module dir.                                          
+      37  :- import_module exception.
+      38  :- import_module lexer.
+      39  :- import_module map.
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      55  % Main evaluation
+      56  %--------------------------------------------------------------
+          ---------%
+      57  
+      58 -eval_terms(_, [], !Env, !Stack, !ST, !IO).                     
+      59 -eval_terms(OpTable, [Term | Terms], !Env, !Stack, !ST, !IO) :- 
+      60 -    eval_term(OpTable, Term, !Env, !Stack, !ST, !IO),          
+      61 -    eval_terms(OpTable, Terms, !Env, !Stack, !ST, !IO).        
+      58 +eval_terms(_, _, [], !Env, !Stack, !ST, !IO).                  
+      59 +eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !Stack, !ST,
+         + !IO) :-                                                       
+      60 +    eval_term(OpTable, BaseDir, Term, !Env, !Stack, !ST, !IO), 
+      61 +    eval_terms(OpTable, BaseDir, Terms, !Env, !Stack, !ST, !IO)
+         +.                                                              
+      62  
+      63  :- pred eval_term(operator_table::in, term::in, env::in, env::o
+          ut,
+      64      stack::in, stack::out, string_table::in, string_table::out,
+
+● Read(src/eval.m)
+  ⎿  Read 80 lines
+
+● Update(src/eval.m)
+  ⎿  Added 5 lines, removed 5 lines                                      
+      60      eval_term(OpTable, BaseDir, Term, !Env, !Stack, !ST, !IO),
+      61      eval_terms(OpTable, BaseDir, Terms, !Env, !Stack, !ST, !IO)
+          .
+      62  
+      63 -:- pred eval_term(operator_table::in, term::in, env::in, env::o
+         -ut,                                                            
+      63 +:- pred eval_term(operator_table::in, string::in, term::in, env
+         +::in, env::out,                                                
+      64      stack::in, stack::out, string_table::in, string_table::out,
+      65      io::di, io::uo) is det.
+      66  
+      67 -eval_term(OpTable, Term, !Env, !Stack, !ST, !IO) :-            
+      67 +eval_term(OpTable, BaseDir, Term, !Env, !Stack, !ST, !IO) :-   
+      68      (
+      69          Term = identifier(NameId),
+      70 -        eval_identifier(OpTable, NameId, !Env, !Stack, !ST, !IO
+         -)                                                              
+      70 +        eval_identifier(OpTable, BaseDir, NameId, !Env, !Stack,
+         + !ST, !IO)                                                     
+      71      ;
+      72          Term = binder(NameId),
+      73          eval_binder(NameId, !Env, !Stack)
+     ...
+      76          eval_function(Terms, !.Env, !Stack)
+      77      ;
+      78          Term = generator(Terms),
+      79 -        eval_generator(OpTable, Terms, !Env, !Stack, !ST, !IO) 
+      79 +        eval_generator(OpTable, BaseDir, Terms, !Env, !Stack, !
+         +ST, !IO)                                                       
+      80      ;
+      81          Term = quoted(T),
+      82          push(termval(T), !Stack)
+     ...
+      85          push(V, !Stack)
+      86      ;
+      87          Term = apply_term,
+      88 -        eval_apply(OpTable, !Env, !Stack, !ST, !IO)            
+      88 +        eval_apply(OpTable, BaseDir, !Env, !Stack, !ST, !IO)   
+      89      ).
+      90  
+      91  %--------------------------------------------------------------
+          ---------%
+
+● Update(src/eval.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+       92  % Identifier evaluation
+       93  %-------------------------------------------------------------
+           ----------%
+       94  
+       95 -:- pred eval_identifier(operator_table::in, string_id::in,    
+       95 +:- pred eval_identifier(operator_table::in, string::in, string
+          +_id::in,                                                      
+       96      env::in, env::out, stack::in, stack::out,
+       97      string_table::in, string_table::out, io::di, io::uo) is de
+           t.
+       98  
+       99 -eval_identifier(OpTable, NameId, !Env, !Stack, !ST, !IO) :-   
+       99 +eval_identifier(OpTable, BaseDir, NameId, !Env, !Stack, !ST, !
+          +IO) :-                                                        
+      100      ( if get_env(NameId, V, !.Env) then
+      101          push(V, !Stack)
+      102      else if map.search(OpTable, NameId, Info) then
+      103          ( if Info ^ oi_operator = op_import then
+      104              % import is special: it can modify Env and ST
+      105 -            eval_import(OpTable, !Env, !Stack, !ST, !IO)      
+      105 +            eval_import(OpTable, BaseDir, !Env, !Stack, !ST, !
+          +IO)                                                           
+      106          else
+      107              operators.eval_operator(OpTable, !.ST, Info ^ oi_o
+           perator, !.Env,
+      108                  !Stack, !IO)
+
+● Read(src/eval.m)
+  ⎿  Read 80 lines
+
+● Update(src/eval.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      138  % Generator evaluation
+      139  %-------------------------------------------------------------
+           ----------%
+      140  
+      141 -:- pred eval_generator(operator_table::in, list(term)::in,    
+      141 +:- pred eval_generator(operator_table::in, string::in, list(te
+          +rm)::in,                                                      
+      142      env::in, env::out, stack::in, stack::out,
+      143      string_table::in, string_table::out, io::di, io::uo) is de
+           t.
+      144  
+      145 -eval_generator(OpTable, Terms, !Env, !Stack, !ST, !IO) :-     
+      145 +eval_generator(OpTable, BaseDir, Terms, !Env, !Stack, !ST, !IO
+          +) :-                                                          
+      146      % Save current stack, evaluate with empty stack
+      147      SavedStack = !.Stack,
+      148      !:Stack = [],
+      149 -    eval_terms(OpTable, Terms, !Env, !Stack, !ST, !IO),       
+      149 +    eval_terms(OpTable, BaseDir, Terms, !Env, !Stack, !ST, !IO
+          +),                                                            
+      150      % Convert stack to array (reverse since stack is LIFO)
+      151      Array = array.from_reverse_list(!.Stack),
+      152      % Restore stack and push array
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      157  % apply (!)
+      158  %-------------------------------------------------------------
+           ----------%
+      159  
+      160 -:- pred eval_apply(operator_table::in, env::in, env::out,     
+      160 +:- pred eval_apply(operator_table::in, string::in, env::in, en
+          +v::out,                                                       
+      161      stack::in, stack::out, string_table::in, string_table::out
+           ,
+      162      io::di, io::uo) is det.
+      163  
+      164 -eval_apply(OpTable, Env, Env, !Stack, !ST, !IO) :-            
+      164 +eval_apply(OpTable, BaseDir, Env, Env, !Stack, !ST, !IO) :-   
+      165      pop("!", V, !Stack),
+      166      ( if V = consval(mapval(ClosureEnv), termval(function(Term
+           s))) then
+      167          % Evaluate with closure's env, then discard env change
+           s (lexical scoping)
+      168 -        eval_terms(OpTable, Terms, ClosureEnv, _, !Stack, !ST,
+          - !IO)                                                         
+      168 +        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !St
+          +ack, !ST, !IO)                                                
+      169      else if V = termval(identifier(Id)), map.search(OpTable, I
+           d, Info) then
+      170          ( if Info ^ oi_operator = op_import then
+      171              % import is special: it can modify Env (but we dis
+           card here like closures)
+      172 -            eval_import(OpTable, Env, _, !Stack, !ST, !IO)    
+      172 +            eval_import(OpTable, BaseDir, Env, _, !Stack, !ST,
+          + !IO)                                                         
+      173          else
+      174              % Apply a quoted operator
+      175              operators.eval_operator(OpTable, !.ST, Info ^ oi_o
+           perator, Env,
+
+● Now update eval_import to resolve relative paths:
+
+● Update(src/eval.m)
+  ⎿  Added 11 lines, removed 4 lines                                     
+      183  % import: ( filename -- ) Load and evaluate a file
+      184  %-------------------------------------------------------------
+           ----------%
+      185  
+      186 -:- pred eval_import(operator_table::in, env::in, env::out,    
+      186 +:- pred eval_import(operator_table::in, string::in, env::in, e
+          +nv::out,                                                      
+      187      stack::in, stack::out, string_table::in, string_table::out
+           ,
+      188      io::di, io::uo) is det.
+      189  
+      190 -eval_import(OpTable, !Env, !Stack, !ST, !IO) :-               
+      190 +eval_import(OpTable, BaseDir, !Env, !Stack, !ST, !IO) :-      
+      191      pop("import", V, !Stack),
+      192 -    Filename = operators.value_to_string(!.ST, V),            
+      192 +    RelFilename = operators.value_to_string(!.ST, V),         
+      193 +    % Resolve relative paths using BaseDir                    
+      194 +    ( if dir.path_name_is_absolute(RelFilename) then          
+      195 +        Filename = RelFilename                                
+      196 +    else                                                      
+      197 +        Filename = dir.make_path_name(BaseDir, RelFilename)   
+      198 +    ),                                                        
+      199 +    NewBaseDir = dir.dirname(Filename),                       
+      200      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      201      (
+      202          ReadResult = ok(Content),
+     ...
+      206              parser.parse(Tokens, ParseResult),
+      207              (
+      208                  ParseResult = ok(Terms),
+      202 -                eval_terms(OpTable, Terms, !Env, !Stack, !ST, 
+          -!IO)                                                          
+      209 +                eval_terms(OpTable, NewBaseDir, Terms, !Env, !
+          +Stack, !ST, !IO)                                              
+      210              ;
+      211                  ParseResult = error(ParseError),
+      212                  throw_parse_error(Filename, ParseError)
+
+● Now let me update froth.m. I'll make several edits to simplify it:
+
+● Read(src/froth.m)
+  ⎿  Read 30 lines
+
+● Update(src/froth.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      710          io.set_exit_status(1, !IO)
+      711      ).
+      712  
+      713 -:- pred eval_terms_wrapper(operator_table::in, string_table::i
+          -n,                                                            
+      713 +:- pred eval_terms_wrapper(operator_table::in, string::in, str
+          +ing_table::in,                                                
+      714      list(term)::in, env::in, stack::in, {env, stack}::out,
+      715      io::di, io::uo) is det.
+      716  
+      717 -eval_terms_wrapper(OpTable, ST, Terms, Env0, Stack0, {Env, Sta
+          -ck}, !IO) :-                                                  
+      718 -    eval.eval_terms(OpTable, Terms, Env0, Env, Stack0, Stack, 
+          -ST, _, !IO).                                                  
+      717 +eval_terms_wrapper(OpTable, BaseDir, ST, Terms, Env0, Stack0, 
+          +{Env, Stack}, !IO) :-                                         
+      718 +    eval.eval_terms(OpTable, BaseDir, Terms, Env0, Env, Stack0
+          +, Stack, ST, _, !IO).                                         
+      719  
+      720  %-------------------------------------------------------------
+           ----------%
+      721  % Error reporting
+
+● Now I need to find and update all calls to eval_terms_wrapper. Let me search for them:
+
+● Search(pattern: "eval_terms_wrapper", path: "src/froth.m", output_mode:
+        "content")
+  ⎿  Found 8 lines (ctrl+o to expand)
+
+● Let me read around the first call site and update all of them. I'll use "." as the default base directory for user files:
+
+● Read(src/froth.m)
+  ⎿  Read 25 lines
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      346      env::in, env::out, stack::in, stack::out, io::di, io::uo) 
+           is cc_multi.
+      347  
+      348  execute_repl(OpTable, ST, Terms, Env0, Env, Stack0, Stack, !IO
+           ) :-
+      349 -    try_io(eval_terms_wrapper(OpTable, ST, Terms, Env0, Stack0
+          -), Result, !IO),                                              
+      349 +    try_io(eval_terms_wrapper(OpTable, ".", ST, Terms, Env0, S
+          +tack0), Result, !IO),                                         
+      350      (
+      351          Result = succeeded({Env, Stack})
+      352      ;
+
+● Read(src/froth.m)
+  ⎿  Read 30 lines
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      421  execute_then_repl(OpTable, ST0, Terms, !IO) :-
+      422      Env0 = map.init,
+      423      Stack0 = [],
+      424 -    try_io(eval_terms_wrapper(OpTable, ST0, Terms, Env0, Stack
+          -0), Result, !IO),                                             
+      424 +    try_io(eval_terms_wrapper(OpTable, ".", ST0, Terms, Env0, 
+          +Stack0), Result, !IO),                                        
+      425      (
+      426          Result = succeeded({Env, Stack}),
+      427          io.write_string("Froth REPL. Press Ctrl-D to exit.\n",
+            !IO),
+
+● Read(src/froth.m)
+  ⎿  Read 30 lines
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      465  execute(OpTable, ST, Terms, !IO) :-
+      466      Env0 = map.init,
+      467      Stack0 = [],
+      468 -    try_io(eval_terms_wrapper(OpTable, ST, Terms, Env0, Stack0
+          -), Result, !IO),                                              
+      468 +    try_io(eval_terms_wrapper(OpTable, ".", ST, Terms, Env0, S
+          +tack0), Result, !IO),                                         
+      469      (
+      470          Result = succeeded({_, _})
+      471      ;
+
+● Read(src/froth.m)
+  ⎿  Read 45 lines
+
+● Given the complexity, let me take a strategic approach. I'll first simplify the stdlib loading, then remove all the -l code. Let me look at the stdlib loading section:
+
+● Read(src/froth.m)
+  ⎿  Read 60 lines
+
+● Let me rewrite load_stdlib_and_run to simply evaluate stdlib.froth as normal Froth code:
+
+● Update(src/froth.m)
+  ⎿  Added 60 lines, removed 4 lines                                     
+      105      io.file.check_file_accessibility(StdlibPath, [read], Acces
+           sResult, !IO),
+      106      (
+      107          AccessResult = ok,
+      108 -        % Load stdlib first                                   
+      109 -        load_library(StdlibPath, LoadResult, !IO),            
+      108 +        % Load stdlib by evaluating it as normal Froth code   
+      109 +        eval_stdlib(StdlibPath, EvalResult, !IO),             
+      110          (
+      111 -            LoadResult = ok({OpTable, ST, Env}),              
+      111 +            EvalResult = ok({OpTable, ST, Env}),              
+      112              % Then process remaining args with stdlib state
+      113              process_args_with_state(OpTable, ST, Env, Args, !I
+           O)
+      114          ;
+      115 -            LoadResult = error,                               
+      115 +            EvalResult = error,                               
+      116              io.set_exit_status(1, !IO)
+      117          )
+      118      ;
+     ...
+      121          process_args_no_stdlib(Args, !IO)
+      122      ).
+      123  
+      124 +:- type eval_result                                           
+      125 +    --->    ok({operator_table, string_table, env})           
+      126 +    ;       error.                                            
+      127 +                                                              
+      128 +    % Evaluate stdlib.froth as normal Froth code.             
+      129 +    % The BaseDir is set to the directory containing stdlib.fr
+          +oth                                                           
+      130 +    % so that relative imports work correctly.                
+      131 +    %                                                         
+      132 +:- pred eval_stdlib(string::in, eval_result::out, io::di, io::
+          +uo) is cc_multi.                                              
+      133 +                                                              
+      134 +eval_stdlib(StdlibPath, Result, !IO) :-                       
+      135 +    LibDir = dir.dirname(StdlibPath),                         
+      136 +    io.read_named_file_as_string(StdlibPath, ReadResult, !IO),
+      137 +    (                                                         
+      138 +        ReadResult = ok(Content),                             
+      139 +        init_tables(ST0, OpTable),                            
+      140 +        lexer.tokenize(Content, ST0, LexResult),              
+      141 +        (                                                     
+      142 +            LexResult = ok(Tokens, ST1),                      
+      143 +            parser.parse(Tokens, ParseResult),                
+      144 +            (                                                 
+      145 +                ParseResult = ok(Terms),                      
+      146 +                try_io(eval_terms_wrapper(OpTable, LibDir, ST1
+          +, Terms,                                                      
+      147 +                    map.init, []), EvalResult, !IO),          
+      148 +                (                                             
+      149 +                    EvalResult = succeeded({Env, _Stack}),    
+      150 +                    Result = ok({OpTable, ST1, Env})          
+      151 +                ;                                             
+      152 +                    EvalResult = exception(Exn),              
+      153 +                    ( if univ_to_type(Exn, EvalError) then    
+      154 +                        io.format("Runtime error in stdlib: %s
+          +\n",                                                          
+      155 +                            [s(types.format_error(ST1, EvalErr
+          +or))], !IO),                                                  
+      156 +                        Result = error                        
+      157 +                    else                                      
+      158 +                        rethrow(EvalResult)                   
+      159 +                    )                                         
+      160 +                )                                             
+      161 +            ;                                                 
+      162 +                ParseResult = error(ParseError),              
+      163 +                io.format("In stdlib: ", [], !IO),            
+      164 +                report_parse_error(ParseError, !IO),          
+      165 +                Result = error                                
+      166 +            )                                                 
+      167 +        ;                                                     
+      168 +            LexResult = error(LexError),                      
+      169 +            io.format("In stdlib: ", [], !IO),                
+      170 +            report_lex_error(LexError, !IO),                  
+      171 +            Result = error                                    
+      172 +        )                                                     
+      173 +    ;                                                         
+      174 +        ReadResult = error(Error),                            
+      175 +        io.format("Error reading stdlib '%s': %s\n",          
+      176 +            [s(StdlibPath), s(io.error_message(Error))], !IO),
+      177 +        Result = error                                        
+      178 +    ).                                                        
+      179 +                                                              
+      180  :- pred process_args_with_state(operator_table::in, string_tab
+           le::in,
+      181      env::in, list(string)::in, io::di, io::uo) is cc_multi.
+      182  
+
+● Now let me remove the -l handling from process_args_with_state:
+
+● Read(src/froth.m)
+  ⎿  Read 35 lines
+
+● Update(src/froth.m)
+  ⎿  Removed 3 lines                                                     
+      199              run_file_with_state(OpTable, ST, Env, Second, !IO)
+      200          else if First = "-e", Rest = [] then
+      201              run_file_then_repl_with_state(OpTable, ST, Env, Se
+           cond, !IO)
+      202 -        else if First = "-l" then                             
+      203 -            % Load additional library on top of stdlib        
+      204 -            run_with_library_and_state(OpTable, ST, Env, Secon
+          -d, Rest, !IO)                                                 
+      202          else
+      203              print_usage(!IO),
+      204              io.set_exit_status(1, !IO)
+
+● Read(src/froth.m)
+  ⎿  Read 30 lines
+
+● Update(src/froth.m)
+  ⎿  Removed 2 lines                                                     
+      90              run_file_no_stdlib(Second, !IO)
+      91          else if First = "-e", Rest = [] then
+      92              run_file_then_repl_no_stdlib(Second, !IO)
+      93 -        else if First = "-l" then                              
+      94 -            run_with_library(Second, Rest, !IO)                
+      93          else
+      94              print_usage(!IO),
+      95              io.set_exit_status(1, !IO)
+
+● Now I need to remove all the library loading code. Let me find and remove these predicates:
+
+● Read(src/froth.m)
+  ⎿  Read 200 lines
+
+● Update(src/froth.m)
+  ⎿  Removed 46 lines                                                    
+      203          )
+      204      ).
+      205  
+      206 -:- pred run_with_library_and_state(operator_table::in, string_
+          -table::in,                                                    
+      207 -    env::in, string::in, list(string)::in, io::di, io::uo) is 
+          -cc_multi.                                                     
+      208 -                                                              
+      209 -run_with_library_and_state(OpTable, ST0, Env0, LibFile, RestAr
+          -gs, !IO) :-                                                   
+      210 -    load_library_with_state(OpTable, ST0, Env0, LibFile, LoadR
+          -esult, !IO),                                                  
+      211 -    (                                                         
+      212 -        LoadResult = ok({_, ST, Env}),                        
+      213 -        process_args_with_state(OpTable, ST, Env, RestArgs, !I
+          -O)                                                            
+      214 -    ;                                                         
+      215 -        LoadResult = error,                                   
+      216 -        io.set_exit_status(1, !IO)                            
+      217 -    ).                                                        
+      218 -                                                              
+      219 -:- pred load_library_with_state(operator_table::in, string_tab
+          -le::in, env::in,                                              
+      220 -    string::in, load_result::out, io::di, io::uo) is cc_multi.
+      221 -                                                              
+      222 -load_library_with_state(OpTable, ST0, Env0, LibFile, Result, !
+          -IO) :-                                                        
+      223 -    io.read_named_file_as_string(LibFile, ReadResult, !IO),   
+      224 -    (                                                         
+      225 -        ReadResult = ok(Content),                             
+      226 -        LibDir = dir.dirname(LibFile),                        
+      227 -        lexer.tokenize(Content, ST0, LexResult),              
+      228 -        (                                                     
+      229 -            LexResult = ok(Tokens, ST1),                      
+      230 -            extract_string_tokens(ST1, Tokens, FilePaths),    
+      231 -            load_files(LibDir, FilePaths, OpTable, ST1, Env0, 
+          -[],                                                           
+      232 -                LoadFilesResult, !IO),                        
+      233 -            (                                                 
+      234 -                LoadFilesResult = ok({_, ST, Env}),           
+      235 -                Result = ok({OpTable, ST, Env})               
+      236 -            ;                                                 
+      237 -                LoadFilesResult = error,                      
+      238 -                Result = error                                
+      239 -            )                                                 
+      240 -        ;                                                     
+      241 -            LexResult = error(LexError),                      
+      242 -            report_lex_error(LexError, !IO),                  
+      243 -            Result = error                                    
+      244 -        )                                                     
+      245 -    ;                                                         
+      246 -        ReadResult = error(Error),                            
+      247 -        io.format("Error reading library '%s': %s\n",         
+      248 -            [s(LibFile), s(io.error_message(Error))], !IO),   
+      249 -        Result = error                                        
+      250 -    ).                                                        
+      251 -                                                              
+      206  :- pred repl_no_stdlib(io::di, io::uo) is cc_multi.
+      207  
+      208  repl_no_stdlib(!IO) :-
+
+● Now update print_usage to remove the -l option:
+
+● Read(src/froth.m)
+  ⎿  Read 20 lines
+
+● Update(src/froth.m)
+  ⎿  Removed 1 line                                                      
+      293      io.write_string("  -n         No stdlib (don't auto-load s
+           tandard library)\n", !IO),
+      294      io.write_string("  -e FILE    Execute FILE then start REPL
+           \n", !IO),
+      295      io.write_string("  -f FILE    Run FILE\n", !IO),
+      296 -    io.write_string("  -l LIB     Load library LIB (contains s
+          -tring paths to import)\n", !IO),                              
+      296      io.write_string("  -h, --help Show this help\n", !IO),
+      297      io.write_string("\n", !IO),
+      298      io.write_string("With no arguments, starts an interactive 
+           REPL.\n", !IO).
+
+● Now let me find and remove the remaining library loading code:
+
+● Search(pattern: "run_with_library|load_library|extract_string_tokens|load_file
+        s|run_with_state", path: "src/froth.m", output_mode: "content")
+  ⎿  Found 16 lines (ctrl+o to expand)
+
+● Read(src/froth.m)
+  ⎿  Read 150 lines
+
+● Update(src/froth.m)
+  ⎿  Removed 141 lines                                                   
+      483          )
+      484      ).
+      485  
+      486 -%-------------------------------------------------------------
+          -----------%                                                   
+      487 -% Library loading                                             
+      488 -%-------------------------------------------------------------
+          -----------%                                                   
+      489 -                                                              
+      490 -:- pred run_with_library(string::in, list(string)::in,        
+      491 -    io::di, io::uo) is cc_multi.                              
+      492 -                                                              
+      493 -run_with_library(LibFile, RestArgs, !IO) :-                   
+      494 -    load_library(LibFile, LoadResult, !IO),                   
+      495 -    (                                                         
+      496 -        LoadResult = ok({OpTable, ST, Env}),                  
+      497 -        run_with_state(OpTable, ST, Env, RestArgs, !IO)       
+      498 -    ;                                                         
+      499 -        LoadResult = error,                                   
+      500 -        io.set_exit_status(1, !IO)                            
+      501 -    ).                                                        
+      502 -                                                              
+      503 -:- type load_result                                           
+      504 -    --->    ok({operator_table, string_table, env})           
+      505 -    ;       error.                                            
+      506 -                                                              
+      507 -:- pred load_library(string::in, load_result::out, io::di, io:
+          -:uo) is cc_multi.                                             
+      508 -                                                              
+      509 -load_library(LibFile, Result, !IO) :-                         
+      510 -    io.read_named_file_as_string(LibFile, ReadResult, !IO),   
+      511 -    (                                                         
+      512 -        ReadResult = ok(Content),                             
+      513 -        LibDir = dir.dirname(LibFile),                        
+      514 -        init_tables(ST0, OpTable),                            
+      515 -        lexer.tokenize(Content, ST0, LexResult),              
+      516 -        (                                                     
+      517 -            LexResult = ok(Tokens, ST1),                      
+      518 -            extract_string_tokens(ST1, Tokens, FilePaths),    
+      519 -            load_files(LibDir, FilePaths, OpTable, ST1, map.in
+          -it, [],                                                       
+      520 -                LoadFilesResult, !IO),                        
+      521 -            (                                                 
+      522 -                LoadFilesResult = ok({_, ST, Env}),           
+      523 -                Result = ok({OpTable, ST, Env})               
+      524 -            ;                                                 
+      525 -                LoadFilesResult = error,                      
+      526 -                Result = error                                
+      527 -            )                                                 
+      528 -        ;                                                     
+      529 -            LexResult = error(LexError),                      
+      530 -            report_lex_error(LexError, !IO),                  
+      531 -            Result = error                                    
+      532 -        )                                                     
+      533 -    ;                                                         
+      534 -        ReadResult = error(Error),                            
+      535 -        io.format("Error reading library '%s': %s\n",         
+      536 -            [s(LibFile), s(io.error_message(Error))], !IO),   
+      537 -        Result = error                                        
+      538 -    ).                                                        
+      539 -                                                              
+      540 -:- pred extract_string_tokens(string_table::in, list(located(t
+          -oken))::in,                                                   
+      541 -    list(string)::out) is det.                                
+      542 -                                                              
+      543 -extract_string_tokens(ST, Tokens, Paths) :-                   
+      544 -    list.filter_map(                                          
+      545 -        (pred(located(_, Tok)::in, Path::out) is semidet :-   
+      546 -            Tok = string(StrId),                              
+      547 -            Path = lookup_string(ST, StrId)                   
+      548 -        ),                                                    
+      549 -        Tokens, Paths).                                       
+      550 -                                                              
+      551 -:- pred load_files(string::in, list(string)::in, operator_tabl
+          -e::in,                                                        
+      552 -    string_table::in, env::in, stack::in, load_result::out,   
+      553 -    io::di, io::uo) is cc_multi.                              
+      554 -                                                              
+      555 -load_files(_, [], OpTable, ST, Env, _, ok({OpTable, ST, Env}),
+          - !IO).                                                        
+      556 -load_files(LibDir, [File | Files], OpTable, ST0, Env0, Stack0,
+          - Result, !IO) :-                                              
+      557 -    FullPath = dir.make_path_name(LibDir, File),              
+      558 -    io.read_named_file_as_string(FullPath, ReadResult, !IO),  
+      559 -    (                                                         
+      560 -        ReadResult = ok(Content),                             
+      561 -        lexer.tokenize(Content, ST0, LexResult),              
+      562 -        (                                                     
+      563 -            LexResult = ok(Tokens, ST1),                      
+      564 -            parser.parse(Tokens, ParseResult),                
+      565 -            (                                                 
+      566 -                ParseResult = ok(Terms),                      
+      567 -                try_io(eval_terms_wrapper(OpTable, ST1, Terms,
+          - Env0, Stack0),                                               
+      568 -                    EvalResult, !IO),                         
+      569 -                (                                             
+      570 -                    EvalResult = succeeded({Env1, Stack1}),   
+      571 -                    load_files(LibDir, Files, OpTable, ST1, En
+          -v1, Stack1,                                                   
+      572 -                        Result, !IO)                          
+      573 -                ;                                             
+      574 -                    EvalResult = exception(Exn),              
+      575 -                    ( if univ_to_type(Exn, EvalError) then    
+      576 -                        io.format("Runtime error in '%s': %s\n
+          -",                                                            
+      577 -                            [s(FullPath), s(types.format_error
+          -(ST1, EvalError))],                                           
+      578 -                            !IO),                             
+      579 -                        Result = error                        
+      580 -                    else                                      
+      581 -                        rethrow(EvalResult)                   
+      582 -                    )                                         
+      583 -                )                                             
+      584 -            ;                                                 
+      585 -                ParseResult = error(ParseError),              
+      586 -                io.format("In '%s': ", [s(FullPath)], !IO),   
+      587 -                report_parse_error(ParseError, !IO),          
+      588 -                Result = error                                
+      589 -            )                                                 
+      590 -        ;                                                     
+      591 -            LexResult = error(LexError),                      
+      592 -            io.format("In '%s': ", [s(FullPath)], !IO),       
+      593 -            report_lex_error(LexError, !IO),                  
+      594 -            Result = error                                    
+      595 -        )                                                     
+      596 -    ;                                                         
+      597 -        ReadResult = error(Error),                            
+      598 -        io.format("Error reading '%s': %s\n",                 
+      599 -            [s(FullPath), s(io.error_message(Error))], !IO),  
+      600 -        Result = error                                        
+      601 -    ).                                                        
+      602 -                                                              
+      603 -:- pred run_with_state(operator_table::in, string_table::in, e
+          -nv::in,                                                       
+      604 -    list(string)::in, io::di, io::uo) is cc_multi.            
+      605 -                                                              
+      606 -run_with_state(OpTable, ST, Env, Args, !IO) :-                
+      607 -    (                                                         
+      608 -        Args = [],                                            
+      609 -        % No more arguments: start REPL with loaded state     
+      610 -        io.write_string("Froth REPL. Press Ctrl-D to exit.\n",
+          - !IO),                                                        
+      611 -        repl_loop(OpTable, ST, Env, [], !IO)                  
+      612 -    ;                                                         
+      613 -        Args = [File],                                        
+      614 -        run_file_with_state(OpTable, ST, Env, File, !IO)      
+      615 -    ;                                                         
+      616 -        Args = [First, Second | Rest],                        
+      617 -        ( if First = "-f", Rest = [] then                     
+      618 -            run_file_with_state(OpTable, ST, Env, Second, !IO)
+      619 -        else if First = "-e", Rest = [] then                  
+      620 -            run_file_then_repl_with_state(OpTable, ST, Env, Se
+          -cond, !IO)                                                    
+      621 -        else                                                  
+      622 -            print_usage(!IO),                                 
+      623 -            io.set_exit_status(1, !IO)                        
+      624 -        )                                                     
+      625 -    ).                                                        
+      626 -                                                              
+      486  :- pred run_file_with_state(operator_table::in, string_table::
+           in, env::in,
+      487      string::in, io::di, io::uo) is cc_multi.
+      488  
+
+● Now let me update the remaining calls to eval_terms_wrapper:
+
+● Search(pattern: "eval_terms_wrapper", path: "src/froth.m", output_mode:
+        "content")
+  ⎿  Found 8 lines (ctrl+o to expand)
+
+● Read(src/froth.m)
+  ⎿  Read 80 lines
+
+● Update(src/froth.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      487      string::in, io::di, io::uo) is cc_multi.
+      488  
+      489  run_file_with_state(OpTable, ST0, Env0, Filename, !IO) :-
+      490 +    BaseDir = dir.dirname(Filename),                          
+      491      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      492      (
+      493          ReadResult = ok(Input),
+     ...
+      497              parser.parse(Tokens, ParseResult),
+      498              (
+      499                  ParseResult = ok(Terms),
+      499 -                try_io(eval_terms_wrapper(OpTable, ST, Terms, 
+          -Env0, []),                                                    
+      500 +                try_io(eval_terms_wrapper(OpTable, BaseDir, ST
+          +, Terms, Env0, []),                                           
+      501                      Result, !IO),
+      502                  (
+      503                      Result = succeeded({_, _})
+
+● Update(src/froth.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      532      env::in, string::in, io::di, io::uo) is cc_multi.
+      533  
+      534  run_file_then_repl_with_state(OpTable, ST0, Env0, Filename, !I
+           O) :-
+      535 +    BaseDir = dir.dirname(Filename),                          
+      536      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      537      (
+      538          ReadResult = ok(Input),
+     ...
+      542              parser.parse(Tokens, ParseResult),
+      543              (
+      544                  ParseResult = ok(Terms),
+      544 -                try_io(eval_terms_wrapper(OpTable, ST, Terms, 
+          -Env0, []),                                                    
+      545 +                try_io(eval_terms_wrapper(OpTable, BaseDir, ST
+          +, Terms, Env0, []),                                           
+      546                      Result, !IO),
+      547                  (
+      548                      Result = succeeded({Env, Stack}),
+
+● Let me try to build:
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth     
+     Making Mercury/int3s/froth.int3
+     Making Mercury/int3s/eval.int3
+     … +8 lines (ctrl+o to expand)
+
+● Build succeeded. Now let me update stdlib.froth to use import instead of the old format:
+
+● Update(lib/stdlib.froth)
+  ⎿  Added 3 lines, removed 1 line                                       
+      1 -"io.froth"                                                      
+      1 +"; Froth Standard Library                                       
+      2 +                                                                
+      3 +"io.froth" import"                                              
+
+● Let me fix the stdlib.froth file:
+
+● Write(lib/stdlib.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      1 -"; Froth Standard Library                                       
+      1 +; Froth Standard Library                                        
+      2  
+      3 -"io.froth" import"                                              
+      3 +"io.froth" import                                               
+
+● Let me also update lib/core-lib.froth:
+
+● Write(lib/core-lib.froth)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      1 -"array.froth"                                                   
+      2 -"eval.froth"                                                    
+      1 +; Core library                                                  
+      2 +"array.froth" import                                            
+      3 +"eval.froth" import                                             
+
+● Let me run the tests to see the current state:
+
+● Bash(./run_tests.sh 2>&1 | head -50)
+  ⎿  FAIL: add                     
+     FAIL: apply_op
+     FAIL: arithmetic
+     … +47 lines (ctrl+o to expand)
+
+● Something is wrong with stdlib loading. Let me test it directly:
+
+● Bash(./bin/froth -n -e "1 1 + println!" 2>&1)
+  ⎿  Error: Exit code 1
+     Error reading '1 1 + println!': can't open input file: No such file or 
+     directory
+
+● Bash(./bin/froth tests/add.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Runtime error: undefined name: println
+
+● Bash(./bin/froth -h 2>&1)
+  ⎿  Usage: froth [options] [filename]
+
+     Options:
+     … +6 lines (ctrl+o to expand)
+
+● Bash(ls -la lib/stdlib.froth lib/io.froth 2>&1)
+  ⎿  -rw------- 1 mark mark 255 Dec 22 10:28 lib/io.froth    
+     -rw------- 1 mark mark  44 Dec 22 13:06 lib/stdlib.froth
+
+● Bash(echo '"lib/stdlib.froth" import 1 1 + println!' | ./bin/froth -n 2>&1)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > 1:40: invalid token: '\'
+     >
+
+● Bash(echo '"lib/stdlib.froth" import' > /tmp/test.froth && ./bin/froth -n
+      /tmp/test.froth 2>&1)
+  ⎿  (No content)
+
+● Bash(echo '"lib/stdlib.froth" import 1 1 + println!' > /tmp/test.froth &&
+      ./bin/froth -n /tmp/test.froth 2>&1)
+  ⎿  Error: Exit code 1
+     1:40: invalid token: '\'
+
+● Bash(cat /tmp/test.froth)
+  ⎿  "lib/stdlib.froth" import 1 1 + println\!
+
+● Bash(printf '"lib/stdlib.froth" import 1 1 + println!\n' > /tmp/test.froth &&
+      ./bin/froth -n /tmp/test.froth 2>&1)
+  ⎿  Error: Exit code 1
+     1:40: invalid token: '\'
+
+● Write(/tmp/test.froth)
+  ⎿  Error writing file
+
+● Bash(cat > /tmp/test.froth << 'EOF'
+      "lib/stdlib.froth" import…)
+  ⎿  2
+
+● The import works. The issue is the stdlib auto-loading. Let me check if get_stdlib_path is calculating the right path:
+
+● Bash(pwd && ls -la bin/froth)
+  ⎿  /home/mark/Documents/projects/froth                 
+     -rwxrwxr-x 1 mark mark 178472 Dec 22 13:05 bin/froth
+
+● Bash(./bin/froth 2>&1 < /dev/null | head -5)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     >
+
+● Let me check by running with REPL and then trying to use println:
+
+● Bash(echo 'println' | ./bin/froth 2>&1)
+  ⎿  Froth REPL. Press Ctrl-D to exit.       
+     > Runtime error: undefined name: println
+     >
+
+● Let me check if the path detection is working. I'll look at get_stdlib_path:
+
+● Read(src/froth.m)
+  ⎿  Read 30 lines
+
+● Read(src/froth.m)
+  ⎿  Read 80 lines
+
+● Bash(strace -e openat ./bin/froth 2>&1 < /dev/null | grep -E "(stdlib|lib)" |
+      head -10)
+  ⎿ openat(AT_FDCWD, "/usr/local/mercury-DEV/lib/mercury/lib/glibc-hwcaps/x
+    86-64-v3/libmer_std.so", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file
+    or directory)
+    … +21 lines (ctrl+o to expand)
+
+
+● Bash(strace -e openat,access ./bin/froth 2>&1 < /dev/null | grep froth | head
+      -20)
+  ⎿  access("./lib/stdlib.froth", R_OK)      = 0         
+     openat(AT_FDCWD, "./lib/stdlib.froth", O_RDONLY) = 5
+     openat(AT_FDCWD, "./lib/io.froth", O_RDONLY) = 5
+
+● The files are being opened. Let me check io.froth to see if println is defined correctly:
+
+● Read(lib/io.froth)
+  ⎿  Read 11 lines
+
+● Let me add some debug output to see what's happening:
+
+● Update(src/froth.m)
+  ⎿  Added 4 lines                                                       
+      131  
+      132  eval_stdlib(StdlibPath, Result, !IO) :-
+      133      LibDir = dir.dirname(StdlibPath),
+      134 +    io.format("Loading stdlib from %s (lib dir: %s)\n",       
+      135 +        [s(StdlibPath), s(LibDir)], !IO),                     
+      136      io.read_named_file_as_string(StdlibPath, ReadResult, !IO),
+      137      (
+      138          ReadResult = ok(Content),
+     ...
+      147                      map.init, []), EvalResult, !IO),
+      148                  (
+      149                      EvalResult = succeeded({Env, _Stack}),
+      150 +                    io.format("Stdlib loaded, env has %d entri
+          +es\n",                                                        
+      151 +                        [i(map.count(Env))], !IO),            
+      152                      Result = ok({OpTable, ST1, Env})
+      153                  ;
+      154                      EvalResult = exception(Exn),
+
+● Bash(make 2>&1 && ./bin/froth 2>&1 < /dev/null | head -10)
+  ⎿  cd src && mmc --make froth     
+     Making Mercury/int3s/froth.int3
+     Making Mercury/ints/froth.int
+     … +8 lines (ctrl+o to expand)
+
+● The stdlib loads with 3 entries. Let me check if running a file uses this environment:
+
+● Bash(echo 'println' | ./bin/froth 2>&1)
+  ⎿  Loading stdlib from ./lib/stdlib.froth (lib dir: ./lib)
+     Stdlib loaded, env has 3 entries
+     Froth REPL. Press Ctrl-D to exit.
+     … +2 lines (ctrl+o to expand)
+
+● The issue is the string table! When we import io.froth, new strings get interned, but we return ST1 (from after lexing stdlib.froth) instead of the updated string table. Let me fix eval_terms_wrapper to return the updated string table:
+
+● Update(src/froth.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      580      ).
+      581  
+      582  :- pred eval_terms_wrapper(operator_table::in, string::in, str
+           ing_table::in,
+      583 -    list(term)::in, env::in, stack::in, {env, stack}::out,    
+      583 +    list(term)::in, env::in, stack::in, {string_table, env, st
+          +ack}::out,                                                    
+      584      io::di, io::uo) is det.
+      585  
+      586 -eval_terms_wrapper(OpTable, BaseDir, ST, Terms, Env0, Stack0, 
+          -{Env, Stack}, !IO) :-                                         
+      587 -    eval.eval_terms(OpTable, BaseDir, Terms, Env0, Env, Stack0
+          -, Stack, ST, _, !IO).                                         
+      586 +eval_terms_wrapper(OpTable, BaseDir, ST0, Terms, Env0, Stack0,
+          + {ST, Env, Stack}, !IO) :-                                    
+      587 +    eval.eval_terms(OpTable, BaseDir, Terms, Env0, Env, Stack0
+          +, Stack, ST0, ST, !IO).                                       
+      588  
+      589  %-------------------------------------------------------------
+           ----------%
+      590  % Error reporting
+
+● Now I need to update all the callers to use the new return type. Let me find them:
+
+● Search(pattern: "succeeded\(\{Env|succeeded\(\{_,", path: "src/froth.m",
+        output_mode: "content")
+  ⎿  Found 6 lines (ctrl+o to expand)
+
+● Update(src/froth.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      146                  try_io(eval_terms_wrapper(OpTable, LibDir, ST1
+           , Terms,
+      147                      map.init, []), EvalResult, !IO),
+      148                  (
+      149 -                    EvalResult = succeeded({Env, _Stack}),    
+      149 +                    EvalResult = succeeded({ST, Env, _Stack}),
+      150                      io.format("Stdlib loaded, env has %d entri
+           es\n",
+      151                          [i(map.count(Env))], !IO),
+      152 -                    Result = ok({OpTable, ST1, Env})          
+      152 +                    Result = ok({OpTable, ST, Env})           
+      153                  ;
+      154                      EvalResult = exception(Exn),
+      155                      ( if univ_to_type(Exn, EvalError) then
+
+● Read(src/froth.m)
+  ⎿  Read 20 lines
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      356  execute_repl(OpTable, ST, Terms, Env0, Env, Stack0, Stack, !IO
+           ) :-
+      357      try_io(eval_terms_wrapper(OpTable, ".", ST, Terms, Env0, S
+           tack0), Result, !IO),
+      358      (
+      359 -        Result = succeeded({Env, Stack})                      
+      359 +        Result = succeeded({_, Env, Stack})                   
+      360      ;
+      361          Result = exception(Exn),
+      362          ( if univ_to_type(Exn, EvalError) then
+
+● Read(src/froth.m)
+  ⎿  Read 25 lines
+
+● Update(src/froth.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      431      Stack0 = [],
+      432      try_io(eval_terms_wrapper(OpTable, ".", ST0, Terms, Env0, 
+           Stack0), Result, !IO),
+      433      (
+      434 -        Result = succeeded({Env, Stack}),                     
+      434 +        Result = succeeded({ST, Env, Stack}),                 
+      435          io.write_string("Froth REPL. Press Ctrl-D to exit.\n",
+            !IO),
+      436 -        repl_loop(OpTable, ST0, Env, Stack, !IO)              
+      436 +        repl_loop(OpTable, ST, Env, Stack, !IO)               
+      437      ;
+      438          Result = exception(Exn),
+      439          ( if univ_to_type(Exn, EvalError) then
+
+● Read(src/froth.m)
+  ⎿  Read 50 lines
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      475      Stack0 = [],
+      476      try_io(eval_terms_wrapper(OpTable, ".", ST, Terms, Env0, S
+           tack0), Result, !IO),
+      477      (
+      478 -        Result = succeeded({_, _})                            
+      478 +        Result = succeeded({_, _, _})                         
+      479      ;
+      480          Result = exception(Exn),
+      481          ( if univ_to_type(Exn, EvalError) then
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      504                  try_io(eval_terms_wrapper(OpTable, BaseDir, ST
+           , Terms, Env0, []),
+      505                      Result, !IO),
+      506                  (
+      507 -                    Result = succeeded({_, _})                
+      507 +                    Result = succeeded({_, _, _})             
+      508                  ;
+      509                      Result = exception(Exn),
+      510                      ( if univ_to_type(Exn, EvalError) then
+
+● Read(src/froth.m)
+  ⎿  Read 35 lines
+
+● Update(src/froth.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      549                  try_io(eval_terms_wrapper(OpTable, BaseDir, ST
+           , Terms, Env0, []),
+      550                      Result, !IO),
+      551                  (
+      552 -                    Result = succeeded({Env, Stack}),         
+      552 +                    Result = succeeded({ST1, Env, Stack}),    
+      553                      io.write_string("Froth REPL. Press Ctrl-D 
+           to exit.\n", !IO),
+      554 -                    repl_loop(OpTable, ST, Env, Stack, !IO)   
+      554 +                    repl_loop(OpTable, ST1, Env, Stack, !IO)  
+      555                  ;
+      556                      Result = exception(Exn),
+      557                      ( if univ_to_type(Exn, EvalError) then
+
+● Now let's build and test:
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth     
+     Making Mercury/int3s/froth.int3
+     Making Mercury/ints/froth.int
+     … +4 lines (ctrl+o to expand)
+
+● Bash(echo 'println' | ./bin/froth 2>&1)
+  ⎿  Loading stdlib from ./lib/stdlib.froth (lib dir: ./lib)
+     Stdlib loaded, env has 3 entries
+     Froth REPL. Press Ctrl-D to exit.
+     > >
+
+● Bash(echo '1 1 + println!' | ./bin/froth 2>&1)
+  ⎿  Loading stdlib from ./lib/stdlib.froth (lib dir: ./lib)
+     Stdlib loaded, env has 3 entries
+     Froth REPL. Press Ctrl-D to exit.
+     … +2 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/add.froth 2>&1)
+  ⎿  Loading stdlib from ./lib/stdlib.froth (lib dir: ./lib)
+     Stdlib loaded, env has 3 entries
+     8
+
+● Excellent! It works! Now let me remove the debug output and run all tests:
+
+● Update(src/froth.m)
+  ⎿  Removed 2 lines                                                     
+      131  
+      132  eval_stdlib(StdlibPath, Result, !IO) :-
+      133      LibDir = dir.dirname(StdlibPath),
+      134 -    io.format("Loading stdlib from %s (lib dir: %s)\n",       
+      135 -        [s(StdlibPath), s(LibDir)], !IO),                     
+      134      io.read_named_file_as_string(StdlibPath, ReadResult, !IO),
+      135      (
+      136          ReadResult = ok(Content),
+
+● Update(src/froth.m)
+  ⎿  Removed 2 lines                                                     
+      145                      map.init, []), EvalResult, !IO),
+      146                  (
+      147                      EvalResult = succeeded({ST, Env, _Stack}),
+      148 -                    io.format("Stdlib loaded, env has %d entri
+          -es\n",                                                        
+      149 -                        [i(map.count(Env))], !IO),            
+      148                      Result = ok({OpTable, ST, Env})
+      149                  ;
+      150                      EvalResult = exception(Exn),
+
+● Bash(make 2>&1 && ./run_tests.sh 2>&1 | tail -20)
+  ⎿  cd src && mmc --make froth     
+     Making Mercury/int3s/froth.int3
+     Making Mercury/ints/froth.int
+     … +25 lines (ctrl+o to expand)
+
+● I see two issues. Let me fix the import test first - the path resolution is wrong:
+
+● Update(tests/import.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      1  ; Test dynamic import operator
+      2  
+      3 -"tests/import_lib.froth" import                                 
+      3 +"import_lib.froth" import                                       
+      4  
+      5  5 double! println!
+      6  10 inc! println!
+
+● Now let me update the library test to use import:
+
+● Read(tests/library.froth)
+  ⎿  Read 5 lines
+
+● Read(tests/lib/core.froth)
+  ⎿  Read 3 lines
+
+● Write(tests/lib/core.froth)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      1 -"a.froth"                                                       
+      2 -"b.froth"                                                       
+      1 +; Core test library                                             
+      2 +"a.froth" import                                                
+      3 +"b.froth" import                                                
+
+● Update(tests/library.froth)
+  ⎿  Added 3 lines, removed 1 line                                       
+      1 -; Test library loading - assumes lib/core.froth was loaded with 
+        --l                                                              
+      1 +; Test library loading                                          
+      2  
+      3 +"lib/core.froth" import                                         
+      4 +                                                                
+      5  5 double! println!
+      6  3 quadruple! println!
+
+● Now let me update the other tests that use .lib files:
+
+● Bash(ls /home/mark/Documents/projects/froth/tests/*.lib)
+  ⎿  /home/mark/Documents/projects/froth/tests/array.lib  
+     /home/mark/Documents/projects/froth/tests/eval.lib
+     /home/mark/Documents/projects/froth/tests/library.lib
+
+● Read(tests/array.froth)
+  ⎿  Read 52 lines
+
+● Read(tests/eval.froth)
+  ⎿  Read 45 lines
+
+● Update(tests/array.froth)
+  ⎿  Added 2 lines                                                       
+      1  ; Test foldl and foldr from array library
+      2  
+      3 +"../lib/core-lib.froth" import                                  
+      4 +                                                                
+      5  ; foldl: left to right
+      6  
+      7  [1 2 3] {println!} foldl!
+
+● Update(tests/eval.froth)
+  ⎿  Added 2 lines                                                       
+      1  ; Test meta-interpreter
+      2  
+      3 +"../lib/core-lib.froth" import                                  
+      4 +                                                                
+      5  ; Helper to run and print result
+      6  
+      7  { /closure /stack
+
+● Now update run_tests.sh to remove .lib handling:
+
+● Update(run_tests.sh)
+  ⎿  Added 1 line, removed 8 lines                                       
+      19          continue
+      20      fi
+      21  
+      22 -    # Check for a .lib file specifying a library to load       
+      23 -    lib_file="$TESTS_DIR/$test_name.lib"                       
+      24 -    if [ -f "$lib_file" ]; then                                
+      25 -        lib_path=$(cat "$lib_file" | tr -d '\n')               
+      26 -        actual=$("$FROTH" -l "$lib_path" "$test_file" 2>&1) || 
+         -true                                                           
+      27 -    else                                                       
+      28 -        actual=$("$FROTH" "$test_file" 2>&1) || true           
+      29 -    fi                                                         
+      22 +    actual=$("$FROTH" "$test_file" 2>&1) || true               
+      23      expected=$(cat "$expected_file")
+      24  
+      25      if [ "$actual" = "$expected" ]; then
+
+● Bash(rm /home/mark/Documents/projects/froth/tests/*.lib && ./run_tests.sh
+      2>&1)
+  ⎿  PASS: add                     
+     PASS: apply_op
+     PASS: arithmetic
+     … +39 lines (ctrl+o to expand)
+
+● All 39 tests pass. Let me update the todo list:
+
+● All tasks completed. Here's a summary of the changes:
+
+  Changes to eval.m:
+  - Added base_dir parameter to eval_terms and all related predicates
+  - Updated eval_import to resolve relative paths using base_dir
+  - New base directory is computed from the imported file's location
+
+  Changes to froth.m:
+  - Removed -l option and all library loading code (run_with_library, load_library, load_library_with_state, extract_string_tokens, load_files, run_with_state)
+  - Simplified stdlib loading to just evaluate stdlib.froth as normal Froth code with import statements
+  - Updated eval_terms_wrapper to return the updated string table (fixing the string interning issue)
+  - Removed type load_result (replaced with eval_result)
+
+  Changes to lib/:
+  - stdlib.froth now uses "io.froth" import instead of just listing filenames
+  - core-lib.froth similarly uses import statements
+
+  Changes to tests/:
+  - Updated import.froth to use relative path "import_lib.froth"
+  - Updated library.froth to use "lib/core.froth" import
+  - Updated array.froth and eval.froth to use "../lib/core-lib.froth" import
+  - Updated tests/lib/core.froth to use import statements
+  - Removed all .lib files
+  - Simplified run_tests.sh to remove .lib file handling
+
+  The interface is now cleaner: stdlib loads automatically (with -n to skip it), and any additional libraries use explicit import statements in the Froth code.
+
+> In our tests directory, some libraries are in a lib subdirectory, while 
+others (such as `import_lib`) are not. They are better in the subdirectory 
+so they don't need to be skipped by the test runner. 
+
+● Good point. Let me move import_lib.froth into tests/lib/ and update the import path:
+
+● Bash(mv /home/mark/Documents/projects/froth/tests/import_lib.froth
+      /home/mark/Documents/projects/froth/tests/lib/)
+  ⎿  (No content)
+
+● Update(tests/import.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      1  ; Test dynamic import operator
+      2  
+      3 -"import_lib.froth" import                                       
+      3 +"lib/import_lib.froth" import                                   
+      4  
+      5  5 double! println!
+      6  10 inc! println!
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  PASS: add                     
+     PASS: apply_op
+     PASS: arithmetic
+     … +38 lines (ctrl+o to expand)
+
+● All 39 tests pass with no skips.
+
+> Currently we have `lib/stdlib.froth` and `lib/core-lib.froth`, but we 
+should just put all lib files in `stdlib` and delete `core-lib` 
+
+● Let me consolidate the libraries into stdlib.froth:
+
+● Update(lib/stdlib.froth)
+  ⎿  Added 2 lines                                                       
+      1  ; Froth Standard Library
+      2  
+      3  "io.froth" import
+      4 +"array.froth" import                                            
+      5 +"eval.froth" import                                             
+
+● Now update the tests that imported core-lib.froth - they no longer need the import since stdlib now includes everything:
+
+● Update(tests/array.froth)
+  ⎿  Removed 2 lines                                                     
+      1  ; Test foldl and foldr from array library
+      2  
+      3 -"../lib/core-lib.froth" import                                  
+      4 -                                                                
+      3  ; foldl: left to right
+      4  
+      5  [1 2 3] {println!} foldl!
+
+● Update(tests/eval.froth)
+  ⎿  Removed 2 lines                                                     
+      1  ; Test meta-interpreter
+      2  
+      3 -"../lib/core-lib.froth" import                                  
+      4 -                                                                
+      3  ; Helper to run and print result
+      4  
+      5  { /closure /stack
+
+● Bash(rm /home/mark/Documents/projects/froth/lib/core-lib.froth &&
+      ./run_tests.sh 2>&1)
+  ⎿  Error: Exit code 1
+     PASS: add
+     PASS: apply_op
+     PASS: arithmetic
+     PASS: arity
+     PASS: array
+     PASS: array_ops
+     PASS: binder
+     PASS: closure
+     PASS: comments
+     … +170 lines (ctrl+o to see all)
+
+● The env and write tests are printing the environment which now includes all the stdlib functions. Let me check what those tests are doing:
+
+● Read(tests/env.froth)
+  ⎿  Read 13 lines
+
+● Read(tests/write.froth)
+  ⎿  Read 29 lines
+
+● These tests print the environment or closures which now include all stdlib definitions. Since they use writeln!, they need io.froth, but not the full stdlib. Let me update them to run with -n and explicitly import only io.froth:
+
+● Update(tests/env.froth)
+  ⎿  Added 3 lines                                                       
+      1  ; Test env operator
+      2 +; Run with -n to avoid stdlib pollution in env output           
+      3  
+      4 +"../lib/io.froth" import                                        
+      5 +                                                                
+      6  ; Create some bindings
+      7  
+      8  42 /x "hello" /y
+
+● Update(tests/write.froth)
+  ⎿  Added 3 lines                                                       
+      1  ; Test write operator - outputs executable code
+      2 +; Run with -n to avoid stdlib pollution in closure output       
+      3  
+      4 +"../lib/io.froth" import                                        
+      5 +                                                                
+      6  ; Integers
+      7  
+      8  42 writeln!
+
+● Now I need to update the test runner to support per-test options. Let me add support for .opts files:
+
+● Update(run_tests.sh)
+  ⎿  Added 8 lines, removed 1 line                                       
+      19          continue
+      20      fi
+      21  
+      22 -    actual=$("$FROTH" "$test_file" 2>&1) || true               
+      22 +    # Check for per-test options file                          
+      23 +    opts_file="$TESTS_DIR/$test_name.opts"                     
+      24 +    if [ -f "$opts_file" ]; then                               
+      25 +        opts=$(cat "$opts_file" | tr -d '\n')                  
+      26 +        actual=$("$FROTH" $opts "$test_file" 2>&1) || true     
+      27 +    else                                                       
+      28 +        actual=$("$FROTH" "$test_file" 2>&1) || true           
+      29 +    fi                                                         
+      30      expected=$(cat "$expected_file")
+      31  
+      32      if [ "$actual" = "$expected" ]; then
+
+● Write(tests/env.opts)
+  ⎿  Wrote 2 lines to tests/env.opts
+      1 -n
+
+● Write(tests/write.opts)
+  ⎿  Wrote 2 lines to tests/write.opts
+      1 -n
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  Error: Exit code 1
+     PASS: add
+     PASS: apply_op
+     PASS: arithmetic
+     PASS: arity
+     PASS: array
+     PASS: array_ops
+     PASS: binder
+     PASS: closure
+     PASS: comments
+     … +66 lines (ctrl+o to see all)
+
+● The path resolution is wrong when running with -n. The BaseDir should be the file's directory, not ".". Let me fix the no-stdlib execution paths:
+
+● Read(src/froth.m)
+  ⎿  Read 50 lines
+
+● Update(src/froth.m)
+  ⎿  Added 5 lines, removed 4 lines                                      
+      215  :- pred run_file_no_stdlib(string::in, io::di, io::uo) is cc_m
+           ulti.
+      216  
+      217  run_file_no_stdlib(Filename, !IO) :-
+      218 +    BaseDir = dir.dirname(Filename),                          
+      219      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      220      (
+      221          ReadResult = ok(Input),
+      221 -        run_no_stdlib(Input, !IO)                             
+      222 +        run_no_stdlib(BaseDir, Input, !IO)                    
+      223      ;
+      224          ReadResult = error(Error),
+      225          io.format("Error reading '%s': %s\n",
+     ...
+      227          io.set_exit_status(1, !IO)
+      228      ).
+      229  
+      229 -:- pred run_no_stdlib(string::in, io::di, io::uo) is cc_multi.
+      230 +:- pred run_no_stdlib(string::in, string::in, io::di, io::uo) 
+          +is cc_multi.                                                  
+      231  
+      231 -run_no_stdlib(Input, !IO) :-                                  
+      232 +run_no_stdlib(BaseDir, Input, !IO) :-                         
+      233      init_tables(ST0, OpTable),
+      234      lexer.tokenize(Input, ST0, LexResult),
+      235      (
+     ...
+      237          parser.parse(Tokens, ParseResult),
+      238          (
+      239              ParseResult = ok(Terms),
+      239 -            execute(OpTable, ST, Terms, !IO)                  
+      240 +            execute(OpTable, BaseDir, ST, Terms, !IO)         
+      241          ;
+      242              ParseResult = error(ParseError),
+      243              report_parse_error(ParseError, !IO),
+
+● Now I need to update execute to take BaseDir, and also fix run_file_then_repl_no_stdlib:
+
+● Read(src/froth.m)
+  ⎿  Read 40 lines
+
+● Update(src/froth.m)
+  ⎿  Added 5 lines, removed 4 lines                                      
+      252  :- pred run_file_then_repl_no_stdlib(string::in, io::di, io::u
+           o) is cc_multi.
+      253  
+      254  run_file_then_repl_no_stdlib(Filename, !IO) :-
+      255 +    BaseDir = dir.dirname(Filename),                          
+      256      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      257      (
+      258          ReadResult = ok(Input),
+      258 -        run_then_repl_no_stdlib(Input, !IO)                   
+      259 +        run_then_repl_no_stdlib(BaseDir, Input, !IO)          
+      260      ;
+      261          ReadResult = error(Error),
+      262          io.format("Error reading '%s': %s\n",
+     ...
+      264          io.set_exit_status(1, !IO)
+      265      ).
+      266  
+      266 -:- pred run_then_repl_no_stdlib(string::in, io::di, io::uo) is
+          - cc_multi.                                                    
+      267 +:- pred run_then_repl_no_stdlib(string::in, string::in, io::di
+          +, io::uo) is cc_multi.                                        
+      268  
+      268 -run_then_repl_no_stdlib(Input, !IO) :-                        
+      269 +run_then_repl_no_stdlib(BaseDir, Input, !IO) :-               
+      270      init_tables(ST0, OpTable),
+      271      lexer.tokenize(Input, ST0, LexResult),
+      272      (
+     ...
+      274          parser.parse(Tokens, ParseResult),
+      275          (
+      276              ParseResult = ok(Terms),
+      276 -            execute_then_repl(OpTable, ST, Terms, !IO)        
+      277 +            execute_then_repl(OpTable, BaseDir, ST, Terms, !IO
+          +)                                                             
+      278          ;
+      279              ParseResult = error(ParseError),
+      280              report_parse_error(ParseError, !IO),
+
+● Read(src/froth.m)
+  ⎿  Read 60 lines
+
+● Update(src/froth.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      421          io.set_exit_status(1, !IO)
+      422      ).
+      423  
+      424 -:- pred execute_then_repl(operator_table::in, string_table::in
+          -,                                                             
+      424 +:- pred execute_then_repl(operator_table::in, string::in, stri
+          +ng_table::in,                                                 
+      425      list(term)::in, io::di, io::uo) is cc_multi.
+      426  
+      427 -execute_then_repl(OpTable, ST0, Terms, !IO) :-                
+      427 +execute_then_repl(OpTable, BaseDir, ST0, Terms, !IO) :-       
+      428      Env0 = map.init,
+      429      Stack0 = [],
+      430 -    try_io(eval_terms_wrapper(OpTable, ".", ST0, Terms, Env0, 
+          -Stack0), Result, !IO),                                        
+      430 +    try_io(eval_terms_wrapper(OpTable, BaseDir, ST0, Terms, En
+          +v0, Stack0), Result, !IO),                                    
+      431      (
+      432          Result = succeeded({ST, Env, Stack}),
+      433          io.write_string("Froth REPL. Press Ctrl-D to exit.\n",
+            !IO),
+
+● Update(src/froth.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      465          io.set_exit_status(1, !IO)
+      466      ).
+      467  
+      468 -:- pred execute(operator_table::in, string_table::in, list(ter
+          -m)::in,                                                       
+      468 +:- pred execute(operator_table::in, string::in, string_table::
+          +in, list(term)::in,                                           
+      469      io::di, io::uo) is cc_multi.
+      470  
+      471 -execute(OpTable, ST, Terms, !IO) :-                           
+      471 +execute(OpTable, BaseDir, ST, Terms, !IO) :-                  
+      472      Env0 = map.init,
+      473      Stack0 = [],
+      474 -    try_io(eval_terms_wrapper(OpTable, ".", ST, Terms, Env0, S
+          -tack0), Result, !IO),                                         
+      474 +    try_io(eval_terms_wrapper(OpTable, BaseDir, ST, Terms, Env
+          +0, Stack0), Result, !IO),                                     
+      475      (
+      476          Result = succeeded({_, _, _})
+      477      ;
+
+● Search(pattern: "execute\(OpTable", path: "src/froth.m", output_mode:
+        "content")
+  ⎿  Found 3 lines (ctrl+o to expand)
+
+● Read(src/froth.m)
+  ⎿  Read 25 lines
+
+● Search(pattern: "\brun\(", path: "src/froth.m", output_mode: "content")
+  ⎿  Found 3 lines (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+> /export transcript16.txt 
+  ⎿  Conversation exported to: transcript16.txt
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀   claude-opus-4-5-20251101 · 199k/200k tokens (100%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 74 tokens (0.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 136.3k tokens (68.2%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 1k (0.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 19 tokens
+     └ MERCURY.md: 55 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+

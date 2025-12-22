@@ -1,0 +1,2232 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read tests/env.expected (4 lines)
+  ⎿  Read ../../../../../tmp/env.expected (4 lines)
+  ⎿  Read tests/write.expected (13 lines)
+  ⎿  Read ../../../../../tmp/write.expected (13 lines)
+  ⎿  Referenced file src/froth.m
+
+> Let's think about how we might import modules. One challenge is that 
+running the lexer will require updating the string table, and may invalidate
+ any interned values. Do you have any suggestions for how to deal with this?
+ 
+
+● Good question. Let me think through the design considerations:
+
+  Why existing indices should remain valid:
+  The intern table is append-only - when we intern a new string, we either:
+  1. Find it already exists and return the existing index
+  2. Add it at the end and return the new index
+
+  So existing interned values (stored as indices) remain valid because we never remove or reorganize entries.
+
+  The real challenge - threading the updated table:
+  The issue is making sure the updated intern table flows back properly after an import. Currently !IT is threaded through lexer and eval. For dynamic imports, we'd need:
+
+  "module.froth" import  ; must return updated IT for continued evaluation
+
+  Potential approaches:
+
+  1. Current threading (should work): If import is an operator that:
+    - Takes current IT
+    - Lexes module (updating IT)
+    - Evals module (updating IT further)
+    - Returns updated IT for continued evaluation
+
+  This matches the existing pattern.
+  2. Separate compilation: Pre-lex all imports before evaluation starts. This guarantees a stable table during eval, but loses dynamic import capability.
+  3. Content-addressed symbols: Instead of table indices, use hashes of the string content. More expensive but completely stable.
+
+  My suggestion:
+  The current threading approach should work fine. The key invariant is: any value created with intern table version N is valid for all versions >= N (since we only append).
+
+  Want me to look at how load_library currently handles this to verify it's properly threading the intern table through?
+
+> yes, let's check 
+
+● Read(src/froth.m)
+  ⎿  Read 760 lines
+
+● Let me also check how eval_terms handles the intern table:
+
+● Read(src/eval.m)
+  ⎿  Read 162 lines
+
+● This is revealing. Looking at the key points:
+
+  Current Design (lines 17, 20-21 in eval.m):
+  % InternTable is read-only (all strings/names known at lex time).
+  :- pred eval_terms(intern_table::in, ...)
+
+  The intern table is explicitly designed as read-only during evaluation. This works because:
+  1. load_library lexes all files before evaluating any of them
+  2. The complete IT from lexing is then passed to evaluation
+  3. No new interning happens during eval
+
+  Threading through load_files (froth.m:542-556):
+  load_files(LibDir, [File | Files], IT0, Env0, Stack0, Result, !IO) :-
+      ...
+      lexer.tokenize(Content, IT0, LexResult),  % IT0 -> IT1
+      ...
+      eval_terms_wrapper(IT1, Terms, Env0, Stack0)  % uses IT1
+      ...
+      load_files(LibDir, Files, IT1, Env1, Stack1, Result, !IO)  % passes IT1 forward
+
+  The Problem for Dynamic Import:
+  If you want "module.froth" import to work during evaluation, you'd need to:
+  1. Lex the new file (updating IT)
+  2. Return the updated IT from eval so subsequent code can use new symbols
+
+  But eval_terms takes intern_table::in - no way to return an updated table.
+
+  Possible approaches:
+
+  | Approach               | Pros                          | Cons                                                |
+  |------------------------|-------------------------------|-----------------------------------------------------|
+  | Thread IT through eval | Clean, enables dynamic import | Significant refactor (every pred signature changes) |
+  | Pre-collect imports    | Simple, no runtime cost       | No dynamic/conditional imports                      |
+  | Store IT in IO state   | Minimal signature changes     | Impure, harder to reason about                      |
+  | Content-addressed IDs  | Completely immutable          | Hashing overhead on every lookup                    |
+
+  My recommendation: Thread IT through eval if you want dynamic imports. The refactor is mechanical - change intern_table::in to !IT in eval_terms, eval_term, eval_apply, etc. Want me to explore what that would look like?
+
+> I think we should still pass the operator table in as a parameter (not 
+threaded), since the operator table depends on the engine and does not 
+change. So the engine will still need to intern the operator names and 
+initialize the operator table, but after that we only need to thread through
+ the string table (along with the environment and data stack). Does that 
+make sense? 
+
+● Yes, that makes sense. Currently intern_table bundles both together:
+
+  :- type intern_table
+      --->    intern_table(
+                  it_strings   :: string_table,   % grows with imports
+                  it_operators :: operator_table  % fixed at startup
+              ).
+
+  Your proposal separates them:
+
+  1. Operator table (::in) - initialized once with pre-interned operator names, never changes
+  2. String table (!ST) - threaded through, grows when lexing new code
+
+  This is cleaner because:
+  - Operators are engine-defined, not user-defined
+  - Operator string_ids are stable (interned at startup before any user code)
+  - New imports only add to the string table, never touch operator table
+  - Makes the contract explicit: operators are static, strings are dynamic
+
+  The flow would be:
+  1. Engine startup: create empty string table, intern operator names, build operator table
+  2. Lex/eval: thread string table through, pass operator table as read-only
+  3. Import: lex new file (updates string table), eval new code (uses updated table)
+
+  Should I sketch out what the type and signature changes would look like? The main changes would be:
+  - Split intern_table into operator_table and string_table
+  - Update eval_terms signature to thread !ST
+  - Update lexer to work with just string_table
+
+> yes, let's see that 
+
+● Read(src/types.m)
+  ⎿  Read 254 lines
+
+● Let me also check the lexer and operators initialization:
+
+● Read(src/lexer.m)
+  ⎿  Read 601 lines
+
+● Search(pattern: "init_operators", path: "src/operators.m", output_mode:
+        "content")
+  ⎿  Found 69 lines (ctrl+o to expand)
+
+● Now I have the full picture. Here's a sketch of the changes:
+
+  types.m
+
+  % Keep these as-is:
+  :- type string_table.          % already defined
+  :- type operator_table == map(string_id, operator_info).  % already defined
+
+  % Remove intern_table, or make it just a convenience record for startup:
+  % (evaluation only needs the two tables separately)
+
+  % Update format_error to take string_table:
+  :- func format_error(string_table, eval_error) = string.
+
+  lexer.m
+
+  % Change lex_state to use just string_table:
+  :- type lex_state
+      --->    lex_state(
+                  ls_input    :: string,
+                  ls_pos      :: int,
+                  ls_line     :: int,
+                  ls_column   :: int,
+                  ls_strings  :: string_table   % was: ls_intern :: intern_table
+              ).
+
+  % Update result and signature:
+  :- type lex_result
+      --->    ok(list(located(token)), string_table)  % was: intern_table
+      ;       error(lex_error).
+
+  :- pred tokenize(string::in, string_table::in, lex_result::out) is det.
+
+  operators.m
+
+  % Separate initialization:
+  :- pred init_operators(string_table::in, string_table::out,
+      operator_table::out) is det.
+
+  % eval_operator now takes both separately:
+  :- pred eval_operator(operator_table::in, string_table::in, operator::in,
+      env::in, stack::in, stack::out, io::di, io::uo) is det.
+
+  eval.m
+
+  % Thread string_table, pass operator_table as read-only:
+  :- pred eval_terms(operator_table::in, list(term)::in,
+      env::in, env::out, stack::in, stack::out,
+      string_table::in, string_table::out, io::di, io::uo) is det.
+
+  :- pred eval_term(operator_table::in, term::in,
+      env::in, env::out, stack::in, stack::out,
+      string_table::in, string_table::out, io::di, io::uo) is det.
+
+  % etc. for eval_apply, eval_identifier...
+
+  froth.m - Initialization
+
+  % Current:
+  init_intern_table = IT :-
+      operators.init_operators(empty_intern_table, IT).
+
+  % New:
+  :- pred init_tables(string_table::out, operator_table::out) is det.
+  init_tables(ST, OpTable) :-
+      init_operators(empty_string_table, ST, OpTable).
+
+  froth.m - load_files (key change)
+
+  % Current threading pattern:
+  load_files(LibDir, [File | Files], IT0, Env0, Stack0, Result, !IO) :-
+      ...
+      lexer.tokenize(Content, IT0, LexResult),
+      LexResult = ok(Tokens, IT1),
+      ...
+      eval_terms_wrapper(IT1, Terms, Env0, Stack0),
+      ...
+      load_files(LibDir, Files, IT1, Env1, Stack1, Result, !IO).
+
+  % New pattern - OpTable passed through unchanged, ST threaded:
+  load_files(LibDir, [File | Files], OpTable, ST0, Env0, Stack0, Result, !IO) :-
+      ...
+      lexer.tokenize(Content, ST0, LexResult),
+      LexResult = ok(Tokens, ST1),
+      ...
+      eval_terms(OpTable, Terms, Env0, Env1, Stack0, Stack1, ST1, ST2, !IO),
+      ...
+      load_files(LibDir, Files, OpTable, ST2, Env1, Stack1, Result, !IO).
+
+  Summary of what's static vs threaded:
+
+  | Component      | Mode   | Reason                  |
+  |----------------|--------|-------------------------|
+  | operator_table | ::in   | Fixed at engine startup |
+  | string_table   | !ST    | Grows with imports      |
+  | env            | !Env   | User bindings change    |
+  | stack          | !Stack | Data stack changes      |
+  | io             | !IO    | Side effects            |
+
+  Want me to implement these changes?
+
+> yes, let's do it 
+
+● Update(src/types.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      135      ;       index_out_of_bounds(int, int)   % Index, array siz
+           e
+      136      ;       io_error(string, string, string).  % Operation, fi
+           lename, message
+      137  
+      138 -    % format_error(InternTable, Error) = Message:             
+      138 +    % format_error(StringTable, Error) = Message:             
+      139      % Convert an eval_error to a human-readable message.
+      140      %
+      141 -:- func format_error(intern_table, eval_error) = string.      
+      141 +:- func format_error(string_table, eval_error) = string.      
+      142  
+      143  %-------------------------------------------------------------
+           ----------%
+      144  % Stack operations
+
+● Update(src/types.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      219  format_error(_, type_error(Expected, Actual)) =
+      220      string.format("type error: expected %s, got %s",
+      221          [s(Expected), s(value_type_name(Actual))]).
+      222 -format_error(IT, undefined_name(NameId)) =                    
+      223 -    string.format("undefined name: %s", [s(lookup_string(IT ^ 
+          -it_strings, NameId))]).                                       
+      222 +format_error(ST, undefined_name(NameId)) =                    
+      223 +    string.format("undefined name: %s", [s(lookup_string(ST, N
+          +ameId))]).                                                    
+      224  format_error(_, index_out_of_bounds(Index, Size)) =
+      225      string.format("index out of bounds: %d (array size: %d)", 
+           [i(Index), i(Size)]).
+      226  format_error(_, io_error(Op, Filename, Msg)) =
+
+● Update(src/lexer.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      43      ;       invalid_escape_sequence(position, char).
+      44  
+      45  :- type lex_result
+      46 -    --->    ok(list(located(token)), intern_table)             
+      46 +    --->    ok(list(located(token)), string_table)             
+      47      ;       error(lex_error).
+      48  
+      49 -    % tokenize(Input, InternTable, Result):                    
+      49 +    % tokenize(Input, StringTable, Result):                    
+      50      % Tokenize the input string into a list of located tokens.
+      51 -    % Takes initial intern table (use empty_intern_table for fr
+         -esh start).                                                    
+      51 +    % Takes initial string table (use empty_string_table for fr
+         +esh start).                                                    
+      52      %
+      53 -:- pred tokenize(string::in, intern_table::in, lex_result::out)
+         - is det.                                                       
+      53 +:- pred tokenize(string::in, string_table::in, lex_result::out)
+         + is det.                                                       
+      54  
+      55  %--------------------------------------------------------------
+          ---------%
+      56  
+
+● Update(src/lexer.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      67                  ls_pos      :: int,         % Current position 
+          in string
+      68                  ls_line     :: int,
+      69                  ls_column   :: int,
+      70 -                ls_intern   :: intern_table                    
+      70 +                ls_strings  :: string_table                    
+      71              ).
+      72  
+      73      % Internal result type to avoid ambiguity with other ok/err
+          or types.
+
+● Update(src/lexer.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      77  
+      78  %--------------------------------------------------------------
+          ---------%
+      79  
+      80 -tokenize(Input, InternTable, Result) :-                        
+      81 -    State0 = lex_state(Input, 0, 1, 1, InternTable),           
+      80 +tokenize(Input, StringTable, Result) :-                        
+      81 +    State0 = lex_state(Input, 0, 1, 1, StringTable),           
+      82      tokenize_loop(State0, [], Result).
+      83  
+      84  :- pred tokenize_loop(lex_state::in, list(located(token))::in,
+
+● Update(src/lexer.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      89      (
+      90          SkipResult = ok(State1),
+      91          ( if at_end(State1) then
+      92 -            Result = ok(list.reverse(RevTokens), State1 ^ ls_in
+         -tern)                                                          
+      92 +            Result = ok(list.reverse(RevTokens), State1 ^ ls_st
+         +rings)                                                         
+      93          else
+      94              Pos = position(State1 ^ ls_line, State1 ^ ls_column
+          ),
+      95              read_token(State1, Pos, TokenResult),
+
+● Update(src/lexer.m)
+  ⎿  Added 2 lines, removed 3 lines                                      
+      274  read_text_name(State0, Result) :-
+      275      read_text_name_chars(State0, Chars, State1),
+      276      NameStr = string.from_char_list(Chars),
+      277 -    IT0 = State1 ^ ls_intern,                                 
+      278 -    intern_string(NameStr, NameId, IT0 ^ it_strings, NewString
+          -s),                                                           
+      279 -    State2 = State1 ^ ls_intern := (IT0 ^ it_strings := NewStr
+          -ings),                                                        
+      277 +    intern_string(NameStr, NameId, State1 ^ ls_strings, NewStr
+          +ings),                                                        
+      278 +    State2 = State1 ^ ls_strings := NewStrings,               
+      279      Result = ok({name(NameId), State2}).
+      280  
+      281  :- pred read_text_name_chars(lex_state::in, list(char)::out,
+
+● Update(src/lexer.m)
+  ⎿  Added 2 lines, removed 3 lines                                      
+      301  read_graphical_name(State0, Result) :-
+      302      read_graphical_chars(State0, Chars, State1),
+      303      NameStr = string.from_char_list(Chars),
+      304 -    IT0 = State1 ^ ls_intern,                                 
+      305 -    intern_string(NameStr, NameId, IT0 ^ it_strings, NewString
+          -s),                                                           
+      306 -    State2 = State1 ^ ls_intern := (IT0 ^ it_strings := NewStr
+          -ings),                                                        
+      304 +    intern_string(NameStr, NameId, State1 ^ ls_strings, NewStr
+          +ings),                                                        
+      305 +    State2 = State1 ^ ls_strings := NewStrings,               
+      306      Result = ok({name(NameId), State2}).
+      307  
+      308  :- pred read_graphical_chars(lex_state::in, list(char)::out,
+
+● Update(src/lexer.m)
+  ⎿  Added 4 lines, removed 6 lines                                      
+      339      ( if peek_char(State0, Char), is_text_name_start(Char) the
+           n
+      340          read_text_name_chars(State0, Chars, State1),
+      341          NameStr = string.from_char_list(Chars),
+      342 -        IT0 = State1 ^ ls_intern,                             
+      343 -        intern_string(NameStr, NameId, IT0 ^ it_strings, NewSt
+          -rings),                                                       
+      344 -        State2 = State1 ^ ls_intern := (IT0 ^ it_strings := Ne
+          -wStrings),                                                    
+      342 +        intern_string(NameStr, NameId, State1 ^ ls_strings, Ne
+          +wStrings),                                                    
+      343 +        State2 = State1 ^ ls_strings := NewStrings,           
+      344          Result = ok({slash_name(NameId), State2})
+      345      else if peek_char(State0, Char), is_graphical_char(Char) t
+           hen
+      346          read_graphical_chars(State0, Chars, State1),
+      347          NameStr = string.from_char_list(Chars),
+      349 -        IT0 = State1 ^ ls_intern,                             
+      350 -        intern_string(NameStr, NameId, IT0 ^ it_strings, NewSt
+          -rings),                                                       
+      351 -        State2 = State1 ^ ls_intern := (IT0 ^ it_strings := Ne
+          -wStrings),                                                    
+      348 +        intern_string(NameStr, NameId, State1 ^ ls_strings, Ne
+          +wStrings),                                                    
+      349 +        State2 = State1 ^ ls_strings := NewStrings,           
+      350          Result = ok({slash_name(NameId), State2})
+      351      else
+      352          % Just a slash followed by non-name, treat as junk
+
+● Update(src/lexer.m)
+  ⎿  Added 2 lines, removed 3 lines                                      
+      431      (
+      432          StringResult = ok(State1),
+      433          String = string.from_char_list(Chars),
+      434 -        IT0 = State1 ^ ls_intern,                             
+      435 -        intern_string(String, Id, IT0 ^ it_strings, NewStrings
+          -),                                                            
+      436 -        State2 = State1 ^ ls_intern := (IT0 ^ it_strings := Ne
+          -wStrings),                                                    
+      434 +        intern_string(String, Id, State1 ^ ls_strings, NewStri
+          +ngs),                                                         
+      435 +        State2 = State1 ^ ls_strings := NewStrings,           
+      436          Result = ok({string(Id), State2})
+      437      ;
+      438          StringResult = error(Error),
+
+● Read(src/operators.m)
+  ⎿  Read 1054 lines
+
+● This is a significant file. Let me update it in chunks. First, the interface:
+
+● Update(src/operators.m)
+  ⎿  Added 9 lines, removed 6 lines                                      
+      11  
+      12  %--------------------------------------------------------------
+          ---------%
+      13  
+      14 -    % init_operators(!IT):                                     
+      14 +    % init_operators(!ST, OpTable):                            
+      15      % Initialize the operator table by interning all operator n
+          ames.
+      16 +    % Returns the operator table and updated string table.     
+      17      %
+      17 -:- pred init_operators(intern_table::in, intern_table::out) is 
+         -det.                                                           
+      18 +:- pred init_operators(string_table::in, string_table::out,    
+      19 +    operator_table::out) is det.                               
+      20  
+      21      % operator(Name, Op):
+      22      % Map a name to an operator.
+      23      %
+      24  :- pred operator(string::in, operator::out) is semidet.
+      25  
+      24 -    % eval_operator(IT, Op, Env, !Stack, !IO):                 
+      25 -    % Execute an operator. Env is read-only (for the env operat
+         -or).                                                           
+      26 +    % eval_operator(OpTable, ST, Op, Env, !Stack, !IO):        
+      27 +    % Execute an operator. OpTable and ST are read-only.       
+      28 +    % Env is read-only (for the env operator).                 
+      29      %
+      27 -:- pred eval_operator(intern_table::in, operator::in, env::in, 
+      28 -    stack::in, stack::out, io::di, io::uo) is det.             
+      30 +:- pred eval_operator(operator_table::in, string_table::in, ope
+         +rator::in,                                                     
+      31 +    env::in, stack::in, stack::out, io::di, io::uo) is det.    
+      32  
+      33      % Individual operator implementations.
+      34      %
+
+● Now update the individual operator signatures:
+
+● Update(src/operators.m)
+  ⎿  Added 5 lines, removed 5 lines                                      
+      32  
+      33      % Individual operator implementations.
+      34      %
+      35 -:- pred operator_print(intern_table::in, stack::in, stack::out,
+      35 +:- pred operator_print(string_table::in, stack::in, stack::out,
+      36      io::di, io::uo) is det.
+      37  :- pred operator_env(env::in, stack::in, stack::out) is det.
+      38  :- pred operator_add(stack::in, stack::out) is det.
+     ...
+      50  :- pred operator_cons(stack::in, stack::out) is det.
+      51  :- pred operator_fst(stack::in, stack::out) is det.
+      52  :- pred operator_snd(stack::in, stack::out) is det.
+      53 -:- pred operator_write(intern_table::in, stack::in, stack::out,
+      53 +:- pred operator_write(string_table::in, stack::in, stack::out,
+      54      io::di, io::uo) is det.
+      55 -:- pred operator_fwrite(intern_table::in, stack::in, stack::out
+         -,                                                              
+      55 +:- pred operator_fwrite(string_table::in, stack::in, stack::out
+         +,                                                              
+      56      io::di, io::uo) is det.
+      57  :- pred operator_empty(stack::in, stack::out) is det.
+      58  :- pred operator_keys(stack::in, stack::out) is det.
+     ...
+      76  :- pred operator_id_to_string(stack::in, stack::out) is det.
+      77  :- pred operator_id_to_ident(stack::in, stack::out) is det.
+      78  :- pred operator_id_to_binder(stack::in, stack::out) is det.
+      79 -:- pred operator_is_operator(intern_table::in, stack::in, stack
+         -::out) is det.                                                 
+      80 -:- pred operator_arity_op(intern_table::in, stack::in, stack::o
+         -ut) is det.                                                    
+      79 +:- pred operator_is_operator(operator_table::in, stack::in, sta
+         +ck::out) is det.                                               
+      80 +:- pred operator_arity_op(operator_table::in, stack::in, stack:
+         +:out) is det.                                                  
+      81  :- pred operator_stack(stack::in, stack::out) is det.
+      82  
+      83  %--------------------------------------------------------------
+          ---------%
+
+● Now update init_operators implementation:
+
+● Update(src/operators.m)
+  ⎿  Added 5 lines, removed 8 lines                                      
+      197  % init_operators: intern all operator names and build the oper
+           ator table
+      198  %-------------------------------------------------------------
+           ----------%
+      199  
+      200 -init_operators(!IT) :-                                        
+      200 +init_operators(!ST, OpTable) :-                               
+      201      OpNames = [
+      202          "print", "env",
+      203          "+", "-", "*",
+     ...
+      212          "idToString", "idToIdent", "idToBinder", "isOperator",
+            "arity",
+      213          "stack"
+      214      ],
+      215 -    list.foldl2(intern_operator, OpNames, map.init, OpTable, !
+          -IT),                                                          
+      216 -    !:IT = !.IT ^ it_operators := OpTable.                    
+      215 +    list.foldl2(intern_operator, OpNames, map.init, OpTable, !
+          +ST).                                                          
+      216  
+      217  :- pred intern_operator(string::in, operator_table::in, operat
+           or_table::out,
+      219 -    intern_table::in, intern_table::out) is det.              
+      218 +    string_table::in, string_table::out) is det.              
+      219  
+      221 -intern_operator(Name, !OpTable, !IT) :-                       
+      220 +intern_operator(Name, !OpTable, !ST) :-                       
+      221      ( if operator(Name, Op) then
+      223 -        Strings0 = !.IT ^ it_strings,                         
+      224 -        intern_string(Name, Id, Strings0, Strings),           
+      225 -        !:IT = !.IT ^ it_strings := Strings,                  
+      222 +        intern_string(Name, Id, !ST),                         
+      223          Arity = operator_arity(Op),
+      224          map.det_insert(Id, operator_info(Op, Arity), !OpTable)
+      225      else
+
+● Now update eval_operator dispatch:
+
+● Update(src/operators.m)
+  ⎿  Added 6 lines, removed 6 lines                                      
+      230  % eval_operator: dispatch to operator implementation
+      231  %-------------------------------------------------------------
+           ----------%
+      232  
+      233 -eval_operator(IT, Op, Env, !Stack, !IO) :-                    
+      233 +eval_operator(OpTable, ST, Op, Env, !Stack, !IO) :-           
+      234      (
+      235          Op = op_print,
+      236 -        operator_print(IT, !Stack, !IO)                       
+      236 +        operator_print(ST, !Stack, !IO)                       
+      237      ;
+      238          Op = op_env,
+      239          operator_env(Env, !Stack)
+     ...
+      284          operator_snd(!Stack)
+      285      ;
+      286          Op = op_write,
+      287 -        operator_write(IT, !Stack, !IO)                       
+      287 +        operator_write(ST, !Stack, !IO)                       
+      288      ;
+      289          Op = op_fwrite,
+      290 -        operator_fwrite(IT, !Stack, !IO)                      
+      290 +        operator_fwrite(ST, !Stack, !IO)                      
+      291      ;
+      292          Op = op_empty,
+      293          operator_empty(!Stack)
+     ...
+      356          operator_id_to_binder(!Stack)
+      357      ;
+      358          Op = op_is_operator,
+      359 -        operator_is_operator(IT, !Stack)                      
+      359 +        operator_is_operator(OpTable, !Stack)                 
+      360      ;
+      361          Op = op_arity,
+      362 -        operator_arity_op(IT, !Stack)                         
+      362 +        operator_arity_op(OpTable, !Stack)                    
+      363      ;
+      364          Op = op_stack,
+      365          operator_stack(!Stack)
+
+● Now update operator_print and value_to_string:
+
+● Update(src/operators.m)
+  ⎿  Added 19 lines, removed 19 lines                                    
+      369  % print: ( a -- ) Pop and print a value
+      370  %-------------------------------------------------------------
+           ----------%
+      371  
+      372 -operator_print(IT, !Stack, !IO) :-                            
+      372 +operator_print(ST, !Stack, !IO) :-                            
+      373      pop("print", V, !Stack),
+      374 -    io.write_string(value_to_string(IT, V), !IO).             
+      374 +    io.write_string(value_to_string(ST, V), !IO).             
+      375  
+      376  %-------------------------------------------------------------
+           ----------%
+      377  % value_to_string: convert a value to its string representatio
+           n
+      378  %-------------------------------------------------------------
+           ----------%
+      379  
+      380 -:- func value_to_string(intern_table, value) = string.        
+      380 +:- func value_to_string(string_table, value) = string.        
+      381  
+      382  value_to_string(_, intval(I)) = int_to_string(I).
+      383 -value_to_string(IT, stringval(StrId)) = lookup_string(IT ^ it_
+          -strings, StrId).                                              
+      384 -value_to_string(IT, arrayval(A)) = String :-                  
+      383 +value_to_string(ST, stringval(StrId)) = lookup_string(ST, StrI
+          +d).                                                           
+      384 +value_to_string(ST, arrayval(A)) = String :-                  
+      385      array.to_list(A, List),
+      386 -    Strings = list.map(value_to_string(IT), List),            
+      386 +    Strings = list.map(value_to_string(ST), List),            
+      387      String = string.append_list(Strings).
+      388  value_to_string(_, mapval(M)) = string.format("<map:%d>", [i(m
+           ap.count(M))]).
+      389 -value_to_string(IT, termval(T)) = term_to_string(IT, T).      
+      389 +value_to_string(ST, termval(T)) = term_to_string(ST, T).      
+      390  value_to_string(_, nilval) = ".".
+      391 -value_to_string(IT, consval(H, T)) =                          
+      392 -    "(" ++ value_to_string(IT, H) ++ "," ++ value_to_string(IT
+          -, T) ++ ")".                                                  
+      391 +value_to_string(ST, consval(H, T)) =                          
+      392 +    "(" ++ value_to_string(ST, H) ++ "," ++ value_to_string(ST
+          +, T) ++ ")".                                                  
+      393  
+      394 -:- func term_to_string(intern_table, term) = string.          
+      394 +:- func term_to_string(string_table, term) = string.          
+      395  
+      396 -term_to_string(IT, identifier(NameId)) = lookup_string(IT ^ it
+          -_strings, NameId).                                            
+      397 -term_to_string(IT, binder(NameId)) = "/" ++ lookup_string(IT ^
+          - it_strings, NameId).                                         
+      398 -term_to_string(IT, function(Terms)) = "{ " ++ terms_to_string(
+          -IT, Terms) ++ "}".                                            
+      399 -term_to_string(IT, generator(Terms)) = "[ " ++ terms_to_string
+          -(IT, Terms) ++ "]".                                           
+      400 -term_to_string(IT, quoted(T)) = "'" ++ term_to_string(IT, T). 
+      401 -term_to_string(IT, value(V)) = value_to_string(IT, V).        
+      396 +term_to_string(ST, identifier(NameId)) = lookup_string(ST, Nam
+          +eId).                                                         
+      397 +term_to_string(ST, binder(NameId)) = "/" ++ lookup_string(ST, 
+          +NameId).                                                      
+      398 +term_to_string(ST, function(Terms)) = "{ " ++ terms_to_string(
+          +ST, Terms) ++ "}".                                            
+      399 +term_to_string(ST, generator(Terms)) = "[ " ++ terms_to_string
+          +(ST, Terms) ++ "]".                                           
+      400 +term_to_string(ST, quoted(T)) = "'" ++ term_to_string(ST, T). 
+      401 +term_to_string(ST, value(V)) = value_to_string(ST, V).        
+      402  term_to_string(_, apply_term) = "!".
+      403  
+      404 -:- func terms_to_string(intern_table, list(term)) = string.   
+      404 +:- func terms_to_string(string_table, list(term)) = string.   
+      405  
+      406  terms_to_string(_, []) = "".
+      407 -terms_to_string(IT, [T | Ts]) =                               
+      408 -    term_to_string(IT, T) ++ " " ++ terms_to_string(IT, Ts).  
+      407 +terms_to_string(ST, [T | Ts]) =                               
+      408 +    term_to_string(ST, T) ++ " " ++ terms_to_string(ST, Ts).  
+      409  
+      410  %-------------------------------------------------------------
+           ----------%
+      411  % env: ( -- map ) Push the current environment as a map
+
+● Now update operator_write and related functions:
+
+● Update(src/operators.m)
+  ⎿  Added 26 lines, removed 26 lines                                    
+      728  % write: ( a -- ) Pop and print value in executable (round-tri
+           ppable) form
+      729  %-------------------------------------------------------------
+           ----------%
+      730  
+      731 -operator_write(IT, !Stack, !IO) :-                            
+      731 +operator_write(ST, !Stack, !IO) :-                            
+      732      pop("write", V, !Stack),
+      733 -    io.write_string(value_to_write_string(IT, V), !IO).       
+      733 +    io.write_string(value_to_write_string(ST, V), !IO).       
+      734  
+      735  %-------------------------------------------------------------
+           ----------%
+      736  % value_to_write_string: convert a value to executable string 
+           form
+      737  %-------------------------------------------------------------
+           ----------%
+      738  
+      739 -:- func value_to_write_string(intern_table, value) = string.  
+      739 +:- func value_to_write_string(string_table, value) = string.  
+      740  
+      741  value_to_write_string(_, intval(I)) = int_to_string(I).
+      742 -value_to_write_string(IT, stringval(StrId)) =                 
+      743 -    "\"" ++ escape_string(lookup_string(IT ^ it_strings, StrId
+          -)) ++ "\"".                                                   
+      744 -value_to_write_string(IT, arrayval(A)) = "[ " ++ ArrayElems ++
+          - "]" :-                                                       
+      742 +value_to_write_string(ST, stringval(StrId)) =                 
+      743 +    "\"" ++ escape_string(lookup_string(ST, StrId)) ++ "\"".  
+      744 +value_to_write_string(ST, arrayval(A)) = "[ " ++ ArrayElems ++
+          + "]" :-                                                       
+      745      array.to_list(A, List),
+      746      ElemStrings = list.map(
+      747 -        (func(V) = value_to_write_string(IT, V) ++ " "),      
+      747 +        (func(V) = value_to_write_string(ST, V) ++ " "),      
+      748          List),
+      749      ArrayElems = string.append_list(ElemStrings).
+      750 -value_to_write_string(IT, mapval(M)) = Result :-              
+      751 -    map.foldl(map_entry_to_string(IT), M, "$", Result).       
+      752 -value_to_write_string(IT, termval(T)) = "'" ++ term_to_write_s
+          -tring(IT, T).                                                 
+      750 +value_to_write_string(ST, mapval(M)) = Result :-              
+      751 +    map.foldl(map_entry_to_string(ST), M, "$", Result).       
+      752 +value_to_write_string(ST, termval(T)) = "'" ++ term_to_write_s
+          +tring(ST, T).                                                 
+      753  value_to_write_string(_, nilval) = ".".
+      754 -value_to_write_string(IT, consval(H, T)) =                    
+      755 -    value_to_write_string(IT, T) ++ " " ++ value_to_write_stri
+          -ng(IT, H) ++ " ,".                                            
+      754 +value_to_write_string(ST, consval(H, T)) =                    
+      755 +    value_to_write_string(ST, T) ++ " " ++ value_to_write_stri
+          +ng(ST, H) ++ " ,".                                            
+      756  
+      757 -:- pred map_entry_to_string(intern_table::in, string_id::in, v
+          -alue::in,                                                     
+      757 +:- pred map_entry_to_string(string_table::in, string_id::in, v
+          +alue::in,                                                     
+      758      string::in, string::out) is det.
+      759  
+      760 -map_entry_to_string(IT, NameId, V, !Acc) :-                   
+      761 -    !:Acc = !.Acc ++ " " ++ value_to_write_string(IT, V) ++ " 
+          -'" ++                                                         
+      762 -        lookup_string(IT ^ it_strings, NameId) ++ " :".       
+      760 +map_entry_to_string(ST, NameId, V, !Acc) :-                   
+      761 +    !:Acc = !.Acc ++ " " ++ value_to_write_string(ST, V) ++ " 
+          +'" ++                                                         
+      762 +        lookup_string(ST, NameId) ++ " :".                    
+      763  
+      764 -:- func term_to_write_string(intern_table, term) = string.    
+      764 +:- func term_to_write_string(string_table, term) = string.    
+      765  
+      766 -term_to_write_string(IT, identifier(NameId)) = lookup_string(I
+          -T ^ it_strings, NameId).                                      
+      767 -term_to_write_string(IT, binder(NameId)) = "/" ++ lookup_strin
+          -g(IT ^ it_strings, NameId).                                   
+      768 -term_to_write_string(IT, function(Terms)) = "{ " ++ terms_to_w
+          -rite_string(IT, Terms) ++ "}".                                
+      769 -term_to_write_string(IT, generator(Terms)) = "[ " ++ terms_to_
+          -write_string(IT, Terms) ++ "]".                               
+      770 -term_to_write_string(IT, quoted(T)) = "'" ++ term_to_write_str
+          -ing(IT, T).                                                   
+      771 -term_to_write_string(IT, value(V)) = value_to_write_string(IT,
+          - V).                                                          
+      766 +term_to_write_string(ST, identifier(NameId)) = lookup_string(S
+          +T, NameId).                                                   
+      767 +term_to_write_string(ST, binder(NameId)) = "/" ++ lookup_strin
+          +g(ST, NameId).                                                
+      768 +term_to_write_string(ST, function(Terms)) = "{ " ++ terms_to_w
+          +rite_string(ST, Terms) ++ "}".                                
+      769 +term_to_write_string(ST, generator(Terms)) = "[ " ++ terms_to_
+          +write_string(ST, Terms) ++ "]".                               
+      770 +term_to_write_string(ST, quoted(T)) = "'" ++ term_to_write_str
+          +ing(ST, T).                                                   
+      771 +term_to_write_string(ST, value(V)) = value_to_write_string(ST,
+          + V).                                                          
+      772  term_to_write_string(_, apply_term) = "!".
+      773  
+      774 -:- func terms_to_write_string(intern_table, list(term)) = stri
+          -ng.                                                           
+      774 +:- func terms_to_write_string(string_table, list(term)) = stri
+          +ng.                                                           
+      775  
+      776  terms_to_write_string(_, []) = "".
+      777 -terms_to_write_string(IT, [T | Ts]) =                         
+      778 -    term_to_write_string(IT, T) ++ " " ++ terms_to_write_strin
+          -g(IT, Ts).                                                    
+      777 +terms_to_write_string(ST, [T | Ts]) =                         
+      778 +    term_to_write_string(ST, T) ++ " " ++ terms_to_write_strin
+          +g(ST, Ts).                                                    
+      779  
+      780  %-------------------------------------------------------------
+           ----------%
+      781  % fwrite: ( value file -- ) Write value to file in executable 
+           form
+
+● Now update operator_fwrite:
+
+● Update(src/operators.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      781  % fwrite: ( value file -- ) Write value to file in executable 
+           form
+      782  %-------------------------------------------------------------
+           ----------%
+      783  
+      784 -operator_fwrite(IT, !Stack, !IO) :-                           
+      784 +operator_fwrite(ST, !Stack, !IO) :-                           
+      785      pop("fwrite", FileVal, !Stack),
+      786      pop("fwrite", V, !Stack),
+      787 -    Filename = value_to_string(IT, FileVal),                  
+      788 -    Content = value_to_write_string(IT, V),                   
+      787 +    Filename = value_to_string(ST, FileVal),                  
+      788 +    Content = value_to_write_string(ST, V),                   
+      789      io.open_output(Filename, Result, !IO),
+      790      (
+      791          Result = ok(Stream),
+
+● Now update operator_is_operator and operator_arity_op:
+
+● Update(src/operators.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      1011  % isOperator: ( 'ident -- int ) Test if identifier is an oper
+            ator name
+      1012  %------------------------------------------------------------
+            -----------%
+      1013  
+      1014 -operator_is_operator(IT, !Stack) :-                          
+      1014 +operator_is_operator(OpTable, !Stack) :-                     
+      1015      pop("isOperator", V, !Stack),
+      1016      ( if V = termval(identifier(Id)) then
+      1017 -        ( if map.contains(IT ^ it_operators, Id) then        
+      1017 +        ( if map.contains(OpTable, Id) then                  
+      1018              push(intval(0), !Stack)
+      1019          else
+      1020              push(intval(1), !Stack)
+     ...
+      1027  % arity: ( 'ident -- int ) Get the arity of an operator
+      1028  %------------------------------------------------------------
+            -----------%
+      1029  
+      1030 -operator_arity_op(IT, !Stack) :-                             
+      1030 +operator_arity_op(OpTable, !Stack) :-                        
+      1031      pop("arity", V, !Stack),
+      1032      ( if V = termval(identifier(Id)) then
+      1033 -        ( if map.search(IT ^ it_operators, Id, Info) then    
+      1033 +        ( if map.search(OpTable, Id, Info) then              
+      1034              push(intval(Info ^ oi_arity), !Stack)
+      1035          else
+      1036              throw(type_error("operator", V))
+
+● Now let me update eval.m. For now, string_table will be passed through but not modified (preparation for future dynamic imports):
+
+● Update(src/eval.m)
+  ⎿  Added 6 lines, removed 4 lines                                      
+      12  
+      13  %--------------------------------------------------------------
+          ---------%
+      14  
+      15 -    % eval_terms(InternTable, Terms, !Env, !Stack, !IO):       
+      15 +    % eval_terms(OpTable, Terms, !Env, !Stack, !ST, !IO):      
+      16      % Evaluate a list of terms, updating the environment and st
+          ack.
+      17 -    % InternTable is read-only (all strings/names known at lex 
+         -time).                                                         
+      17 +    % OpTable is read-only (fixed at engine startup).          
+      18 +    % StringTable is threaded through (may grow with dynamic im
+         +ports).                                                        
+      19      % Throws eval_error on failure.
+      20      %
+      20 -:- pred eval_terms(intern_table::in, list(term)::in,           
+      21 -    env::in, env::out, stack::in, stack::out, io::di, io::uo) i
+         -s det.                                                         
+      21 +:- pred eval_terms(operator_table::in, list(term)::in,         
+      22 +    env::in, env::out, stack::in, stack::out,                  
+      23 +    string_table::in, string_table::out, io::di, io::uo) is det
+         +.                                                              
+      24  
+      25      % Environment operations.
+      26      %
+
+● Now update the implementation:
+
+● Update(src/eval.m)
+  ⎿  Added 11 lines, removed 10 lines                                    
+      50  % Main evaluation
+      51  %--------------------------------------------------------------
+          ---------%
+      52  
+      53 -eval_terms(_, [], !Env, !Stack, !IO).                          
+      54 -eval_terms(IT, [Term | Terms], !Env, !Stack, !IO) :-           
+      55 -    eval_term(IT, Term, !Env, !Stack, !IO),                    
+      56 -    eval_terms(IT, Terms, !Env, !Stack, !IO).                  
+      53 +eval_terms(_, [], !Env, !Stack, !ST, !IO).                     
+      54 +eval_terms(OpTable, [Term | Terms], !Env, !Stack, !ST, !IO) :- 
+      55 +    eval_term(OpTable, Term, !Env, !Stack, !ST, !IO),          
+      56 +    eval_terms(OpTable, Terms, !Env, !Stack, !ST, !IO).        
+      57  
+      58 -:- pred eval_term(intern_table::in, term::in, env::in, env::out
+         -,                                                              
+      59 -    stack::in, stack::out, io::di, io::uo) is det.             
+      58 +:- pred eval_term(operator_table::in, term::in, env::in, env::o
+         +ut,                                                            
+      59 +    stack::in, stack::out, string_table::in, string_table::out,
+      60 +    io::di, io::uo) is det.                                    
+      61  
+      61 -eval_term(IT, Term, !Env, !Stack, !IO) :-                      
+      62 +eval_term(OpTable, Term, !Env, !Stack, !ST, !IO) :-            
+      63      (
+      64          Term = identifier(NameId),
+      64 -        eval_identifier(IT, NameId, !.Env, !Stack, !IO)        
+      65 +        eval_identifier(OpTable, NameId, !.Env, !Stack, !ST, !I
+         +O)                                                             
+      66      ;
+      67          Term = binder(NameId),
+      68          eval_binder(NameId, !Env, !Stack)
+     ...
+      71          eval_function(Terms, !.Env, !Stack)
+      72      ;
+      73          Term = generator(Terms),
+      73 -        eval_generator(IT, Terms, !Env, !Stack, !IO)           
+      74 +        eval_generator(OpTable, Terms, !Env, !Stack, !ST, !IO) 
+      75      ;
+      76          Term = quoted(T),
+      77          push(termval(T), !Stack)
+     ...
+      80          push(V, !Stack)
+      81      ;
+      82          Term = apply_term,
+      82 -        eval_apply(IT, !Env, !Stack, !IO)                      
+      83 +        eval_apply(OpTable, !Env, !Stack, !ST, !IO)            
+      84      ).
+      85  
+      86  %--------------------------------------------------------------
+          ---------%
+
+● Now update eval_identifier:
+
+● Update(src/eval.m)
+  ⎿  Added 7 lines, removed 5 lines                                      
+       87  % Identifier evaluation
+       88  %-------------------------------------------------------------
+           ----------%
+       89  
+       90 -:- pred eval_identifier(intern_table::in, string_id::in, env::
+          -in,                                                           
+       91 -    stack::in, stack::out, io::di, io::uo) is det.            
+       90 +:- pred eval_identifier(operator_table::in, string_id::in, env
+          +::in,                                                         
+       91 +    stack::in, stack::out, string_table::in, string_table::out
+          +,                                                             
+       92 +    io::di, io::uo) is det.                                   
+       93  
+       93 -eval_identifier(IT, NameId, Env, !Stack, !IO) :-              
+       94 +eval_identifier(OpTable, NameId, Env, !Stack, !ST, !IO) :-    
+       95      ( if get_env(NameId, V, Env) then
+       96          push(V, !Stack)
+       96 -    else if map.search(IT ^ it_operators, NameId, Info) then  
+       97 -        operators.eval_operator(IT, Info ^ oi_operator, Env, !
+          -Stack, !IO)                                                   
+       97 +    else if map.search(OpTable, NameId, Info) then            
+       98 +        operators.eval_operator(OpTable, !.ST, Info ^ oi_opera
+          +tor, Env,                                                     
+       99 +            !Stack, !IO)                                      
+      100      else
+      101          throw(undefined_name(NameId))
+      102      ).
+
+● Now update eval_generator:
+
+● Update(src/eval.m)
+  ⎿  Added 5 lines, removed 4 lines                                      
+      128  % Generator evaluation
+      129  %-------------------------------------------------------------
+           ----------%
+      130  
+      131 -:- pred eval_generator(intern_table::in, list(term)::in,      
+      132 -    env::in, env::out, stack::in, stack::out, io::di, io::uo) 
+          -is det.                                                       
+      131 +:- pred eval_generator(operator_table::in, list(term)::in,    
+      132 +    env::in, env::out, stack::in, stack::out,                 
+      133 +    string_table::in, string_table::out, io::di, io::uo) is de
+          +t.                                                            
+      134  
+      134 -eval_generator(IT, Terms, !Env, !Stack, !IO) :-               
+      135 +eval_generator(OpTable, Terms, !Env, !Stack, !ST, !IO) :-     
+      136      % Save current stack, evaluate with empty stack
+      137      SavedStack = !.Stack,
+      138      !:Stack = [],
+      138 -    eval_terms(IT, Terms, !Env, !Stack, !IO),                 
+      139 +    eval_terms(OpTable, Terms, !Env, !Stack, !ST, !IO),       
+      140      % Convert stack to array (reverse since stack is LIFO)
+      141      Array = array.from_reverse_list(!.Stack),
+      142      % Restore stack and push array
+
+● Now update eval_apply:
+
+● Update(src/eval.m)
+  ⎿  Added 8 lines, removed 6 lines                                      
+      147  % apply (!)
+      148  %-------------------------------------------------------------
+           ----------%
+      149  
+      150 -:- pred eval_apply(intern_table::in, env::in, env::out,       
+      151 -    stack::in, stack::out, io::di, io::uo) is det.            
+      150 +:- pred eval_apply(operator_table::in, env::in, env::out,     
+      151 +    stack::in, stack::out, string_table::in, string_table::out
+          +,                                                             
+      152 +    io::di, io::uo) is det.                                   
+      153  
+      153 -eval_apply(IT, Env, Env, !Stack, !IO) :-                      
+      154 +eval_apply(OpTable, Env, Env, !Stack, !ST, !IO) :-            
+      155      pop("!", V, !Stack),
+      156      ( if V = consval(mapval(ClosureEnv), termval(function(Term
+           s))) then
+      157          % Evaluate with closure's env, then discard env change
+           s (lexical scoping)
+      157 -        eval_terms(IT, Terms, ClosureEnv, _, !Stack, !IO)     
+      158 -    else if V = termval(identifier(Id)), map.search(IT ^ it_op
+          -erators, Id, Info) then                                       
+      158 +        eval_terms(OpTable, Terms, ClosureEnv, _, !Stack, !ST,
+          + !IO)                                                         
+      159 +    else if V = termval(identifier(Id)), map.search(OpTable, I
+          +d, Info) then                                                 
+      160          % Apply a quoted operator
+      160 -        operators.eval_operator(IT, Info ^ oi_operator, Env, !
+          -Stack, !IO)                                                   
+      161 +        operators.eval_operator(OpTable, !.ST, Info ^ oi_opera
+          +tor, Env,                                                     
+      162 +            !Stack, !IO)                                      
+      163      else
+      164          throw(type_error("closure or operator", V))
+      165      ).
+
+● Now let me update froth.m. First, update the initialization:
+
+● Update(src/froth.m)
+  ⎿  Added 5 lines, removed 4 lines                                      
+      29  
+      30  %--------------------------------------------------------------
+          ---------%
+      31  
+      32 -    % Create an intern table with operator names pre-interned. 
+      32 +    % Initialize tables: string table with operator names pre-i
+         +nterned,                                                       
+      33 +    % and operator table for dispatch.                         
+      34      %
+      34 -:- func init_intern_table = intern_table.                      
+      35 +:- pred init_tables(string_table::out, operator_table::out) is 
+         +det.                                                           
+      36  
+      36 -init_intern_table = IT :-                                      
+      37 -    operators.init_operators(empty_intern_table, IT).          
+      37 +init_tables(ST, OpTable) :-                                    
+      38 +    operators.init_operators(empty_string_table, ST, OpTable). 
+      39  
+      40  %--------------------------------------------------------------
+          ---------%
+      41  % Standard library loading
+
+● Now update load_result type and load_stdlib_and_run:
+
+● Update(src/froth.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      108          % Load stdlib first
+      109          load_library(StdlibPath, LoadResult, !IO),
+      110          (
+      111 -            LoadResult = ok({IT, Env}),                       
+      111 +            LoadResult = ok({OpTable, ST, Env}),              
+      112              % Then process remaining args with stdlib state
+      113 -            process_args_with_state(IT, Env, Args, !IO)       
+      113 +            process_args_with_state(OpTable, ST, Env, Args, !I
+          +O)                                                            
+      114          ;
+      115              LoadResult = error,
+      116              io.set_exit_status(1, !IO)
+
+● Update process_args_with_state:
+
+● Update(src/froth.m)
+  ⎿  Added 8 lines, removed 8 lines                                      
+      121          process_args_no_stdlib(Args, !IO)
+      122      ).
+      123  
+      124 -:- pred process_args_with_state(intern_table::in, env::in, lis
+          -t(string)::in,                                                
+      125 -    io::di, io::uo) is cc_multi.                              
+      124 +:- pred process_args_with_state(operator_table::in, string_tab
+          +le::in,                                                       
+      125 +    env::in, list(string)::in, io::di, io::uo) is cc_multi.   
+      126  
+      127 -process_args_with_state(IT, Env, Args, !IO) :-                
+      127 +process_args_with_state(OpTable, ST, Env, Args, !IO) :-       
+      128      (
+      129          Args = [],
+      130          % No arguments: start REPL with stdlib loaded
+      131          io.write_string("Froth REPL. Press Ctrl-D to exit.\n",
+            !IO),
+      132 -        repl_loop(IT, Env, [], !IO)                           
+      132 +        repl_loop(OpTable, ST, Env, [], !IO)                  
+      133      ;
+      134          Args = [Arg],
+      135          ( if ( Arg = "-h" ; Arg = "--help" ) then
+      136              print_usage(!IO)
+      137          else
+      138 -            run_file_with_state(IT, Env, Arg, !IO)            
+      138 +            run_file_with_state(OpTable, ST, Env, Arg, !IO)   
+      139          )
+      140      ;
+      141          Args = [First, Second | Rest],
+      142          ( if First = "-f", Rest = [] then
+      143 -            run_file_with_state(IT, Env, Second, !IO)         
+      143 +            run_file_with_state(OpTable, ST, Env, Second, !IO)
+      144          else if First = "-e", Rest = [] then
+      145 -            run_file_then_repl_with_state(IT, Env, Second, !IO
+          -)                                                             
+      145 +            run_file_then_repl_with_state(OpTable, ST, Env, Se
+          +cond, !IO)                                                    
+      146          else if First = "-l" then
+      147              % Load additional library on top of stdlib
+      148 -            run_with_library_and_state(IT, Env, Second, Rest, 
+          -!IO)                                                          
+      148 +            run_with_library_and_state(OpTable, ST, Env, Secon
+          +d, Rest, !IO)                                                 
+      149          else
+      150              print_usage(!IO),
+      151              io.set_exit_status(1, !IO)
+
+● Update run_with_library_and_state:
+
+● Update(src/froth.m)
+  ⎿  Added 16 lines, removed 15 lines                                    
+      152          )
+      153      ).
+      154  
+      155 -:- pred run_with_library_and_state(intern_table::in, env::in, 
+          -string::in,                                                   
+      156 -    list(string)::in, io::di, io::uo) is cc_multi.            
+      155 +:- pred run_with_library_and_state(operator_table::in, string_
+          +table::in,                                                    
+      156 +    env::in, string::in, list(string)::in, io::di, io::uo) is 
+          +cc_multi.                                                     
+      157  
+      158 -run_with_library_and_state(IT0, Env0, LibFile, RestArgs, !IO) 
+          -:-                                                            
+      159 -    load_library_with_state(IT0, Env0, LibFile, LoadResult, !I
+          -O),                                                           
+      158 +run_with_library_and_state(OpTable, ST0, Env0, LibFile, RestAr
+          +gs, !IO) :-                                                   
+      159 +    load_library_with_state(OpTable, ST0, Env0, LibFile, LoadR
+          +esult, !IO),                                                  
+      160      (
+      161 -        LoadResult = ok({IT, Env}),                           
+      162 -        process_args_with_state(IT, Env, RestArgs, !IO)       
+      161 +        LoadResult = ok({OpTable, ST, Env}),                  
+      162 +        process_args_with_state(OpTable, ST, Env, RestArgs, !I
+          +O)                                                            
+      163      ;
+      164          LoadResult = error,
+      165          io.set_exit_status(1, !IO)
+      166      ).
+      167  
+      168 -:- pred load_library_with_state(intern_table::in, env::in, str
+          -ing::in,                                                      
+      169 -    load_result::out, io::di, io::uo) is cc_multi.            
+      168 +:- pred load_library_with_state(operator_table::in, string_tab
+          +le::in, env::in,                                              
+      169 +    string::in, load_result::out, io::di, io::uo) is cc_multi.
+      170  
+      171 -load_library_with_state(IT0, Env0, LibFile, Result, !IO) :-   
+      171 +load_library_with_state(OpTable, ST0, Env0, LibFile, Result, !
+          +IO) :-                                                        
+      172      io.read_named_file_as_string(LibFile, ReadResult, !IO),
+      173      (
+      174          ReadResult = ok(Content),
+      175          LibDir = dir.dirname(LibFile),
+      176 -        lexer.tokenize(Content, IT0, LexResult),              
+      176 +        lexer.tokenize(Content, ST0, LexResult),              
+      177          (
+      178 -            LexResult = ok(Tokens, IT1),                      
+      179 -            extract_string_tokens(IT1, Tokens, FilePaths),    
+      180 -            load_files(LibDir, FilePaths, IT1, Env0, [], LoadF
+          -ilesResult, !IO),                                             
+      178 +            LexResult = ok(Tokens, ST1),                      
+      179 +            extract_string_tokens(ST1, Tokens, FilePaths),    
+      180 +            load_files(LibDir, FilePaths, OpTable, ST1, Env0, 
+          +[],                                                           
+      181 +                LoadFilesResult, !IO),                        
+      182              (
+      182 -                LoadFilesResult = ok({IT, Env}),              
+      183 -                Result = ok({IT, Env})                        
+      183 +                LoadFilesResult = ok({OpTable, ST, Env}),     
+      184 +                Result = ok({OpTable, ST, Env})               
+      185              ;
+      186                  LoadFilesResult = error,
+      187                  Result = error
+
+● Update repl_no_stdlib:
+
+● Update(src/froth.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      204      io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO
+           ),
+      205      Env0 = map.init,
+      206      Stack0 = [],
+      207 -    IT0 = init_intern_table,                                  
+      208 -    repl_loop(IT0, Env0, Stack0, !IO).                        
+      207 +    init_tables(ST0, OpTable),                                
+      208 +    repl_loop(OpTable, ST0, Env0, Stack0, !IO).               
+      209  
+      210  :- pred run_file_no_stdlib(string::in, io::di, io::uo) is cc_m
+           ulti.
+      211  
+
+● Update run_no_stdlib:
+
+● Update(src/froth.m)
+  ⎿  Added 4 lines, removed 3 lines                                      
+      224  :- pred run_no_stdlib(string::in, io::di, io::uo) is cc_multi.
+      225  
+      226  run_no_stdlib(Input, !IO) :-
+      227 -    lexer.tokenize(Input, init_intern_table, LexResult),      
+      227 +    init_tables(ST0, OpTable),                                
+      228 +    lexer.tokenize(Input, ST0, LexResult),                    
+      229      (
+      229 -        LexResult = ok(Tokens, IT),                           
+      230 +        LexResult = ok(Tokens, ST),                           
+      231          parser.parse(Tokens, ParseResult),
+      232          (
+      233              ParseResult = ok(Terms),
+      233 -            execute(IT, Terms, !IO)                           
+      234 +            execute(OpTable, ST, Terms, !IO)                  
+      235          ;
+      236              ParseResult = error(ParseError),
+      237              report_parse_error(ParseError, !IO),
+
+● Update run_then_repl_no_stdlib:
+
+● Update(src/froth.m)
+  ⎿  Added 4 lines, removed 3 lines                                      
+      260  :- pred run_then_repl_no_stdlib(string::in, io::di, io::uo) is
+            cc_multi.
+      261  
+      262  run_then_repl_no_stdlib(Input, !IO) :-
+      263 -    lexer.tokenize(Input, init_intern_table, LexResult),      
+      263 +    init_tables(ST0, OpTable),                                
+      264 +    lexer.tokenize(Input, ST0, LexResult),                    
+      265      (
+      265 -        LexResult = ok(Tokens, IT),                           
+      266 +        LexResult = ok(Tokens, ST),                           
+      267          parser.parse(Tokens, ParseResult),
+      268          (
+      269              ParseResult = ok(Terms),
+      269 -            execute_then_repl(IT, Terms, !IO)                 
+      270 +            execute_then_repl(OpTable, ST, Terms, !IO)        
+      271          ;
+      272              ParseResult = error(ParseError),
+      273              report_parse_error(ParseError, !IO),
+
+● Now update repl_loop and repl_eval:
+
+● Update(src/froth.m)
+  ⎿  Added 17 lines, removed 16 lines                                    
+      293      io.write_string("\n", !IO),
+      294      io.write_string("With no arguments, starts an interactive 
+           REPL.\n", !IO).
+      295  
+      296 -:- pred repl_loop(intern_table::in, env::in, stack::in,       
+      296 +:- pred repl_loop(operator_table::in, string_table::in, env::i
+          +n, stack::in,                                                 
+      297      io::di, io::uo) is cc_multi.
+      298  
+      299 -repl_loop(IT0, Env0, Stack0, !IO) :-                          
+      299 +repl_loop(OpTable, ST0, Env0, Stack0, !IO) :-                 
+      300      io.write_string("> ", !IO),
+      301      io.flush_output(!IO),
+      302      io.read_line_as_string(ReadResult, !IO),
+      303      (
+      304          ReadResult = ok(Line),
+      305 -        repl_eval(Line, IT0, IT, Env0, Env, Stack0, Stack, !IO
+          -),                                                            
+      306 -        repl_loop(IT, Env, Stack, !IO)                        
+      305 +        repl_eval(OpTable, Line, ST0, ST, Env0, Env, Stack0, S
+          +tack, !IO),                                                   
+      306 +        repl_loop(OpTable, ST, Env, Stack, !IO)               
+      307      ;
+      308          ReadResult = eof,
+      309          io.nl(!IO)
+     ...
+      314          io.set_exit_status(1, !IO)
+      315      ).
+      316  
+      317 -:- pred repl_eval(string::in, intern_table::in, intern_table::
+          -out,                                                          
+      317 +:- pred repl_eval(operator_table::in, string::in,             
+      318 +    string_table::in, string_table::out,                      
+      319      env::in, env::out, stack::in, stack::out, io::di, io::uo) 
+           is cc_multi.
+      320  
+      320 -repl_eval(Input, IT0, IT, Env0, Env, Stack0, Stack, !IO) :-   
+      321 -    lexer.tokenize(Input, IT0, LexResult),                    
+      321 +repl_eval(OpTable, Input, ST0, ST, Env0, Env, Stack0, Stack, !
+          +IO) :-                                                        
+      322 +    lexer.tokenize(Input, ST0, LexResult),                    
+      323      (
+      323 -        LexResult = ok(Tokens, IT1),                          
+      324 +        LexResult = ok(Tokens, ST1),                          
+      325          parser.parse(Tokens, ParseResult),
+      326          (
+      327              ParseResult = ok(Terms),
+      327 -            execute_repl(IT1, Terms, Env0, Env, Stack0, Stack,
+          - !IO),                                                        
+      328 -            IT = IT1                                          
+      328 +            execute_repl(OpTable, ST1, Terms, Env0, Env, Stack
+          +0, Stack, !IO),                                               
+      329 +            ST = ST1                                          
+      330          ;
+      331              ParseResult = error(ParseError),
+      332              report_parse_error(ParseError, !IO),
+      332 -            IT = IT1,                                         
+      333 +            ST = ST1,                                         
+      334              Env = Env0,
+      335              Stack = Stack0
+      336          )
+      337      ;
+      338          LexResult = error(LexError),
+      339          report_lex_error(LexError, !IO),
+      339 -        IT = IT0,                                             
+      340 +        ST = ST0,                                             
+      341          Env = Env0,
+      342          Stack = Stack0
+      343      ).
+      344  
+      344 -:- pred execute_repl(intern_table::in, list(term)::in,        
+      345 +:- pred execute_repl(operator_table::in, string_table::in, lis
+          +t(term)::in,                                                  
+      346      env::in, env::out, stack::in, stack::out, io::di, io::uo) 
+           is cc_multi.
+      347  
+      347 -execute_repl(IT, Terms, Env0, Env, Stack0, Stack, !IO) :-     
+      348 -    try_io(eval_terms_wrapper(IT, Terms, Env0, Stack0), Result
+          -, !IO),                                                       
+      348 +execute_repl(OpTable, ST, Terms, Env0, Env, Stack0, Stack, !IO
+          +) :-                                                          
+      349 +    try_io(eval_terms_wrapper(OpTable, ST, Terms, Env0, Stack0
+          +), Result, !IO),                                              
+      350      (
+      351          Result = succeeded({Env, Stack})
+      352      ;
+      353          Result = exception(Exn),
+      354          ( if univ_to_type(Exn, EvalError) then
+      355              io.format("Runtime error: %s\n",
+      355 -                [s(types.format_error(IT, EvalError))], !IO), 
+      356 +                [s(types.format_error(ST, EvalError))], !IO), 
+      357              Env = Env0,
+      358              Stack = Stack0
+      359          else
+
+● Now update the file execution predicates (run, run_then_repl, execute, execute_then_repl):
+
+● Update(src/froth.m)
+  ⎿  Added 19 lines, removed 16 lines                                    
+      396  :- pred run_then_repl(string::in, io::di, io::uo) is cc_multi.
+      397  
+      398  run_then_repl(Input, !IO) :-
+      399 -    lexer.tokenize(Input, init_intern_table, LexResult),      
+      399 +    init_tables(ST0, OpTable),                                
+      400 +    lexer.tokenize(Input, ST0, LexResult),                    
+      401      (
+      401 -        LexResult = ok(Tokens, IT),                           
+      402 +        LexResult = ok(Tokens, ST),                           
+      403          parser.parse(Tokens, ParseResult),
+      404          (
+      405              ParseResult = ok(Terms),
+      405 -            execute_then_repl(IT, Terms, !IO)                 
+      406 +            execute_then_repl(OpTable, ST, Terms, !IO)        
+      407          ;
+      408              ParseResult = error(ParseError),
+      409              report_parse_error(ParseError, !IO),
+     ...
+      415          io.set_exit_status(1, !IO)
+      416      ).
+      417  
+      417 -:- pred execute_then_repl(intern_table::in, list(term)::in,   
+      418 -    io::di, io::uo) is cc_multi.                              
+      418 +:- pred execute_then_repl(operator_table::in, string_table::in
+          +,                                                             
+      419 +    list(term)::in, io::di, io::uo) is cc_multi.              
+      420  
+      420 -execute_then_repl(IT, Terms, !IO) :-                          
+      421 +execute_then_repl(OpTable, ST0, Terms, !IO) :-                
+      422      Env0 = map.init,
+      423      Stack0 = [],
+      423 -    try_io(eval_terms_wrapper(IT, Terms, Env0, Stack0), Result
+          -, !IO),                                                       
+      424 +    try_io(eval_terms_wrapper(OpTable, ST0, Terms, Env0, Stack
+          +0), Result, !IO),                                             
+      425      (
+      426          Result = succeeded({Env, Stack}),
+      427          io.write_string("Froth REPL. Press Ctrl-D to exit.\n",
+            !IO),
+      427 -        repl_loop(IT, Env, Stack, !IO)                        
+      428 +        repl_loop(OpTable, ST0, Env, Stack, !IO)              
+      429      ;
+      430          Result = exception(Exn),
+      431          ( if univ_to_type(Exn, EvalError) then
+      432              io.format("Runtime error: %s\n",
+      432 -                [s(types.format_error(IT, EvalError))], !IO), 
+      433 +                [s(types.format_error(ST0, EvalError))], !IO),
+      434              io.set_exit_status(1, !IO)
+      435          else
+      436              rethrow(Result)
+     ...
+      440  :- pred run(string::in, io::di, io::uo) is cc_multi.
+      441  
+      442  run(Input, !IO) :-
+      442 -    lexer.tokenize(Input, init_intern_table, LexResult),      
+      443 +    init_tables(ST0, OpTable),                                
+      444 +    lexer.tokenize(Input, ST0, LexResult),                    
+      445      (
+      444 -        LexResult = ok(Tokens, IT),                           
+      446 +        LexResult = ok(Tokens, ST),                           
+      447          parser.parse(Tokens, ParseResult),
+      448          (
+      449              ParseResult = ok(Terms),
+      448 -            execute(IT, Terms, !IO)                           
+      450 +            execute(OpTable, ST, Terms, !IO)                  
+      451          ;
+      452              ParseResult = error(ParseError),
+      453              report_parse_error(ParseError, !IO),
+     ...
+      459          io.set_exit_status(1, !IO)
+      460      ).
+      461  
+      460 -:- pred execute(intern_table::in, list(term)::in, io::di, io::
+          -uo) is cc_multi.                                              
+      462 +:- pred execute(operator_table::in, string_table::in, list(ter
+          +m)::in,                                                       
+      463 +    io::di, io::uo) is cc_multi.                              
+      464  
+      462 -execute(IT, Terms, !IO) :-                                    
+      465 +execute(OpTable, ST, Terms, !IO) :-                           
+      466      Env0 = map.init,
+      467      Stack0 = [],
+      465 -    try_io(eval_terms_wrapper(IT, Terms, Env0, Stack0), Result
+          -, !IO),                                                       
+      468 +    try_io(eval_terms_wrapper(OpTable, ST, Terms, Env0, Stack0
+          +), Result, !IO),                                              
+      469      (
+      470          Result = succeeded({_, _})
+      471      ;
+      472          Result = exception(Exn),
+      473          ( if univ_to_type(Exn, EvalError) then
+      474              io.format("Runtime error: %s\n",
+      472 -                [s(types.format_error(IT, EvalError))], !IO), 
+      475 +                [s(types.format_error(ST, EvalError))], !IO), 
+      476              io.set_exit_status(1, !IO)
+      477          else
+      478              rethrow(Result)
+
+● Now update run_with_library and load_library:
+
+● Update(src/froth.m)
+  ⎿  Added 26 lines, removed 21 lines                                    
+      489  run_with_library(LibFile, RestArgs, !IO) :-
+      490      load_library(LibFile, LoadResult, !IO),
+      491      (
+      492 -        LoadResult = ok({IT, Env}),                           
+      493 -        run_with_state(IT, Env, RestArgs, !IO)                
+      492 +        LoadResult = ok({OpTable, ST, Env}),                  
+      493 +        run_with_state(OpTable, ST, Env, RestArgs, !IO)       
+      494      ;
+      495          LoadResult = error,
+      496          io.set_exit_status(1, !IO)
+      497      ).
+      498  
+      499  :- type load_result
+      500 -    --->    ok({intern_table, env})                           
+      500 +    --->    ok({operator_table, string_table, env})           
+      501      ;       error.
+      502  
+      503  :- pred load_library(string::in, load_result::out, io::di, io:
+           :uo) is cc_multi.
+     ...
+      507      (
+      508          ReadResult = ok(Content),
+      509          LibDir = dir.dirname(LibFile),
+      510 -        lexer.tokenize(Content, init_intern_table, LexResult),
+      510 +        init_tables(ST0, OpTable),                            
+      511 +        lexer.tokenize(Content, ST0, LexResult),              
+      512          (
+      512 -            LexResult = ok(Tokens, IT0),                      
+      513 -            extract_string_tokens(IT0, Tokens, FilePaths),    
+      514 -            load_files(LibDir, FilePaths, IT0, map.init, [], L
+          -oadFilesResult, !IO),                                         
+      513 +            LexResult = ok(Tokens, ST1),                      
+      514 +            extract_string_tokens(ST1, Tokens, FilePaths),    
+      515 +            load_files(LibDir, FilePaths, OpTable, ST1, map.in
+          +it, [],                                                       
+      516 +                LoadFilesResult, !IO),                        
+      517              (
+      516 -                LoadFilesResult = ok({IT, Env}),              
+      517 -                Result = ok({IT, Env})                        
+      518 +                LoadFilesResult = ok({OpTable, ST, Env}),     
+      519 +                Result = ok({OpTable, ST, Env})               
+      520              ;
+      521                  LoadFilesResult = error,
+      522                  Result = error
+     ...
+      533          Result = error
+      534      ).
+      535  
+      534 -:- pred extract_string_tokens(intern_table::in, list(located(t
+          -oken))::in,                                                   
+      536 +:- pred extract_string_tokens(string_table::in, list(located(t
+          +oken))::in,                                                   
+      537      list(string)::out) is det.
+      538  
+      537 -extract_string_tokens(IT, Tokens, Paths) :-                   
+      539 +extract_string_tokens(ST, Tokens, Paths) :-                   
+      540      list.filter_map(
+      541          (pred(located(_, Tok)::in, Path::out) is semidet :-
+      542              Tok = string(StrId),
+      541 -            Path = lookup_string(IT ^ it_strings, StrId)      
+      543 +            Path = lookup_string(ST, StrId)                   
+      544          ),
+      545          Tokens, Paths).
+      546  
+      545 -:- pred load_files(string::in, list(string)::in,              
+      546 -    intern_table::in, env::in, stack::in, load_result::out,   
+      547 +:- pred load_files(string::in, list(string)::in, operator_tabl
+          +e::in,                                                        
+      548 +    string_table::in, env::in, stack::in, load_result::out,   
+      549      io::di, io::uo) is cc_multi.
+      550  
+      549 -load_files(_, [], IT, Env, _, ok({IT, Env}), !IO).            
+      550 -load_files(LibDir, [File | Files], IT0, Env0, Stack0, Result, 
+          -!IO) :-                                                       
+      551 +load_files(_, [], OpTable, ST, Env, _, ok({OpTable, ST, Env}),
+          + !IO).                                                        
+      552 +load_files(LibDir, [File | Files], OpTable, ST0, Env0, Stack0,
+          + Result, !IO) :-                                              
+      553      FullPath = dir.make_path_name(LibDir, File),
+      554      io.read_named_file_as_string(FullPath, ReadResult, !IO),
+      555      (
+      556          ReadResult = ok(Content),
+      555 -        lexer.tokenize(Content, IT0, LexResult),              
+      557 +        lexer.tokenize(Content, ST0, LexResult),              
+      558          (
+      557 -            LexResult = ok(Tokens, IT1),                      
+      559 +            LexResult = ok(Tokens, ST1),                      
+      560              parser.parse(Tokens, ParseResult),
+      561              (
+      562                  ParseResult = ok(Terms),
+      561 -                try_io(eval_terms_wrapper(IT1, Terms, Env0, St
+          -ack0), EvalResult, !IO),                                      
+      563 +                try_io(eval_terms_wrapper(OpTable, ST1, Terms,
+          + Env0, Stack0),                                               
+      564 +                    EvalResult, !IO),                         
+      565                  (
+      566                      EvalResult = succeeded({Env1, Stack1}),
+      564 -                    load_files(LibDir, Files, IT1, Env1, Stack
+          -1, Result, !IO)                                               
+      567 +                    load_files(LibDir, Files, OpTable, ST1, En
+          +v1, Stack1,                                                   
+      568 +                        Result, !IO)                          
+      569                  ;
+      570                      EvalResult = exception(Exn),
+      571                      ( if univ_to_type(Exn, EvalError) then
+      572                          io.format("Runtime error in '%s': %s\n
+           ",
+      569 -                            [s(FullPath), s(types.format_error
+          -(IT1, EvalError))], !IO),                                     
+      573 +                            [s(FullPath), s(types.format_error
+          +(ST1, EvalError))],                                           
+      574 +                            !IO),                             
+      575                          Result = error
+      576                      else
+      577                          rethrow(EvalResult)
+
+● Now update run_with_state, run_file_with_state, run_file_then_repl_with_state:
+
+● Update(src/froth.m)
+  ⎿  Added 29 lines, removed 26 lines                                    
+      596          Result = error
+      597      ).
+      598  
+      599 -:- pred run_with_state(intern_table::in, env::in, list(string)
+          -::in,                                                         
+      600 -    io::di, io::uo) is cc_multi.                              
+      599 +:- pred run_with_state(operator_table::in, string_table::in, e
+          +nv::in,                                                       
+      600 +    list(string)::in, io::di, io::uo) is cc_multi.            
+      601  
+      602 -run_with_state(IT, Env, Args, !IO) :-                         
+      602 +run_with_state(OpTable, ST, Env, Args, !IO) :-                
+      603      (
+      604          Args = [],
+      605          % No more arguments: start REPL with loaded state
+      606          io.write_string("Froth REPL. Press Ctrl-D to exit.\n",
+            !IO),
+      607 -        repl_loop(IT, Env, [], !IO)                           
+      607 +        repl_loop(OpTable, ST, Env, [], !IO)                  
+      608      ;
+      609          Args = [File],
+      610 -        run_file_with_state(IT, Env, File, !IO)               
+      610 +        run_file_with_state(OpTable, ST, Env, File, !IO)      
+      611      ;
+      612          Args = [First, Second | Rest],
+      613          ( if First = "-f", Rest = [] then
+      614 -            run_file_with_state(IT, Env, Second, !IO)         
+      614 +            run_file_with_state(OpTable, ST, Env, Second, !IO)
+      615          else if First = "-e", Rest = [] then
+      616 -            run_file_then_repl_with_state(IT, Env, Second, !IO
+          -)                                                             
+      616 +            run_file_then_repl_with_state(OpTable, ST, Env, Se
+          +cond, !IO)                                                    
+      617          else
+      618              print_usage(!IO),
+      619              io.set_exit_status(1, !IO)
+      620          )
+      621      ).
+      622  
+      623 -:- pred run_file_with_state(intern_table::in, env::in, string:
+          -:in,                                                          
+      624 -    io::di, io::uo) is cc_multi.                              
+      623 +:- pred run_file_with_state(operator_table::in, string_table::
+          +in, env::in,                                                  
+      624 +    string::in, io::di, io::uo) is cc_multi.                  
+      625  
+      626 -run_file_with_state(IT0, Env0, Filename, !IO) :-              
+      626 +run_file_with_state(OpTable, ST0, Env0, Filename, !IO) :-     
+      627      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      628      (
+      629          ReadResult = ok(Input),
+      630 -        lexer.tokenize(Input, IT0, LexResult),                
+      630 +        lexer.tokenize(Input, ST0, LexResult),                
+      631          (
+      632 -            LexResult = ok(Tokens, IT),                       
+      632 +            LexResult = ok(Tokens, ST),                       
+      633              parser.parse(Tokens, ParseResult),
+      634              (
+      635                  ParseResult = ok(Terms),
+      636 -                try_io(eval_terms_wrapper(IT, Terms, Env0, [])
+          -, Result, !IO),                                               
+      636 +                try_io(eval_terms_wrapper(OpTable, ST, Terms, 
+          +Env0, []),                                                    
+      637 +                    Result, !IO),                             
+      638                  (
+      639                      Result = succeeded({_, _})
+      640                  ;
+      641                      Result = exception(Exn),
+      642                      ( if univ_to_type(Exn, EvalError) then
+      643                          io.format("Runtime error: %s\n",
+      643 -                            [s(types.format_error(IT, EvalErro
+          -r))], !IO),                                                   
+      644 +                            [s(types.format_error(ST, EvalErro
+          +r))], !IO),                                                   
+      645                          io.set_exit_status(1, !IO)
+      646                      else
+      647                          rethrow(Result)
+     ...
+      664          io.set_exit_status(1, !IO)
+      665      ).
+      666  
+      666 -:- pred run_file_then_repl_with_state(intern_table::in, env::i
+          -n, string::in,                                                
+      667 -    io::di, io::uo) is cc_multi.                              
+      667 +:- pred run_file_then_repl_with_state(operator_table::in, stri
+          +ng_table::in,                                                 
+      668 +    env::in, string::in, io::di, io::uo) is cc_multi.         
+      669  
+      669 -run_file_then_repl_with_state(IT0, Env0, Filename, !IO) :-    
+      670 +run_file_then_repl_with_state(OpTable, ST0, Env0, Filename, !I
+          +O) :-                                                         
+      671      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      672      (
+      673          ReadResult = ok(Input),
+      673 -        lexer.tokenize(Input, IT0, LexResult),                
+      674 +        lexer.tokenize(Input, ST0, LexResult),                
+      675          (
+      675 -            LexResult = ok(Tokens, IT),                       
+      676 +            LexResult = ok(Tokens, ST),                       
+      677              parser.parse(Tokens, ParseResult),
+      678              (
+      679                  ParseResult = ok(Terms),
+      679 -                try_io(eval_terms_wrapper(IT, Terms, Env0, [])
+          -, Result, !IO),                                               
+      680 +                try_io(eval_terms_wrapper(OpTable, ST, Terms, 
+          +Env0, []),                                                    
+      681 +                    Result, !IO),                             
+      682                  (
+      683                      Result = succeeded({Env, Stack}),
+      684                      io.write_string("Froth REPL. Press Ctrl-D 
+           to exit.\n", !IO),
+      683 -                    repl_loop(IT, Env, Stack, !IO)            
+      685 +                    repl_loop(OpTable, ST, Env, Stack, !IO)   
+      686                  ;
+      687                      Result = exception(Exn),
+      688                      ( if univ_to_type(Exn, EvalError) then
+      689                          io.format("Runtime error: %s\n",
+      688 -                            [s(types.format_error(IT, EvalErro
+          -r))], !IO),                                                   
+      690 +                            [s(types.format_error(ST, EvalErro
+          +r))], !IO),                                                   
+      691                          io.set_exit_status(1, !IO)
+      692                      else
+      693                          rethrow(Result)
+     ...
+      710          io.set_exit_status(1, !IO)
+      711      ).
+      712  
+      711 -:- pred eval_terms_wrapper(intern_table::in, list(term)::in,  
+      712 -    env::in, stack::in, {env, stack}::out, io::di, io::uo) is 
+          -det.                                                          
+      713 +:- pred eval_terms_wrapper(operator_table::in, string_table::i
+          +n,                                                            
+      714 +    list(term)::in, env::in, stack::in, {env, stack}::out,    
+      715 +    io::di, io::uo) is det.                                   
+      716  
+      714 -eval_terms_wrapper(IT, Terms, Env0, Stack0, {Env, Stack}, !IO)
+          - :-                                                           
+      715 -    eval.eval_terms(IT, Terms, Env0, Env, Stack0, Stack, !IO).
+      717 +eval_terms_wrapper(OpTable, ST, Terms, Env0, Stack0, {Env, Sta
+          +ck}, !IO) :-                                                  
+      718 +    eval.eval_terms(OpTable, Terms, Env0, Env, Stack0, Stack, 
+          +ST, _, !IO).                                                  
+      719  
+      720  %-------------------------------------------------------------
+           ----------%
+      721  % Error reporting
+
+● Let's try to build:
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/froth.int3
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/operators.int3
+     Making Mercury/int3s/types.int3
+     Making Mercury/int3s/lexer.int3
+     Making Mercury/ints/types.int
+     Making Mercury/ints/operators.int
+     Making Mercury/ints/lexer.int
+     … +41 lines (ctrl+o to see all)
+
+● The issue is using the same variable OpTable for both input and pattern matching. Let me fix these:
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      158  run_with_library_and_state(OpTable, ST0, Env0, LibFile, RestAr
+           gs, !IO) :-
+      159      load_library_with_state(OpTable, ST0, Env0, LibFile, LoadR
+           esult, !IO),
+      160      (
+      161 -        LoadResult = ok({OpTable, ST, Env}),                  
+      161 +        LoadResult = ok({_, ST, Env}),                        
+      162          process_args_with_state(OpTable, ST, Env, RestArgs, !I
+           O)
+      163      ;
+      164          LoadResult = error,
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      180              load_files(LibDir, FilePaths, OpTable, ST1, Env0, 
+           [],
+      181                  LoadFilesResult, !IO),
+      182              (
+      183 -                LoadFilesResult = ok({OpTable, ST, Env}),     
+      183 +                LoadFilesResult = ok({_, ST, Env}),           
+      184                  Result = ok({OpTable, ST, Env})
+      185              ;
+      186                  LoadFilesResult = error,
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      515              load_files(LibDir, FilePaths, OpTable, ST1, map.in
+           it, [],
+      516                  LoadFilesResult, !IO),
+      517              (
+      518 -                LoadFilesResult = ok({OpTable, ST, Env}),     
+      518 +                LoadFilesResult = ok({_, ST, Env}),           
+      519                  Result = ok({OpTable, ST, Env})
+      520              ;
+      521                  LoadFilesResult = error,
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth     
+     Making Mercury/int3s/froth.int3
+     Making Mercury/ints/froth.int
+     … +13 lines (ctrl+o to expand)
+
+● Build succeeded. Let's run the tests:
+
+● Bash(./run_tests.sh 2>&1) timeout: 1m 0s
+  ⎿  PASS: add                     
+     PASS: apply_op
+     PASS: arithmetic
+     … +37 lines (ctrl+o to expand)
+
+● All 38 tests pass.
+
+● The refactoring is complete. Here's a summary of the changes:
+
+  Summary
+
+  Separated intern_table into two distinct components:
+
+  1. operator_table (::in) - Static table of operators, initialized once at startup, never changes
+  2. string_table (!ST) - Dynamic string interning table, threaded through to allow growth during imports
+
+  Key Changes by File:
+
+  | File        | Changes                                                                                      |
+  |-------------|----------------------------------------------------------------------------------------------|
+  | types.m     | format_error now takes string_table instead of intern_table                                  |
+  | lexer.m     | Uses string_table directly (not wrapped in intern_table), lex_state stores ls_strings        |
+  | operators.m | init_operators(!ST, OpTable) returns both tables; eval_operator(OpTable, ST, ...) takes both |
+  | eval.m      | eval_terms(OpTable, Terms, !Env, !Stack, !ST, !IO) - threads string table for future imports |
+  | froth.m     | init_tables(ST, OpTable) replaces init_intern_table; all predicates updated to pass both     |
+
+  Architecture Now Supports Dynamic Imports:
+
+  Startup:
+    init_tables(ST0, OpTable)  →  operator_table fixed, string_table ready
+
+  Lexing:
+    tokenize(Input, ST0, ok(Tokens, ST1))  →  string_table grows
+
+  Evaluation:
+    eval_terms(OpTable, Terms, !Env, !Stack, ST1, ST2, !IO)  →  string_table threaded
+
+  The string table can now grow during evaluation (when dynamic imports are added), while operator lookups remain efficient with the static operator table.
+
+> Let's implement an `import` operator that does as follows:
+- convert its argument into a filename using the print mechanism (similar to
+ `fwrite`)
+- lex and parse the file
+- evaluate the resulting terms 
+
+● This is a good use case for the string table threading we just set up. However, import also needs to update the environment (for new bindings) and the string table (from lexing). Let me update the architecture to support this.
+
+● Update(src/types.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      61      ;       op_id_to_binder % idToBinder ( int -- 'binder )
+      62      ;       op_is_operator  % isOperator ( 'ident -- int )
+      63      ;       op_arity        % arity      ( 'ident -- int )
+      64 -    ;       op_stack.       % stack      ( ... -- array )      
+      64 +    ;       op_stack        % stack      ( ... -- array )      
+      65 +    ;       op_import.      % import     ( filename -- )       
+      66  
+      67  :- type operator_info
+      68      --->    operator_info(
+  ⎿  Interrupted · What should Claude do instead?
+
+> Since this operator is the only one that modifies the environment and 
+string table, perhaps we can handle it specially rather than via the usual 
+mechanism? Or do you think it would be better to update eval_operator? 
+
+● Good question. I think handling it specially is cleaner for a few reasons:
+
+  1. import is semantically different - it's more like a control flow construct than a typical operator
+  2. Keeps the operator interface clean - other operators remain pure-ish (don't modify Env/ST)
+  3. Less refactoring - don't need to change all operator signatures
+  4. Makes the special nature explicit - import's power is visible in the code
+
+  The approach would be:
+  - Keep op_import in the operator enum (so isOperator and arity work)
+  - In eval_identifier, check for import specifically before calling eval_operator
+  - Handle import with a dedicated predicate that has access to !Env and !ST
+
+  eval_identifier(OpTable, NameId, !Env, !Stack, !ST, !IO) :-
+      ( if get_env(NameId, V, !.Env) then
+          push(V, !Stack)
+      else if map.search(OpTable, NameId, Info) then
+          ( if Info ^ oi_operator = op_import then
+              % Special handling - import can modify Env and ST
+              eval_import(OpTable, !Env, !Stack, !ST, !IO)
+          else
+              operators.eval_operator(OpTable, !.ST, Info ^ oi_operator,
+                  !.Env, !Stack, !IO)
+          )
+      else
+          throw(undefined_name(NameId))
+      ).
+
+  This would require changing eval_identifier to thread !Env (currently it takes Env as read-only), but that's a smaller change than generalizing all operators.
+
+  Want me to proceed with this special-case approach?
+
+> yes 
+
+● Update(src/operators.m)
+  ⎿  Added 1 line                                                        
+      141  operator("isOperator", op_is_operator).
+      142  operator("arity", op_arity).
+      143  operator("stack", op_stack).
+      144 +operator("import", op_import).                                
+      145  
+      146  %-------------------------------------------------------------
+           ----------%
+      147  % Operator arity (number of values popped from stack)
+
+● Update(src/operators.m)
+  ⎿  Added 1 line                                                        
+      193  operator_arity(op_is_operator) = 1.
+      194  operator_arity(op_arity) = 1.
+      195  operator_arity(op_stack) = 0.
+      196 +operator_arity(op_import) = 1.                                
+      197  
+      198  %-------------------------------------------------------------
+           ----------%
+      199  % init_operators: intern all operator names and build the oper
+           ator table
+
+● Update(src/operators.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      212          "isIdent", "isBinder", "isFunc", "isGen", "isQuote", "
+           isApply",
+      213          "isValue", "unwrap", "intern",
+      214          "idToString", "idToIdent", "idToBinder", "isOperator",
+            "arity",
+      215 -        "stack"                                               
+      215 +        "stack", "import"                                     
+      216      ],
+      217      list.foldl2(intern_operator, OpNames, map.init, OpTable, !
+           ST).
+      218  
+
+● Now add a case for op_import in eval_operator (it should never be reached since we handle it specially):
+
+● Update(src/operators.m)
+  ⎿  Added 4 lines                                                       
+      365      ;
+      366          Op = op_stack,
+      367          operator_stack(!Stack)
+      368 +    ;                                                         
+      369 +        Op = op_import,                                       
+      370 +        % import is handled specially in eval.m, should not re
+          +ach here                                                      
+      371 +        unexpected($pred, "import should be handled in eval.m"
+          +)                                                             
+      372      ).
+      373  
+      374  %-------------------------------------------------------------
+           ----------%
+
+● First, let me export value_to_string from operators.m so eval.m can use it:
+
+● Update(src/operators.m)
+  ⎿  Added 5 lines                                                       
+      80  :- pred operator_arity_op(operator_table::in, stack::in, stack:
+          :out) is det.
+      81  :- pred operator_stack(stack::in, stack::out) is det.
+      82  
+      83 +    % value_to_string(ST, Value) = String:                     
+      84 +    % Convert a value to its string representation (for print/i
+         +mport).                                                        
+      85 +    %                                                          
+      86 +:- func value_to_string(string_table, value) = string.         
+      87 +                                                               
+      88  %--------------------------------------------------------------
+          ---------%
+      89  
+      90  :- implementation.
+
+● Now let me update eval.m. First, I need to update eval_identifier to thread !Env and handle import specially:
+
+● Read(src/eval.m)
+  ⎿  Read 170 lines
+
+● Now let me update eval.m. I'll need to:
+  1. Add imports for lexer and parser
+  2. Change eval_identifier to thread !Env
+  3. Handle import specially
+  4. Implement eval_import
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 1 line                                       
+      32  :- implementation.
+      33  
+      34  :- import_module array.
+      35 -:- import_module operators.                                    
+      35  :- import_module exception.
+      36 +:- import_module lexer.                                        
+      37  :- import_module map.
+      38 +:- import_module operators.                                    
+      39 +:- import_module parser.                                       
+      40 +:- import_module string.                                       
+      41  
+      42  %--------------------------------------------------------------
+          ---------%
+      43  % Environment operations
+
+● Now update eval_term to pass !Env to eval_identifier:
+
+● Update(src/eval.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      65  eval_term(OpTable, Term, !Env, !Stack, !ST, !IO) :-
+      66      (
+      67          Term = identifier(NameId),
+      68 -        eval_identifier(OpTable, NameId, !.Env, !Stack, !ST, !I
+         -O)                                                             
+      68 +        eval_identifier(OpTable, NameId, !Env, !Stack, !ST, !IO
+         +)                                                              
+      69      ;
+      70          Term = binder(NameId),
+      71          eval_binder(NameId, !Env, !Stack)
+
+● Now update eval_identifier to thread !Env and handle import specially:
+
+● Update(src/eval.m)
+  ⎿  Added 12 lines, removed 7 lines                                     
+       90  % Identifier evaluation
+       91  %-------------------------------------------------------------
+           ----------%
+       92  
+       93 -:- pred eval_identifier(operator_table::in, string_id::in, env
+          -::in,                                                         
+       94 -    stack::in, stack::out, string_table::in, string_table::out
+          -,                                                             
+       95 -    io::di, io::uo) is det.                                   
+       93 +:- pred eval_identifier(operator_table::in, string_id::in,    
+       94 +    env::in, env::out, stack::in, stack::out,                 
+       95 +    string_table::in, string_table::out, io::di, io::uo) is de
+          +t.                                                            
+       96  
+       97 -eval_identifier(OpTable, NameId, Env, !Stack, !ST, !IO) :-    
+       98 -    ( if get_env(NameId, V, Env) then                         
+       97 +eval_identifier(OpTable, NameId, !Env, !Stack, !ST, !IO) :-   
+       98 +    ( if get_env(NameId, V, !.Env) then                       
+       99          push(V, !Stack)
+      100      else if map.search(OpTable, NameId, Info) then
+      101 -        operators.eval_operator(OpTable, !.ST, Info ^ oi_opera
+          -tor, Env,                                                     
+      102 -            !Stack, !IO)                                      
+      101 +        ( if Info ^ oi_operator = op_import then              
+      102 +            % import is special: it can modify Env and ST     
+      103 +            eval_import(OpTable, !Env, !Stack, !ST, !IO)      
+      104 +        else                                                  
+      105 +            operators.eval_operator(OpTable, !.ST, Info ^ oi_o
+          +perator, !.Env,                                               
+      106 +                !Stack, !IO)                                  
+      107 +        )                                                     
+      108      else
+      109          throw(undefined_name(NameId))
+      110      ).
+
+● Now add the eval_import implementation after eval_apply:
+
+● Update(src/eval.m)
+  ⎿  Error editing file
+
+● Read(src/eval.m)
+  ⎿  Read 34 lines
+
+● Update(src/eval.m)
+  ⎿  Added 88 lines, removed 3 lines                                     
+      165          % Evaluate with closure's env, then discard env change
+           s (lexical scoping)
+      166          eval_terms(OpTable, Terms, ClosureEnv, _, !Stack, !ST,
+            !IO)
+      167      else if V = termval(identifier(Id)), map.search(OpTable, I
+           d, Info) then
+      168 -        % Apply a quoted operator                             
+      169 -        operators.eval_operator(OpTable, !.ST, Info ^ oi_opera
+          -tor, Env,                                                     
+      170 -            !Stack, !IO)                                      
+      168 +        ( if Info ^ oi_operator = op_import then              
+      169 +            % import is special: it can modify Env (but we dis
+          +card here like closures)                                      
+      170 +            eval_import(OpTable, Env, _, !Stack, !ST, !IO)    
+      171 +        else                                                  
+      172 +            % Apply a quoted operator                         
+      173 +            operators.eval_operator(OpTable, !.ST, Info ^ oi_o
+          +perator, Env,                                                 
+      174 +                !Stack, !IO)                                  
+      175 +        )                                                     
+      176      else
+      177          throw(type_error("closure or operator", V))
+      178      ).
+      179  
+      180  %-------------------------------------------------------------
+           ----------%
+      181 +% import: ( filename -- ) Load and evaluate a file            
+      182 +%-------------------------------------------------------------
+          +----------%                                                   
+      183 +                                                              
+      184 +:- pred eval_import(operator_table::in, env::in, env::out,    
+      185 +    stack::in, stack::out, string_table::in, string_table::out
+          +,                                                             
+      186 +    io::di, io::uo) is det.                                   
+      187 +                                                              
+      188 +eval_import(OpTable, !Env, !Stack, !ST, !IO) :-               
+      189 +    pop("import", V, !Stack),                                 
+      190 +    Filename = operators.value_to_string(!.ST, V),            
+      191 +    io.read_named_file_as_string(Filename, ReadResult, !IO),  
+      192 +    (                                                         
+      193 +        ReadResult = ok(Content),                             
+      194 +        lexer.tokenize(Content, !.ST, LexResult),             
+      195 +        (                                                     
+      196 +            LexResult = ok(Tokens, !:ST),                     
+      197 +            parser.parse(Tokens, ParseResult),                
+      198 +            (                                                 
+      199 +                ParseResult = ok(Terms),                      
+      200 +                eval_terms(OpTable, Terms, !Env, !Stack, !ST, 
+          +!IO)                                                          
+      201 +            ;                                                 
+      202 +                ParseResult = error(ParseError),              
+      203 +                throw_parse_error(Filename, ParseError)       
+      204 +            )                                                 
+      205 +        ;                                                     
+      206 +            LexResult = error(LexError),                      
+      207 +            throw_lex_error(Filename, LexError)               
+      208 +        )                                                     
+      209 +    ;                                                         
+      210 +        ReadResult = error(Error),                            
+      211 +        throw(io_error("import", Filename, io.error_message(Er
+          +ror)))                                                        
+      212 +    ).                                                        
+      213 +                                                              
+      214 +:- pred throw_lex_error(string::in, lex_error::in) is erroneou
+          +s.                                                            
+      215 +                                                              
+      216 +throw_lex_error(Filename, unterminated_string(Pos)) :-        
+      217 +    throw(io_error("import", Filename,                        
+      218 +        string.format("%d:%d: unterminated string",           
+      219 +            [i(Pos ^ line), i(Pos ^ column)]))).              
+      220 +throw_lex_error(Filename, unterminated_block_comment(Pos)) :- 
+      221 +    throw(io_error("import", Filename,                        
+      222 +        string.format("%d:%d: unterminated block comment",    
+      223 +            [i(Pos ^ line), i(Pos ^ column)]))).              
+      224 +throw_lex_error(Filename, invalid_escape_sequence(Pos, Char)) 
+          +:-                                                            
+      225 +    throw(io_error("import", Filename,                        
+      226 +        string.format("%d:%d: invalid escape sequence: \\%c", 
+      227 +            [i(Pos ^ line), i(Pos ^ column), c(Char)]))).     
+      228 +                                                              
+      229 +:- pred throw_parse_error(string::in, parse_error::in) is erro
+          +neous.                                                        
+      230 +                                                              
+      231 +throw_parse_error(Filename, unexpected_token(Pos, _)) :-      
+      232 +    throw(io_error("import", Filename,                        
+      233 +        string.format("%d:%d: unexpected token",              
+      234 +            [i(Pos ^ line), i(Pos ^ column)]))).              
+      235 +throw_parse_error(Filename, unexpected_close_curly(Pos)) :-   
+      236 +    throw(io_error("import", Filename,                        
+      237 +        string.format("%d:%d: unexpected '}'",                
+      238 +            [i(Pos ^ line), i(Pos ^ column)]))).              
+      239 +throw_parse_error(Filename, unexpected_close_square(Pos)) :-  
+      240 +    throw(io_error("import", Filename,                        
+      241 +        string.format("%d:%d: unexpected ']'",                
+      242 +            [i(Pos ^ line), i(Pos ^ column)]))).              
+      243 +throw_parse_error(Filename, unclosed_curly(Pos)) :-           
+      244 +    throw(io_error("import", Filename,                        
+      245 +        string.format("%d:%d: unclosed '{'",                  
+      246 +            [i(Pos ^ line), i(Pos ^ column)]))).              
+      247 +throw_parse_error(Filename, unclosed_square(Pos)) :-          
+      248 +    throw(io_error("import", Filename,                        
+      249 +        string.format("%d:%d: unclosed '['",                  
+      250 +            [i(Pos ^ line), i(Pos ^ column)]))).              
+      251 +throw_parse_error(Filename, quote_at_end(Pos)) :-             
+      252 +    throw(io_error("import", Filename,                        
+      253 +        string.format("%d:%d: unexpected end after quote",    
+      254 +            [i(Pos ^ line), i(Pos ^ column)]))).              
+      255 +throw_parse_error(Filename, junk_token(Pos, S)) :-            
+      256 +    throw(io_error("import", Filename,                        
+      257 +        string.format("%d:%d: invalid token: '%s'",           
+      258 +            [i(Pos ^ line), i(Pos ^ column), s(S)]))).        
+      259 +                                                              
+      260 +%-------------------------------------------------------------
+          +----------%                                                   
+      261  :- end_module eval.
+      262  %-------------------------------------------------------------
+           ----------%
+
+● Let me try to build:
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/types.int3
+     Making Mercury/int3s/operators.int3
+     Making Mercury/ints/types.int
+     Making Mercury/ints/parser.int
+     Making Mercury/ints/operators.int
+     Making Mercury/ints/lexer.int
+     Making Mercury/ints/froth.int
+     … +10 lines (ctrl+o to see all)
+  ⎿  Interrupted · What should Claude do instead?
+
+> /export transcript15.txt 
+  ⎿  Conversation exported to: transcript15.txt
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀   claude-opus-4-5-20251101 · 200k/200k tokens (100%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 74 tokens (0.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 136.9k tokens (68.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 0k (0.1%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 19 tokens
+     └ MERCURY.md: 55 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
