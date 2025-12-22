@@ -282,6 +282,6 @@ Returns two values: `result-stack` and `0` on success, or `error-message` and `1
 . 10 , { 5 + } eval!           ; returns (. 15 ,) 0
 ```
 
-Supported: all operators (dispatched by arity), variable binding, function literals, function application, quoted terms, generators, `env`.
+Supported: all operators (dispatched by arity), variable binding, function literals, function application, quoted terms, generators, `env`, `stack`.
 
-Not yet supported: I/O operators, `stack`.
+Not yet supported: I/O operators.
