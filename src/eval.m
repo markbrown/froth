@@ -103,6 +103,9 @@ eval_identifier(OpTable, BaseDir, NameId, !Env, !Stack, !ST, !IO) :-
         ( if Info ^ oi_operator = op_import then
             % import is special: it can modify Env and ST
             eval_import(OpTable, BaseDir, !Env, !Stack, !ST, !IO)
+        else if Info ^ oi_operator = op_restore then
+            % restore is special: it replaces the current Env
+            eval_restore(!Env, !Stack)
         else
             operators.eval_operator(OpTable, !.ST, Info ^ oi_operator, !.Env,
                 !Stack, !IO)
@@ -265,6 +268,20 @@ throw_parse_error(Filename, junk_token(Pos, S)) :-
     throw(io_error("import", Filename,
         string.format("%d:%d: invalid token: '%s'",
             [i(Pos ^ line), i(Pos ^ column), s(S)]))).
+
+%-----------------------------------------------------------------------%
+% restore: ( map -- ) Replace current environment with the given map
+%-----------------------------------------------------------------------%
+
+:- pred eval_restore(env::in, env::out, stack::in, stack::out) is det.
+
+eval_restore(!Env, !Stack) :-
+    pop("restore", V, !Stack),
+    ( if V = mapval(NewEnv) then
+        !:Env = NewEnv
+    else
+        throw(type_error("map", V))
+    ).
 
 %-----------------------------------------------------------------------%
 :- end_module eval.

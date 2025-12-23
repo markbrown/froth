@@ -152,6 +152,7 @@ operator("arity", op_arity).
 operator("stack", op_stack).
 operator("import", op_import).
 operator("time", op_time).
+operator("restore", op_restore).
 
 %-----------------------------------------------------------------------%
 % Operator arity (number of values popped from stack)
@@ -206,6 +207,7 @@ operator_arity(op_arity) = 1.
 operator_arity(op_stack) = 0.
 operator_arity(op_import) = 1.
 operator_arity(op_time) = 0.
+operator_arity(op_restore) = 1.
 
 %-----------------------------------------------------------------------%
 % init_operators: intern all operator names and build the operator table
@@ -224,7 +226,7 @@ init_operators(!ST, OpTable) :-
         "isIdent", "isBinder", "isFunc", "isGen", "isQuote", "isApply",
         "isValue", "unwrap", "intern",
         "idToString", "idToIdent", "idToBinder", "isOperator", "arity",
-        "stack", "import", "time"
+        "stack", "import", "time", "restore"
     ],
     list.foldl2(intern_operator, OpNames, map.init, OpTable, !ST).
 
@@ -387,6 +389,10 @@ eval_operator(OpTable, ST, Op, Env, !Stack, !IO) :-
     ;
         Op = op_time,
         operator_time(!Stack, !IO)
+    ;
+        Op = op_restore,
+        % restore is handled specially in eval.m, should not reach here
+        unexpected($pred, "restore should be handled in eval.m")
     ).
 
 %-----------------------------------------------------------------------%

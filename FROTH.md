@@ -195,6 +195,7 @@ The `import` operator loads a file relative to the current file's directory. Def
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
 | `env` | `( -- map )` | Push current environment as a map |
+| `restore` | `( map -- )` | Replace current environment with the map |
 | `unwrap` | `( 'x -- x )` | Extract inner from quoted value or quoted term |
 | `intern` | `( a -- int )` | Get intern id from string, identifier, or binder |
 | `idToString` | `( int -- string )` | Create string from intern id |
@@ -203,6 +204,14 @@ The `import` operator loads a file relative to the current file's directory. Def
 | `isOperator` | `( 'ident -- int )` | 0 if identifier is an operator, else 1 |
 | `arity` | `( 'ident -- int )` | Get arity (input count) of an operator |
 | `stack` | `( ... -- array )` | Convert entire stack to an array |
+
+The `restore` operator replaces the entire environment. Use with `env` to save and restore state:
+
+```
+env /saved            ; save current environment
+... do stuff ...
+saved restore         ; restore it
+```
 
 ## Standard Library
 

@@ -64,7 +64,8 @@
     ;       op_arity        % arity      ( 'ident -- int )
     ;       op_stack        % stack      ( ... -- array )
     ;       op_import       % import     ( filename -- )
-    ;       op_time.        % time       ( -- int )
+    ;       op_time         % time       ( -- int )
+    ;       op_restore.     % restore    ( map -- )
 
 :- type operator_info
     --->    operator_info(
