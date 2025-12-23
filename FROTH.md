@@ -186,6 +186,7 @@ Evaluation maintains three pieces of state:
 | `write` | `( a -- )` | Print in executable (round-trippable) form |
 | `fwrite` | `( value file -- )` | Write value to file in executable form |
 | `import` | `( path -- )` | Load and evaluate a Froth file |
+| `time` | `( -- int )` | Push current clock ticks |
 
 The `import` operator loads a file relative to the current file's directory. Definitions from imported files are added to the current environment.
 

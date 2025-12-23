@@ -80,6 +80,7 @@
 :- pred operator_is_operator(operator_table::in, stack::in, stack::out) is det.
 :- pred operator_arity_op(operator_table::in, stack::in, stack::out) is det.
 :- pred operator_stack(stack::in, stack::out) is det.
+:- pred operator_time(stack::in, stack::out, io::di, io::uo) is det.
 
     % value_to_string(ST, Value) = String:
     % Convert a value to its string representation (for print/import).
@@ -100,6 +101,7 @@
 :- import_module pair.
 :- import_module require.
 :- import_module string.
+:- import_module time.
 
 %-----------------------------------------------------------------------%
 
@@ -149,6 +151,7 @@ operator("isOperator", op_is_operator).
 operator("arity", op_arity).
 operator("stack", op_stack).
 operator("import", op_import).
+operator("time", op_time).
 
 %-----------------------------------------------------------------------%
 % Operator arity (number of values popped from stack)
@@ -202,6 +205,7 @@ operator_arity(op_is_operator) = 1.
 operator_arity(op_arity) = 1.
 operator_arity(op_stack) = 0.
 operator_arity(op_import) = 1.
+operator_arity(op_time) = 0.
 
 %-----------------------------------------------------------------------%
 % init_operators: intern all operator names and build the operator table
@@ -220,7 +224,7 @@ init_operators(!ST, OpTable) :-
         "isIdent", "isBinder", "isFunc", "isGen", "isQuote", "isApply",
         "isValue", "unwrap", "intern",
         "idToString", "idToIdent", "idToBinder", "isOperator", "arity",
-        "stack", "import"
+        "stack", "import", "time"
     ],
     list.foldl2(intern_operator, OpNames, map.init, OpTable, !ST).
 
@@ -380,6 +384,9 @@ eval_operator(OpTable, ST, Op, Env, !Stack, !IO) :-
         Op = op_import,
         % import is handled specially in eval.m, should not reach here
         unexpected($pred, "import should be handled in eval.m")
+    ;
+        Op = op_time,
+        operator_time(!Stack, !IO)
     ).
 
 %-----------------------------------------------------------------------%
@@ -1080,6 +1087,14 @@ operator_stack(!Stack) :-
     % Stack is LIFO (top first), reverse to get push order (bottom first)
     Array = array.from_reverse_list(!.Stack),
     !:Stack = [arrayval(Array)].
+
+%-----------------------------------------------------------------------%
+% time: ( -- int ) Push current clock ticks
+%-----------------------------------------------------------------------%
+
+operator_time(!Stack, !IO) :-
+    time.clock(Ticks, !IO),
+    push(intval(Ticks), !Stack).
 
 %-----------------------------------------------------------------------%
 :- end_module operators.

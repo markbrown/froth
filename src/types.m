@@ -63,7 +63,8 @@
     ;       op_is_operator  % isOperator ( 'ident -- int )
     ;       op_arity        % arity      ( 'ident -- int )
     ;       op_stack        % stack      ( ... -- array )
-    ;       op_import.      % import     ( filename -- )
+    ;       op_import       % import     ( filename -- )
+    ;       op_time.        % time       ( -- int )
 
 :- type operator_info
     --->    operator_info(
