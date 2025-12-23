@@ -293,6 +293,22 @@ Supported: all operators (dispatched by arity), variable binding, function liter
 
 Not yet supported: I/O operators.
 
+### Map (map.froth)
+
+Map utilities.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `restrict` | `( map keys -- map )` | Restrict map to only keys in array |
+
+The `restrict` function returns a new map containing only the entries whose keys appear in the array. Non-identifier elements in the array are ignored.
+
+```
+$ 1 'a : 2 'b : 3 'c : /m
+m ['a 'c] restrict!        ; $ 1 'a : 3 'c :
+m ['a 42 "x"] restrict!    ; $ 1 'a : (ignores non-identifiers)
+```
+
 ### Boolean (bool.froth)
 
 Boolean operations where 0 represents true and non-zero represents false.
