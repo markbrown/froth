@@ -330,6 +330,37 @@ Boolean operations where 0 represents true and non-zero represents false.
 1 1 or!            ; 1 (false or false)
 ```
 
+### Math (math.froth)
+
+Mathematical utilities.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `fib` | `( a b n -- vals... )` | Generate Fibonacci sequence of length n |
+
+The `fib` function generates a Fibonacci sequence starting with the two given values, leaving n values on the stack.
+
+```
+[ 0 1 8 fib! ]     ; [ 0 1 1 2 3 5 8 13 ]
+[ 1 1 5 fib! ]     ; [ 1 1 2 3 5 ]
+[ 2 3 4 fib! ]     ; [ 2 3 5 8 ]
+```
+
+### Bench (bench.froth)
+
+Benchmarking utilities.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `bench` | `( closure n -- ticks )` | Execute closure n times, return elapsed clock ticks |
+
+Values produced by the closure are discarded after all iterations.
+
+```
+{ 1 2 + } 10000 bench! println!     ; prints elapsed ticks
+{ 0 1 20 fib! } 1000 bench! println!
+```
+
 ### Analysis (analysis.froth)
 
 Static analysis utilities for Froth code.
