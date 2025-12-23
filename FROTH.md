@@ -292,3 +292,47 @@ Returns two values: `result-stack` and `0` on success, or `error-message` and `1
 Supported: all operators (dispatched by arity), variable binding, function literals, function application (closures and quoted operators), quoted terms, generators, `env`, `stack`, custom operators via op-table.
 
 Not yet supported: I/O operators.
+
+### Boolean (bool.froth)
+
+Boolean operations where 0 represents true and non-zero represents false.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `not` | `( a -- int )` | 0 if a is non-zero or non-integer, else 1 |
+| `and` | `( a b -- int )` | 0 if both a and b are 0, else 1 |
+| `or` | `( a b -- int )` | 0 if either a or b is 0, else 1 |
+
+```
+0 not!             ; 1 (not true = false)
+1 not!             ; 0 (not false = true)
+"x" not!           ; 0 (non-integer = true)
+0 0 and!           ; 0 (true and true)
+0 1 and!           ; 1 (true and false)
+0 1 or!            ; 0 (true or false)
+1 1 or!            ; 1 (false or false)
+```
+
+### Analysis (analysis.froth)
+
+Static analysis utilities for Froth code.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `free-vars` | `( term -- array 0 \| 1 )` | Get free variables in a term |
+
+Returns `(array 0)` on success with array of free identifiers, or `1` if the term uses `env` or `import` (which prevent closure optimization).
+
+```
+'{ x } free-vars!              ; returns ['x] 0
+'{ /x x } free-vars!           ; returns [] 0 (x is bound)
+'{ /x y } free-vars!           ; returns ['y] 0
+'{ env } free-vars!            ; returns 1 (uses env)
+'{ "foo" import } free-vars!   ; returns 1 (uses import)
+```
+
+Free variable analysis:
+- Identifiers are free if not bound by a binder and not operators
+- Quoted terms (`'x`) are data, not references, so not counted
+- Nested functions inherit outer bindings
+- `env` and `import` prevent optimization (return 1)
