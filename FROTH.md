@@ -352,3 +352,23 @@ Free variable analysis:
 - Quoted terms (`'x`) are data, not references, so not counted
 - Nested functions inherit outer bindings
 - `env` and `import` prevent optimization (return 1)
+
+### Optimize (optimize.froth)
+
+Closure optimization utilities.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `restrict-closure-env` | `( closure -- closure 0 \| 1 )` | Restrict closure environment to free variables |
+
+Restricts a closure's captured environment to only the variables that are actually used (free) in the function body. Returns `(optimized-closure 0)` on success, or `1` if free variable analysis failed (due to `env` or `import` usage).
+
+```
+1 /a 2 /b { a } /f        ; f captures both a and b
+f fst #                    ; 2 (or more with stdlib)
+f restrict-closure-env!
+{ /opt
+  opt fst #                ; 1 (only 'a)
+  opt!                     ; 1 (still works)
+} { "failed" } ?!
+```
