@@ -110,6 +110,18 @@ f fst # print          ; prints number of bindings in closure's environment
 f snd print            ; prints: { 1 2 + }
 ```
 
+### Shell Escaping
+
+When piping Froth code through bash, characters like `!`, `$`, `*`, and `?` may be interpreted by the shell. Use a heredoc with a quoted delimiter to avoid this:
+
+```bash
+cat <<'EOF' | froth
+5 3 > { "yes" } { "no" } ?!
+EOF
+```
+
+Or use files or the REPL, which don't have this issue.
+
 ## Examples
 
 ### Hello World
