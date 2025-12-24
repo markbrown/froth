@@ -76,14 +76,17 @@ literal     ::= number | string
 | `term` | Quoted (unevaluated) term |
 | `nil` | Empty/null value |
 | `cons` | Pair of two values (head, tail) |
+| `closure` | Closure (environment + function body) |
 
 ### Closure Representation
 
-Closures are represented as cons pairs of `(environment-map, quoted-function)`. This means:
+Closures are a distinct value type that pairs an environment map with a function body. Evaluating `{ terms }` creates a closure capturing the current environment.
 
-- `{ terms }` is equivalent to `'{ terms } env ,`
-- Closures can be inspected with `fst` (get environment) and `snd` (get quoted function body)
-- Closures can be compared for equality with `=`
+Closures can be:
+- Inspected with `closureEnv` (get environment) and `closureBody` (get function body)
+- Created manually with `close` (from an environment map and a quoted function)
+- Type-tested with `isClosure`
+- Compared for equality with `=`
 
 ## Virtual Machine
 
@@ -169,7 +172,8 @@ Evaluation maintains three pieces of state:
 | `isArray` | `( a -- int )` | 0 if array, else 1 |
 | `isMap` | `( a -- int )` | 0 if map, else 1 |
 | `isNil` | `( a -- int )` | 0 if nil, else 1 |
-| `isCons` | `( a -- int )` | 0 if cons (including closures), else 1 |
+| `isCons` | `( a -- int )` | 0 if cons, else 1 |
+| `isClosure` | `( a -- int )` | 0 if closure, else 1 |
 | `isIdent` | `( a -- int )` | 0 if quoted identifier, else 1 |
 | `isBinder` | `( a -- int )` | 0 if quoted binder, else 1 |
 | `isFunc` | `( a -- int )` | 0 if quoted function, else 1 |
@@ -196,6 +200,9 @@ The `import` operator loads a file relative to the current file's directory. Def
 |------|--------------|-------------|
 | `env` | `( -- map )` | Push current environment as a map |
 | `restore` | `( map -- )` | Replace current environment with the map |
+| `close` | `( env body -- closure )` | Create a closure from environment and function body |
+| `closureEnv` | `( closure -- env )` | Extract environment from a closure |
+| `closureBody` | `( closure -- body )` | Extract function body from a closure |
 | `unwrap` | `( 'x -- x )` | Extract inner from quoted value or quoted term |
 | `intern` | `( a -- int )` | Get intern id from string, identifier, or binder |
 | `idToString` | `( int -- string )` | Create string from intern id |

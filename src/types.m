@@ -65,7 +65,11 @@
     ;       op_stack        % stack      ( ... -- array )
     ;       op_import       % import     ( filename -- )
     ;       op_time         % time       ( -- int )
-    ;       op_restore.     % restore    ( map -- )
+    ;       op_restore      % restore    ( map -- )
+    ;       op_close        % close       ( env body -- closure )
+    ;       op_closure_env  % closureEnv  ( closure -- env )
+    ;       op_closure_body % closureBody ( closure -- body )
+    ;       op_is_closure.  % isClosure   ( a -- int )
 
 :- type operator_info
     --->    operator_info(
@@ -100,11 +104,10 @@
 
     % Values in the Froth language.
     %
-    % Note: Closures are represented as cons pairs:
-    %   consval(mapval(Env), termval(function(Terms)))
-    % This allows closures to be inspected using fst/snd and compared with =.
-    % Evaluating { terms } creates this cons pair with the current environment.
-    % The ! operator matches this pattern and evaluates the function body.
+    % Closures are represented as closureval(Env, Body) where Env is a map
+    % and Body is a list of terms. Evaluating { terms } creates a closure
+    % with the current environment. The ! operator evaluates the body
+    % in the closure's environment.
     %
 :- type value
     --->    intval(int)
@@ -113,7 +116,8 @@
     ;       mapval(map(string_id, value))
     ;       termval(term)
     ;       nilval
-    ;       consval(value, value).  % cons(head, tail)
+    ;       consval(value, value)   % cons(head, tail)
+    ;       closureval(env, list(term)).  % closure(env, body)
 
 :- type term
     --->    identifier(string_id)
@@ -239,6 +243,7 @@ value_type_name(mapval(_)) = "map".
 value_type_name(termval(_)) = "term".
 value_type_name(nilval) = "nil".
 value_type_name(consval(_, _)) = "cons".
+value_type_name(closureval(_, _)) = "closure".
 
 %-----------------------------------------------------------------------%
 

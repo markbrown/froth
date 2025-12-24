@@ -132,9 +132,9 @@ eval_binder(NameId, !Env, !Stack) :-
 :- pred eval_function(list(term)::in, env::in,
     stack::in, stack::out) is det.
 
-% A closure is represented as: consval(mapval(Env), termval(function(Terms)))
+% A closure is represented as: closureval(Env, Terms)
 eval_function(Terms, Env, !Stack) :-
-    Closure = consval(mapval(Env), termval(function(Terms))),
+    Closure = closureval(Env, Terms),
     push(Closure, !Stack).
 
 %-----------------------------------------------------------------------%
@@ -166,7 +166,7 @@ eval_generator(OpTable, BaseDir, Terms, !Env, !Stack, !ST, !IO) :-
 
 eval_apply(OpTable, BaseDir, Env, Env, !Stack, !ST, !IO) :-
     pop("!", V, !Stack),
-    ( if V = consval(mapval(ClosureEnv), termval(function(Terms))) then
+    ( if V = closureval(ClosureEnv, Terms) then
         % Evaluate with closure's env, then discard env changes (lexical scoping)
         eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Stack, !ST, !IO)
     else if V = termval(identifier(Id)), map.search(OpTable, Id, Info) then

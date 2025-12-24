@@ -81,6 +81,10 @@
 :- pred operator_arity_op(operator_table::in, stack::in, stack::out) is det.
 :- pred operator_stack(stack::in, stack::out) is det.
 :- pred operator_time(stack::in, stack::out, io::di, io::uo) is det.
+:- pred operator_close(stack::in, stack::out) is det.
+:- pred operator_closure_env(stack::in, stack::out) is det.
+:- pred operator_closure_body(stack::in, stack::out) is det.
+:- pred operator_is_closure(stack::in, stack::out) is det.
 
     % value_to_string(ST, Value) = String:
     % Convert a value to its string representation (for print/import).
@@ -153,6 +157,10 @@ operator("stack", op_stack).
 operator("import", op_import).
 operator("time", op_time).
 operator("restore", op_restore).
+operator("close", op_close).
+operator("closureEnv", op_closure_env).
+operator("closureBody", op_closure_body).
+operator("isClosure", op_is_closure).
 
 %-----------------------------------------------------------------------%
 % Operator arity (number of values popped from stack)
@@ -208,6 +216,10 @@ operator_arity(op_stack) = 0.
 operator_arity(op_import) = 1.
 operator_arity(op_time) = 0.
 operator_arity(op_restore) = 1.
+operator_arity(op_close) = 2.
+operator_arity(op_closure_env) = 1.
+operator_arity(op_closure_body) = 1.
+operator_arity(op_is_closure) = 1.
 
 %-----------------------------------------------------------------------%
 % init_operators: intern all operator names and build the operator table
@@ -226,7 +238,8 @@ init_operators(!ST, OpTable) :-
         "isIdent", "isBinder", "isFunc", "isGen", "isQuote", "isApply",
         "isValue", "unwrap", "intern",
         "idToString", "idToIdent", "idToBinder", "isOperator", "arity",
-        "stack", "import", "time", "restore"
+        "stack", "import", "time", "restore",
+        "close", "closureEnv", "closureBody", "isClosure"
     ],
     list.foldl2(intern_operator, OpNames, map.init, OpTable, !ST).
 
@@ -393,6 +406,18 @@ eval_operator(OpTable, ST, Op, Env, !Stack, !IO) :-
         Op = op_restore,
         % restore is handled specially in eval.m, should not reach here
         unexpected($pred, "restore should be handled in eval.m")
+    ;
+        Op = op_close,
+        operator_close(!Stack)
+    ;
+        Op = op_closure_env,
+        operator_closure_env(!Stack)
+    ;
+        Op = op_closure_body,
+        operator_closure_body(!Stack)
+    ;
+        Op = op_is_closure,
+        operator_is_closure(!Stack)
     ).
 
 %-----------------------------------------------------------------------%
@@ -418,6 +443,8 @@ value_to_string(ST, termval(T)) = term_to_string(ST, T).
 value_to_string(_, nilval) = ".".
 value_to_string(ST, consval(H, T)) =
     "(" ++ value_to_string(ST, H) ++ "," ++ value_to_string(ST, T) ++ ")".
+value_to_string(ST, closureval(_, Body)) =
+    "<closure:" ++ terms_to_string(ST, Body) ++ ">".
 
 :- func term_to_string(string_table, term) = string.
 
@@ -646,6 +673,12 @@ values_equal(consval(H1, T1), consval(H2, T2), Equal) :-
     ( HeadEq = no, Equal = no
     ; HeadEq = yes, values_equal(T1, T2, Equal)
     ).
+values_equal(closureval(Env1, Body1), closureval(Env2, Body2), Equal) :-
+    ( if Body1 = Body2 then
+        maps_equal(Env1, Env2, Equal)
+    else
+        Equal = no
+    ).
 
 :- pred arrays_equal(array(value)::in, array(value)::in, bool::out) is semidet.
 
@@ -781,6 +814,8 @@ value_to_write_string(ST, termval(T)) = "'" ++ term_to_write_string(ST, T).
 value_to_write_string(_, nilval) = ".".
 value_to_write_string(ST, consval(H, T)) =
     value_to_write_string(ST, T) ++ " " ++ value_to_write_string(ST, H) ++ " ,".
+value_to_write_string(ST, closureval(_, Body)) =
+    "<closure:{ " ++ terms_to_write_string(ST, Body) ++ "}>".
 
 :- pred map_entry_to_string(string_table::in, string_id::in, value::in,
     string::in, string::out) is det.
@@ -1101,6 +1136,55 @@ operator_stack(!Stack) :-
 operator_time(!Stack, !IO) :-
     time.clock(Ticks, !IO),
     push(intval(Ticks), !Stack).
+
+%-----------------------------------------------------------------------%
+% close: ( env body -- closure ) Create a closure from env and body
+%-----------------------------------------------------------------------%
+
+operator_close(!Stack) :-
+    pop("close", BodyVal, !Stack),
+    pop("close", EnvVal, !Stack),
+    ( if EnvVal = mapval(Env), BodyVal = termval(function(Body)) then
+        push(closureval(Env, Body), !Stack)
+    else if EnvVal = mapval(_) then
+        throw(type_error("function", BodyVal))
+    else
+        throw(type_error("map", EnvVal))
+    ).
+
+%-----------------------------------------------------------------------%
+% closureEnv: ( closure -- env ) Get the environment from a closure
+%-----------------------------------------------------------------------%
+
+operator_closure_env(!Stack) :-
+    pop("closureEnv", V, !Stack),
+    ( if V = closureval(Env, _) then
+        push(mapval(Env), !Stack)
+    else
+        throw(type_error("closure", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% closureBody: ( closure -- body ) Get the body from a closure
+%-----------------------------------------------------------------------%
+
+operator_closure_body(!Stack) :-
+    pop("closureBody", V, !Stack),
+    ( if V = closureval(_, Body) then
+        push(termval(function(Body)), !Stack)
+    else
+        throw(type_error("closure", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% isClosure: ( a -- int ) Test if value is a closure
+%-----------------------------------------------------------------------%
+
+operator_is_closure(!Stack) :-
+    pop("isClosure", V, !Stack),
+    ( if V = closureval(_, _) then push(intval(0), !Stack)
+    else push(intval(1), !Stack)
+    ).
 
 %-----------------------------------------------------------------------%
 :- end_module operators.
