@@ -317,13 +317,32 @@ Map utilities.
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
 | `restrict` | `( map keys -- map )` | Restrict map to only keys in array |
-
-The `restrict` function returns a new map containing only the entries whose keys appear in the array. Non-identifier elements in the array are ignored.
+| `transform-values` | `( map fn -- map )` | Transform each value in map using fn |
 
 ```
 $ 1 'a : 2 'b : 3 'c : /m
-m ['a 'c] restrict!        ; $ 1 'a : 3 'c :
-m ['a 42 "x"] restrict!    ; $ 1 'a : (ignores non-identifiers)
+m ['a 'c] restrict!            ; $ 1 'a : 3 'c :
+m { 2 * } transform-values!    ; $ 2 'a : 4 'b : 6 'c :
+```
+
+### Data (data.froth)
+
+Generic data structure utilities.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `transform` | `( data fn -- data )` | Recursively transform data structure |
+
+The `transform` function applies a function to all leaf values in a data structure, recursively traversing into maps, arrays, and cons cells. Nil values are left unchanged.
+
+```
+[ 1 2 3 ] { 2 * } transform!           ; [ 2 4 6 ]
+$ 1 'a : 2 'b : { 10 + } transform!    ; $ 11 'a : 12 'b :
+. 3 , 2 , 1 , { 2 * } transform!       ; . 6 , 4 , 2 ,
+
+; Works on nested structures
+[ [ 1 2 ] [ 3 4 ] ] { 2 * } transform! ; [ [ 2 4 ] [ 6 8 ] ]
+$ [ 1 2 ] 'arr : { 2 * } transform!    ; $ [ 2 4 ] 'arr :
 ```
 
 ### Boolean (bool.froth)
@@ -413,10 +432,10 @@ Restricts a closure's captured environment to only the variables that are actual
 
 ```
 1 /a 2 /b { a } /f        ; f captures both a and b
-f fst #                    ; 2 (or more with stdlib)
+f closureEnv #             ; 2 (or more with stdlib)
 f restrict-closure-env!
 { /opt
-  opt fst #                ; 1 (only 'a)
+  opt closureEnv #         ; 1 (only 'a)
   opt!                     ; 1 (still works)
 } { "failed" } ?!
 ```
