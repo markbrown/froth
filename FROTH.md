@@ -224,6 +224,35 @@ saved restore         ; restore it
 
 The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is given. It imports the following modules:
 
+### Definitions (defs.froth)
+
+Utilities for creating closures with minimal environments. This module is imported first and has no dependencies on other stdlib modules.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `def-fn` | `( deps closure -- closure )` | Create closure with environment restricted to deps |
+
+When a closure is created with `{ ... }`, it captures the entire current environment. This can cause environment bloat to propagate through a chain of definitions. Use `def-fn` to explicitly specify which bindings a closure needs:
+
+```
+{ 1 } /a
+{ a! 1 + } /b
+
+; Without def-fn: c captures full env (47+ bindings)
+{ b! 1 + } /c-full
+c-full closureEnv #           ; 47
+
+; With def-fn: c captures only b (1 binding)
+['b] { b! 1 + } def-fn! /c-lean
+c-lean closureEnv #           ; 1
+
+; Both produce the same result
+c-full!                       ; 3
+c-lean!                       ; 3
+```
+
+This is definition-time optimization: later definitions that capture `c-lean` will get the minimal version, preventing transitive environment bloat.
+
 ### I/O Utilities (io.froth)
 
 | Name | Stack Effect | Description |
@@ -427,6 +456,7 @@ Closure optimization utilities.
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
 | `restrict-closure-env` | `( closure -- closure 0 \| 1 )` | Restrict closure environment to free variables |
+| `optimize` | `( data -- data )` | Recursively optimize all closures in a data structure |
 
 Restricts a closure's captured environment to only the variables that are actually used (free) in the function body. Returns `(optimized-closure 0)` on success, or `1` if free variable analysis failed (due to `env` or `import` usage).
 
@@ -438,4 +468,21 @@ f restrict-closure-env!
   opt closureEnv #         ; 1 (only 'a)
   opt!                     ; 1 (still works)
 } { "failed" } ?!
+```
+
+The `optimize` function uses `transform` to traverse any data structure (arrays, maps, cons cells) and optimize all closures within it. For each closure:
+1. Restricts the environment to only free variables
+2. Recursively optimizes the closure's environment
+
+```
+1 /unused 2 /used
+{ used } /f
+[ f f ] optimize!          ; array with optimized closures
+$ f 'fn : optimize!        ; map with optimized closure value
+```
+
+To optimize all closures in the current environment, use inline (not in a closure, due to lexical scoping):
+
+```
+env optimize! restore      ; optimize and replace current environment
 ```

@@ -7,7 +7,7 @@
 ; seq-fn: function for analyzing sequences (for mutual recursion)
 ; term-fn: this function itself (for self-recursion)
 ; Returns: fvs (array), flag (0=safe, 1=uses env/import), updated-bound
-{ /term-fn /seq-fn /bound /term
+[] { /term-fn /seq-fn /bound /term
   term isIdent {
     ; Check for env/import first (they break free-vars optimization)
     term 'env = { [] 1 bound } {
@@ -49,12 +49,12 @@
     ; Literal, apply, value - no free vars
     [] 0 bound
   } ?! } ?! } ?! } ?! } ?!
-} /free-vars-term-impl
+} def-fn! /free-vars-term-impl
 
 ; free-vars-seq-impl: (body bound idx seq-fn term-fn -- fvs flag)
 ; Analyze a sequence of terms (function/generator body).
 ; Processes terms left-to-right, accumulating bindings.
-{ /term-fn /seq-fn /idx /bound /body
+['concat 'and] { /term-fn /seq-fn /idx /bound /body
   idx body # = {
     ; Done
     [] 0
@@ -68,12 +68,12 @@
     term-fvs rest-fvs concat!
     term-flag rest-flag and!
   } ?!
-} /free-vars-seq-impl
+} def-fn! /free-vars-seq-impl
 
 ; free-vars: (term -- array 0 | 1)
 ; Get free identifiers in a term.
 ; Returns (array 0) if analysis succeeded, or 1 if env/import was found.
-{ /term
+['free-vars-seq-impl 'free-vars-term-impl] { /term
   term isFunc {
     term $ 0 free-vars-seq-impl free-vars-term-impl free-vars-seq-impl!
     /flag /fvs
@@ -89,4 +89,45 @@
     /ignored /flag /fvs
     flag { fvs 0 } { 1 } ?!
   } ?! } ?!
-} /free-vars
+} def-fn! /free-vars
+
+; Remove impl functions from the environment
+env 'free-vars-term-impl delete 'free-vars-seq-impl delete restore
+
+; count-bindings-impl: (self data -- count)
+; Implementation helper for counting bindings in closure environments.
+; Only counts immediate environment sizes, not recursing into nested closures.
+['foldl] { /self /data
+  data isClosure {
+    ; Just count this closure's env size (shallow)
+    data closureEnv #
+  } {
+  data isMap {
+    ; Sum counts for all values in map
+    0 data keys { /key
+      data key @ self self! +
+    } foldl!
+  } {
+  data isArray {
+    ; Sum counts for all elements
+    0 data { self self! + } foldl!
+  } {
+  data isCons {
+    ; Sum counts for head and tail
+    data fst self self!
+    data snd self self! +
+  } {
+    ; Leaf value - no bindings
+    0
+  } ?! } ?! } ?! } ?!
+} def-fn! /count-bindings-impl
+
+; count-bindings: (data -- count)
+; Count total bindings in closure environments within a data structure.
+; For each closure found, counts the size of its environment (shallow).
+['count-bindings-impl] { /data
+  data count-bindings-impl count-bindings-impl!
+} def-fn! /count-bindings
+
+; Remove count-bindings-impl from the environment
+env 'count-bindings-impl delete restore
