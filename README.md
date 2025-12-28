@@ -78,15 +78,32 @@ The REPL (Read-Eval-Print Loop) maintains state across lines:
 
 ### Saving and Restoring State
 
-You can save the current environment and reload it later:
+Use `env` to capture the current environment and `restore` to replace it:
+
+```
+env /saved            ; save current environment
+... do stuff ...
+saved restore         ; restore it
+```
+
+You can also save the environment to a file and reload it later:
 
 ```
 ; In the REPL, save environment to a file:
-env ["session" ".froth"] fwrite
+env "session.froth" fwrite
 
 ; Later, restart with that environment:
-; $ froth -e session.froth
+; $ froth session.froth
 ```
+
+### Runtime Errors
+
+| Error | Cause |
+|-------|-------|
+| `stack underflow in 'op'` | Operation `op` needed more values than available |
+| `type error: expected T, got U` | Operation expected type T but got type U |
+| `undefined name: N` | Name N is not bound and is not an operator |
+| `index out of bounds: I (array size: S)` | Array index I is not in range 0..S-1 |
 
 ## Tips
 
@@ -219,4 +236,5 @@ Froth could be described as "Forth with Scheme's scoping semantics" - it looks l
 
 ## Documentation
 
-See [FROTH.md](FROTH.md) for the complete language reference.
+- [FROTH.md](FROTH.md) - Language reference
+- [FROTHLIB.md](FROTHLIB.md) - Standard library reference
