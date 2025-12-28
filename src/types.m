@@ -130,8 +130,6 @@
 
 :- type env == map(string_id, value).
 
-:- type stack == list(value).
-
 %-----------------------------------------------------------------------%
 % Runtime errors
 %-----------------------------------------------------------------------%
@@ -147,13 +145,6 @@
     % Convert an eval_error to a human-readable message.
     %
 :- func format_error(string_table, eval_error) = string.
-
-%-----------------------------------------------------------------------%
-% Stack operations
-%-----------------------------------------------------------------------%
-
-:- pred push(value::in, stack::in, stack::out) is det.
-:- pred pop(string::in, value::out, stack::in, stack::out) is det.
 
 %-----------------------------------------------------------------------%
 
@@ -244,18 +235,6 @@ value_type_name(termval(_)) = "term".
 value_type_name(nilval) = "nil".
 value_type_name(consval(_, _)) = "cons".
 value_type_name(closureval(_, _)) = "closure".
-
-%-----------------------------------------------------------------------%
-
-push(V, Stack, [V | Stack]).
-
-pop(Op, V, Stack0, Stack) :-
-    (
-        Stack0 = [V | Stack]
-    ;
-        Stack0 = [],
-        throw(stack_underflow(Op))
-    ).
 
 %-----------------------------------------------------------------------%
 :- end_module types.

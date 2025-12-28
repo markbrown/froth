@@ -6,21 +6,25 @@
 :- module eval.
 :- interface.
 
+:- import_module array.
 :- import_module io.
 :- import_module list.
 :- import_module types.
 
 %-----------------------------------------------------------------------%
 
-    % eval_terms(OpTable, BaseDir, Terms, !Env, !Stack, !ST, !IO):
+    % eval_terms(OpTable, BaseDir, Terms, !Env, !StackArray, !StackPtr, !ST, !IO):
     % Evaluate a list of terms, updating the environment and stack.
     % OpTable is read-only (fixed at engine startup).
     % BaseDir is used to resolve relative paths in imports.
     % StringTable is threaded through (may grow with dynamic imports).
+    % Stack is represented as an array and pointer (for efficient operations).
     % Throws eval_error on failure.
     %
 :- pred eval_terms(operator_table::in, string::in, list(term)::in,
-    env::in, env::out, stack::in, stack::out,
+    env::in, env::out,
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out,
     string_table::in, string_table::out, io::di, io::uo) is det.
 
     % Environment operations.
@@ -32,9 +36,10 @@
 
 :- implementation.
 
-:- import_module array.
+:- import_module datastack.
 :- import_module dir.
 :- import_module exception.
+:- import_module int.
 :- import_module lexer.
 :- import_module map.
 :- import_module operators.
@@ -55,37 +60,38 @@ set_env(Name, Value, !Env) :-
 % Main evaluation
 %-----------------------------------------------------------------------%
 
-eval_terms(_, _, [], !Env, !Stack, !ST, !IO).
-eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !Stack, !ST, !IO) :-
-    eval_term(OpTable, BaseDir, Term, !Env, !Stack, !ST, !IO),
-    eval_terms(OpTable, BaseDir, Terms, !Env, !Stack, !ST, !IO).
+eval_terms(_, _, [], !Env, !Array, !Ptr, !ST, !IO).
+eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !Array, !Ptr, !ST, !IO) :-
+    eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !IO),
+    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !IO).
 
 :- pred eval_term(operator_table::in, string::in, term::in, env::in, env::out,
-    stack::in, stack::out, string_table::in, string_table::out,
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out, string_table::in, string_table::out,
     io::di, io::uo) is det.
 
-eval_term(OpTable, BaseDir, Term, !Env, !Stack, !ST, !IO) :-
+eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !IO) :-
     (
         Term = identifier(NameId),
-        eval_identifier(OpTable, BaseDir, NameId, !Env, !Stack, !ST, !IO)
+        eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, !ST, !IO)
     ;
         Term = binder(NameId),
-        eval_binder(NameId, !Env, !Stack)
+        eval_binder(NameId, !Env, !Array, !Ptr)
     ;
         Term = function(Terms),
-        eval_function(Terms, !.Env, !Stack)
+        eval_function(Terms, !.Env, !Array, !Ptr)
     ;
         Term = generator(Terms),
-        eval_generator(OpTable, BaseDir, Terms, !Env, !Stack, !ST, !IO)
+        eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !IO)
     ;
         Term = quoted(T),
-        push(termval(T), !Stack)
+        datastack.push(termval(T), !Array, !Ptr)
     ;
         Term = value(V),
-        push(V, !Stack)
+        datastack.push(V, !Array, !Ptr)
     ;
         Term = apply_term,
-        eval_apply(OpTable, BaseDir, !Env, !Stack, !ST, !IO)
+        eval_apply(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !IO)
     ).
 
 %-----------------------------------------------------------------------%
@@ -93,22 +99,24 @@ eval_term(OpTable, BaseDir, Term, !Env, !Stack, !ST, !IO) :-
 %-----------------------------------------------------------------------%
 
 :- pred eval_identifier(operator_table::in, string::in, string_id::in,
-    env::in, env::out, stack::in, stack::out,
+    env::in, env::out,
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out,
     string_table::in, string_table::out, io::di, io::uo) is det.
 
-eval_identifier(OpTable, BaseDir, NameId, !Env, !Stack, !ST, !IO) :-
+eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, !ST, !IO) :-
     ( if get_env(NameId, V, !.Env) then
-        push(V, !Stack)
+        datastack.push(V, !Array, !Ptr)
     else if map.search(OpTable, NameId, Info) then
         ( if Info ^ oi_operator = op_import then
             % import is special: it can modify Env and ST
-            eval_import(OpTable, BaseDir, !Env, !Stack, !ST, !IO)
+            eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !IO)
         else if Info ^ oi_operator = op_restore then
             % restore is special: it replaces the current Env
-            eval_restore(!Env, !Stack)
+            eval_restore(!Env, !Array, !Ptr)
         else
             operators.eval_operator(OpTable, !.ST, Info ^ oi_operator, !.Env,
-                !Stack, !IO)
+                !Array, !Ptr, !IO)
         )
     else
         throw(undefined_name(NameId))
@@ -119,10 +127,11 @@ eval_identifier(OpTable, BaseDir, NameId, !Env, !Stack, !ST, !IO) :-
 %-----------------------------------------------------------------------%
 
 :- pred eval_binder(string_id::in, env::in, env::out,
-    stack::in, stack::out) is det.
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out) is det.
 
-eval_binder(NameId, !Env, !Stack) :-
-    pop("binder", V, !Stack),
+eval_binder(NameId, !Env, !Array, !Ptr) :-
+    datastack.pop("binder", V, !Array, !Ptr),
     set_env(NameId, V, !Env).
 
 %-----------------------------------------------------------------------%
@@ -130,53 +139,84 @@ eval_binder(NameId, !Env, !Stack) :-
 %-----------------------------------------------------------------------%
 
 :- pred eval_function(list(term)::in, env::in,
-    stack::in, stack::out) is det.
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out) is det.
 
 % A closure is represented as: closureval(Env, Terms)
-eval_function(Terms, Env, !Stack) :-
+eval_function(Terms, Env, !Array, !Ptr) :-
     Closure = closureval(Env, Terms),
-    push(Closure, !Stack).
+    datastack.push(Closure, !Array, !Ptr).
 
 %-----------------------------------------------------------------------%
 % Generator evaluation
 %-----------------------------------------------------------------------%
 
 :- pred eval_generator(operator_table::in, string::in, list(term)::in,
-    env::in, env::out, stack::in, stack::out,
+    env::in, env::out,
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out,
     string_table::in, string_table::out, io::di, io::uo) is det.
 
-eval_generator(OpTable, BaseDir, Terms, !Env, !Stack, !ST, !IO) :-
-    % Save current stack, evaluate with empty stack
-    SavedStack = !.Stack,
-    !:Stack = [],
-    eval_terms(OpTable, BaseDir, Terms, !Env, !Stack, !ST, !IO),
-    % Convert stack to array (reverse since stack is LIFO)
-    Array = array.from_reverse_list(!.Stack),
-    % Restore stack and push array
-    !:Stack = SavedStack,
-    push(arrayval(Array), !Stack).
+eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !IO) :-
+    % Save current stack pointer
+    SavedPtr = !.Ptr,
+    % Evaluate generator terms (they push values onto the stack)
+    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !IO),
+    % Extract values pushed by the generator as an array
+    extract_range(!.Array, SavedPtr, !.Ptr, ResultArray),
+    % Restore stack pointer and push the result array
+    !:Ptr = SavedPtr,
+    datastack.push(arrayval(ResultArray), !Array, !Ptr).
+
+    % extract_range(Array, Start, End, Result):
+    % Extract values from Array[Start..End-1] into a new array.
+    %
+:- pred extract_range(array(value)::in, int::in, int::in,
+    array(value)::out) is det.
+
+extract_range(SrcArray, Start, End, Result) :-
+    Len = End - Start,
+    ( if Len =< 0 then
+        Result = array.init(0, nilval)
+    else
+        Result0 = array.init(Len, nilval),
+        extract_range_loop(SrcArray, Start, 0, Len, Result0, Result)
+    ).
+
+:- pred extract_range_loop(array(value)::in, int::in, int::in, int::in,
+    array(value)::array_di, array(value)::array_uo) is det.
+
+extract_range_loop(Src, SrcIdx, DstIdx, Len, !Dst) :-
+    ( if DstIdx >= Len then
+        true
+    else
+        array.lookup(Src, SrcIdx, Value),
+        array.set(DstIdx, Value, !Dst),
+        extract_range_loop(Src, SrcIdx + 1, DstIdx + 1, Len, !Dst)
+    ).
 
 %-----------------------------------------------------------------------%
 % apply (!)
 %-----------------------------------------------------------------------%
 
 :- pred eval_apply(operator_table::in, string::in, env::in, env::out,
-    stack::in, stack::out, string_table::in, string_table::out,
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out, string_table::in, string_table::out,
     io::di, io::uo) is det.
 
-eval_apply(OpTable, BaseDir, Env, Env, !Stack, !ST, !IO) :-
-    pop("!", V, !Stack),
+eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !IO) :-
+    datastack.pop("!", V, !Array, !Ptr),
     ( if V = closureval(ClosureEnv, Terms) then
         % Evaluate with closure's env, then discard env changes (lexical scoping)
-        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Stack, !ST, !IO)
+        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Array, !Ptr, !ST, !IO)
     else if V = termval(identifier(Id)), map.search(OpTable, Id, Info) then
         ( if Info ^ oi_operator = op_import then
             % import is special: it can modify Env (but we discard here like closures)
-            eval_import(OpTable, BaseDir, Env, _, !Stack, !ST, !IO)
+            eval_import(OpTable, BaseDir, Env, _, !Array, !Ptr, !ST, !IO)
         else
             % Apply a quoted operator
             operators.eval_operator(OpTable, !.ST, Info ^ oi_operator, Env,
-                !Stack, !IO)
+                !Array, !Ptr, !IO)
         )
     else
         throw(type_error("closure or operator", V))
@@ -187,11 +227,12 @@ eval_apply(OpTable, BaseDir, Env, Env, !Stack, !ST, !IO) :-
 %-----------------------------------------------------------------------%
 
 :- pred eval_import(operator_table::in, string::in, env::in, env::out,
-    stack::in, stack::out, string_table::in, string_table::out,
-    io::di, io::uo) is det.
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out,
+    string_table::in, string_table::out, io::di, io::uo) is det.
 
-eval_import(OpTable, BaseDir, !Env, !Stack, !ST, !IO) :-
-    pop("import", V, !Stack),
+eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !IO) :-
+    datastack.pop("import", V, !Array, !Ptr),
     RelFilename = operators.value_to_string(!.ST, V),
     % Resolve relative paths using BaseDir
     ( if dir.path_name_is_absolute(RelFilename) then
@@ -209,7 +250,7 @@ eval_import(OpTable, BaseDir, !Env, !Stack, !ST, !IO) :-
             parser.parse(Tokens, ParseResult),
             (
                 ParseResult = ok(Terms),
-                eval_terms(OpTable, NewBaseDir, Terms, !Env, !Stack, !ST, !IO)
+                eval_terms(OpTable, NewBaseDir, Terms, !Env, !Array, !Ptr, !ST, !IO)
             ;
                 ParseResult = error(ParseError),
                 throw_parse_error(Filename, ParseError)
@@ -273,10 +314,12 @@ throw_parse_error(Filename, junk_token(Pos, S)) :-
 % restore: ( map -- ) Replace current environment with the given map
 %-----------------------------------------------------------------------%
 
-:- pred eval_restore(env::in, env::out, stack::in, stack::out) is det.
+:- pred eval_restore(env::in, env::out,
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out) is det.
 
-eval_restore(!Env, !Stack) :-
-    pop("restore", V, !Stack),
+eval_restore(!Env, !Array, !Ptr) :-
+    datastack.pop("restore", V, !Array, !Ptr),
     ( if V = mapval(NewEnv) then
         !:Env = NewEnv
     else
