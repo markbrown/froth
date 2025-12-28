@@ -1,0 +1,2538 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Referenced file src/froth.m
+  ⎿  Read src/eval.m (332 lines)
+  ⎿  Referenced file src/operators.m
+  ⎿  Read src/types.m (242 lines)
+  ⎿  Read src/stack_test.m (157 lines)
+
+> What happens to the datastack when we generate an array? Do we allocate a 
+new array for the recursive call? 
+
+● Looking at the generator evaluation in eval.m:160-169:
+
+  eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !IO) :-
+      SavedPtr = !.Ptr,
+      eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !IO),
+      extract_range(!.Array, SavedPtr, !.Ptr, ResultArray),
+      !:Ptr = SavedPtr,
+      datastack.push(arrayval(ResultArray), !Array, !Ptr).
+
+  No, we don't allocate a new array for the recursive call. The same datastack array is reused:
+
+  1. Save current pointer position (SavedPtr)
+  2. Evaluate generator terms - they push values onto the same !Array
+  3. Extract values from [SavedPtr, !.Ptr) into a new small ResultArray
+  4. Reset pointer to SavedPtr (logically "pops" those values)
+  5. Push arrayval(ResultArray) onto the stack
+
+  The only allocation is for ResultArray in extract_range, which copies just the generated values into a fresh array. The main datastack array is threaded through and reused.
+
+  This is more efficient than the old list-based approach where each generator would allocate list cells for every value, plus creating the result list. Now we just reuse the pre-allocated stack buffer and only allocate for the final result array.
+
+> Excellent! Thanks for checking that. Would it make more sense to put 
+`extract_range` in datastack.m? 
+
+● Yes, that would make sense. It's a stack operation conceptually - extracting a range of values from the stack into an array. Keeping all stack operations in datastack.m is cleaner and would make it available if needed elsewhere.
+
+  Let me move it:
+
+● Read(src/datastack.m)
+  ⎿  Read 162 lines
+
+● Read(src/eval.m)
+  ⎿  Read 40 lines
+
+● I'll add extract_range to datastack.m and remove it from eval.m:
+
+● Update(src/datastack.m)
+  ⎿  Error editing file
+
+● Update(src/datastack.m)
+  ⎿  Added 23 lines                                                      
+      157      ).
+      158  
+      159  %-------------------------------------------------------------
+           ----------%
+      160 +                                                              
+      161 +extract_range(SrcArray, Start, End, Result) :-                
+      162 +    Len = End - Start,                                        
+      163 +    ( if Len =< 0 then                                        
+      164 +        Result = array.init(0, nilval)                        
+      165 +    else                                                      
+      166 +        Result0 = array.init(Len, nilval),                    
+      167 +        extract_range_loop(SrcArray, Start, 0, Len, Result0, R
+          +esult)                                                        
+      168 +    ).                                                        
+      169 +                                                              
+      170 +:- pred extract_range_loop(array(value)::in, int::in, int::in,
+          + int::in,                                                     
+      171 +    array(value)::array_di, array(value)::array_uo) is det.   
+      172 +                                                              
+      173 +extract_range_loop(Src, SrcIdx, DstIdx, Len, !Dst) :-         
+      174 +    ( if DstIdx >= Len then                                   
+      175 +        true                                                  
+      176 +    else                                                      
+      177 +        array.lookup(Src, SrcIdx, Value),                     
+      178 +        array.set(DstIdx, Value, !Dst),                       
+      179 +        extract_range_loop(Src, SrcIdx + 1, DstIdx + 1, Len, !
+          +Dst)                                                          
+      180 +    ).                                                        
+      181 +                                                              
+      182 +%-------------------------------------------------------------
+          +----------%                                                   
+      183  :- end_module datastack.
+      184  %-------------------------------------------------------------
+           ----------%
+
+● Update(src/eval.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      163      % Evaluate generator terms (they push values onto the stac
+           k)
+      164      eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+           T, !IO),
+      165      % Extract values pushed by the generator as an array
+      166 -    extract_range(!.Array, SavedPtr, !.Ptr, ResultArray),     
+      166 +    datastack.extract_range(!.Array, SavedPtr, !.Ptr, ResultAr
+          +ray),                                                         
+      167      % Restore stack pointer and push the result array
+      168      !:Ptr = SavedPtr,
+      169      datastack.push(arrayval(ResultArray), !Array, !Ptr).
+
+● Update(src/eval.m)
+  ⎿  Removed 27 lines                                                    
+      168      !:Ptr = SavedPtr,
+      169      datastack.push(arrayval(ResultArray), !Array, !Ptr).
+      170  
+      171 -    % extract_range(Array, Start, End, Result):               
+      172 -    % Extract values from Array[Start..End-1] into a new array
+          -.                                                             
+      173 -    %                                                         
+      174 -:- pred extract_range(array(value)::in, int::in, int::in,     
+      175 -    array(value)::out) is det.                                
+      176 -                                                              
+      177 -extract_range(SrcArray, Start, End, Result) :-                
+      178 -    Len = End - Start,                                        
+      179 -    ( if Len =< 0 then                                        
+      180 -        Result = array.init(0, nilval)                        
+      181 -    else                                                      
+      182 -        Result0 = array.init(Len, nilval),                    
+      183 -        extract_range_loop(SrcArray, Start, 0, Len, Result0, R
+          -esult)                                                        
+      184 -    ).                                                        
+      185 -                                                              
+      186 -:- pred extract_range_loop(array(value)::in, int::in, int::in,
+          - int::in,                                                     
+      187 -    array(value)::array_di, array(value)::array_uo) is det.   
+      188 -                                                              
+      189 -extract_range_loop(Src, SrcIdx, DstIdx, Len, !Dst) :-         
+      190 -    ( if DstIdx >= Len then                                   
+      191 -        true                                                  
+      192 -    else                                                      
+      193 -        array.lookup(Src, SrcIdx, Value),                     
+      194 -        array.set(DstIdx, Value, !Dst),                       
+      195 -        extract_range_loop(Src, SrcIdx + 1, DstIdx + 1, Len, !
+          -Dst)                                                          
+      196 -    ).                                                        
+      197 -                                                              
+      171  %-------------------------------------------------------------
+           ----------%
+      172  % apply (!)
+      173  %-------------------------------------------------------------
+           ----------%
+
+● Now I need to add the declaration in the interface. Let me check the exact format:
+
+● Read(src/datastack.m)
+  ⎿  Read 15 lines
+
+● Update(src/datastack.m)
+  ⎿  Added 6 lines                                                       
+      47  :- pred from_list(list(value)::in,
+      48      array(value)::array_uo, int::out) is det.
+      49  
+      50 +    % extract_range(Array, Start, End, Result):                
+      51 +    % Extract values from Array[Start..End-1] into a new array.
+      52 +    %                                                          
+      53 +:- pred extract_range(array(value)::in, int::in, int::in,      
+      54 +    array(value)::out) is det.                                 
+      55 +                                                               
+      56  %--------------------------------------------------------------
+          ---------%
+      57  
+      58  :- implementation.
+
+● Now let me build and test:
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth         
+     Making Mercury/int3s/datastack.int3
+     Making Mercury/int3s/eval.int3
+     … +12 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  PASS: add                     
+     PASS: analysis
+     PASS: apply_op
+     … +53 lines (ctrl+o to expand)
+
+● All 53 tests pass. extract_range is now in datastack.m where it belongs with the other stack operations.
+
+> commit this 
+
+● Bash(git status && git diff --staged && git diff)
+  ⎿  On branch master                                   
+     Changes to be committed:
+       (use "git restore --staged <file>..." to unstage)
+     … +103 lines (ctrl+o to expand)
+
+● Bash(git log --oneline -5)
+  ⎿  53d7707 add transcripts 23 and 24                          
+     2230ee0 Replace list-based stack with array-based datastack
+     bcabeca add transcript 22
+     … +2 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Move extract_range from eval.m to datastack.m…)
+  ⎿  [master 395888f] Move extract_range from eval.m to datastack.m
+      2 files changed, 30 insertions(+), 28 deletions(-)
+
+● Done. Committed as 395888f.
+
+> I would like to implement a bytecode compiler for Froth. This will be a 
+very challenging task. Think deeply about the basic requirements of such a 
+system, and tell me your initial ideas about how we should approach this 
+task. 
+
+● This is an interesting challenge. Let me think through the key aspects.
+
+  Why Bytecode?
+
+  The current tree-walking interpreter has overhead from:
+  1. Recursive descent through term structures
+  2. Pattern matching on term variants at each step
+  3. Environment map lookups
+
+  Bytecode eliminates #1 and #2 by flattening execution into a linear instruction stream.
+
+  Froth's Characteristics That Help
+
+  Froth is already stack-based, so the translation is fairly natural. Most "control flow" is actually closure application - the ? operator doesn't branch, it just applies one of two closures. This means we don't need complex control flow in the bytecode itself.
+
+  Key Design Decisions
+
+  1. Instruction Set
+
+  Core instructions might look like:
+  PUSH_INT <n>       ; push integer literal
+  PUSH_CONST <idx>   ; push from constant pool (strings, quoted terms)
+  PUSH_NIL           ; push nil
+  LOAD <id>          ; load from environment by string_id
+  STORE <id>         ; bind value to name (binder)
+  MAKE_CLOSURE <idx> ; create closure from bytecode template
+  APPLY              ; the ! operator
+  SAVE_SP            ; for generators - save stack pointer
+  COLLECT_ARRAY      ; for generators - collect values into array
+  OP_ADD, OP_SUB...  ; one per operator
+
+  2. Closures
+
+  When compiling { body }:
+  - Compile body to a separate bytecode chunk (a "template")
+  - At runtime, MAKE_CLOSURE captures the current environment with that template
+  - APPLY executes the template with the captured environment
+
+  3. Generators
+
+  [ body ] compiles to:
+  SAVE_SP
+  <compiled body>
+  COLLECT_ARRAY
+
+  4. The Hard Parts
+
+  - env operator: Returns environment as a map - need to preserve map representation
+  - restore operator: Replaces entire environment - very dynamic
+  - Quoted term application: 'foo ! applies a quoted identifier - need runtime operator lookup
+  - Runtime import: Must compile on the fly
+
+  Suggested Approach
+
+  Phase 1: Define bytecode representation (bytecode.m)
+  - Instruction type with all variants
+  - Bytecode chunk (instructions + constant pool)
+  - Closure template structure
+
+  Phase 2: Build the VM (vm.m)
+  - Execute bytecode against the existing stack (reuse datastack)
+  - Keep environment as map for now (optimize later)
+
+  Phase 3: Build the compiler (compiler.m)
+  - Transform terms to bytecode
+  - Handle closure compilation (nested bytecode chunks)
+
+  Phase 4: Integration
+  - Modify froth.m to compile-then-execute instead of interpret
+  - Handle dynamic cases (import, REPL)
+
+  Open Questions
+
+  1. Should we keep the interpreter for the REPL and only bytecode-compile imports/closures?
+  2. How do we handle errors and stack traces with bytecode?
+  3. Should operators be individual instructions or use a generic OP <id> instruction?
+
+  What's your preference on these tradeoffs? I'd suggest starting with Phase 1 - defining the bytecode representation - as that will force us to make concrete decisions.
+
+> Here are my initial thoughts. Do you think these make sense?
+1. Add an alternate closure value along with the existing one, consisting of
+ a context (an array containing environment values) and an array of 
+bytecodes in some form.
+2. Extend the existing interpreter to call a bytecode interpreter if such a 
+closure is applied.
+3. The bytecode interpreter will need a frame stack. We can place this at 
+the top of our datastack array, growing downwards.
+4. The bytecode interpreter will need registers for the current context, the
+ current bytecode array and code pointer, and possibly other things.
+5. We want to be able to define a `compile` function in Froth, that takes a 
+closure in the term form and converts it into a closure in bytecode form. 
+This doesn't need to be complete, so it can fail if operators such as `env` 
+might be required. It is intended to be applied to individual closures in 
+order to optimize them.
+6. Opcodes should be provided to:
+ - enter/leave frames
+ - push literal values
+ - push values from context slots or frame slots
+ - pop values into frame slots
+ - save/restore virtual machine registers in frame slots
+ - start/end array generators
+ - execute operators
+ - call/return/tailcall
+7. A more complex implementation could add a global array of bytecodes to 
+which the `compile` function could place its generated code. Then closures 
+could be represented as a context and a bytecode address. 
+
+● Yes, these ideas are sound and form a coherent design. Let me add some thoughts:
+
+  On the context-as-array approach (#1):
+
+  This is a good optimization. The compiler would need to:
+  1. Analyze the closure body to find all free variable references
+  2. Assign each a slot index (0, 1, 2...)
+  3. At closure creation, copy values from the environment into a context array
+
+  This replaces O(log n) map lookups with O(1) array indexing.
+
+  On the frame stack growing downwards (#3):
+
+  Elegant reuse of the datastack array. A frame might contain:
+  [saved_context | saved_code_ptr | saved_frame_ptr | local_0 | local_1 | ...]
+
+  Need a collision check when pushing data or allocating frames.
+
+  On the compile function in Froth (#5):
+
+  I like this explicit approach. Something like:
+  { x -> x x * } compile!   ; returns bytecode closure or fails
+
+  The analysis for "can we compile this?" would reject closures containing:
+  - env (needs map access)
+  - restore (modifies environment dynamically)
+  - Possibly import (dynamic loading)
+
+  On bytecode representation:
+
+  One question: should bytecode be an array of integers (with opcodes and operands packed), or an array of tagged values? The integer approach is more compact and traditional:
+  [PUSH_INT, 42, PUSH_SLOT, 0, OP_ADD, RETURN]
+
+  Additional thoughts:
+
+  For nested closures in a bytecode body, we have a choice:
+  - Compile them recursively (bytecode all the way down)
+  - Leave them as terms (simpler, mixed execution)
+
+  I'd suggest starting with the simpler mixed approach.
+
+  For tail calls (#6), detecting them is straightforward: if ! is the last operation before the implicit return, it's a tail call.
+
+  Shall I start on Phase 1 - defining the bytecode value type and instruction representation in types.m?
+
+> Do you think we should use a global array of bytecodes in which the 
+compiler can emit its instructions? This would mean we can use an integer 
+code pointer rather than a combined array and index. 
+
+● Yes, I think a global bytecode array is the better choice. Here's my reasoning:
+
+  Simpler VM state:
+  - Code pointer is just an integer
+  - No need to track "which array" during calls/returns
+  - Closure representation is just (context_array, start_address)
+
+  Matches existing patterns:
+  - The string table already works this way - strings are interned into a global table and referenced by integer ID
+  - Bytecode would follow the same pattern - compiled code lives in a global array, referenced by address
+
+  Practical benefits:
+  - More cache-friendly (one contiguous array for all code)
+  - Easier code emission (just append to the array, return the start address)
+  - Call/return just manipulates integer addresses
+
+  The "never freed" concern is minor:
+  - Compiled code is typically long-lived (bound to names, reused)
+  - The user explicitly calls compile, so they control what gets compiled
+  - Same tradeoff as the string table (strings are never freed either)
+
+  Implementation sketch:
+  bytecode_array:  [PUSH_INT, 1, PUSH_SLOT, 0, OP_ADD, RETURN, PUSH_INT, 2, ...]
+                    ^-- closure A starts here (addr 0)      ^-- closure B (addr 6)
+
+  A compiled closure becomes:
+  :- type value
+      --->    ...
+      ;       compiledval(array(value), int).  % context, code_address
+
+  The bytecode array would be threaded through like the string table. Shall I proceed with defining these types?
+
+> Let's add a bytecode module to define an appropriate array type, and 
+thread that through like the string table. We will add more to the bytecode 
+module as we proceed. 
+
+● I'll create a bytecode module with a simple array type and thread it through the system.
+
+● Write(src/bytecode.m)
+  ⎿  Wrote 50 lines to src/bytecode.m                                    
+      1 %----------------------------------------------------------------
+        -------%
+      2 % bytecode.m
+      3 % Bytecode representation for the Froth programming language.
+      4 %----------------------------------------------------------------
+        -------%
+      5 :- module bytecode.
+      6 :- interface.
+      7 :- import_module array.
+     … +40 lines (ctrl+o to expand)
+
+● Now let me thread it through eval.m. First, let me check the current signature:
+
+● Read(src/eval.m)
+  ⎿  Read 100 lines
+
+● Read(src/eval.m)
+  ⎿  Read 130 lines
+
+● This will require updating several predicates. Let me do this systematically:
+
+● Update(src/eval.m)
+  ⎿  Added 1 line                                                        
+       7  :- interface.
+       8  
+       9  :- import_module array.
+      10 +:- import_module bytecode.                                     
+      11  :- import_module io.
+      12  :- import_module list.
+      13  :- import_module types.
+
+● Update(src/eval.m)
+  ⎿  Added 5 lines, removed 2 lines                                      
+      14  
+      15  %--------------------------------------------------------------
+          ---------%
+      16  
+      17 -    % eval_terms(OpTable, BaseDir, Terms, !Env, !StackArray, !S
+         -tackPtr, !ST, !IO):                                            
+      17 +    % eval_terms(OpTable, BaseDir, Terms, !Env, !StackArray, !S
+         +tackPtr, !ST, !BC, !IO):                                       
+      18      % Evaluate a list of terms, updating the environment and st
+          ack.
+      19      % OpTable is read-only (fixed at engine startup).
+      20      % BaseDir is used to resolve relative paths in imports.
+      21      % StringTable is threaded through (may grow with dynamic im
+          ports).
+      22 +    % BytecodeStore is threaded through (may grow with compile 
+         +operator).                                                     
+      23      % Stack is represented as an array and pointer (for efficie
+          nt operations).
+      24      % Throws eval_error on failure.
+      25      %
+     ...
+      27      env::in, env::out,
+      28      array(value)::array_di, array(value)::array_uo,
+      29      int::in, int::out,
+      29 -    string_table::in, string_table::out, io::di, io::uo) is det
+         -.                                                              
+      30 +    string_table::in, string_table::out,                       
+      31 +    bytecode_store::in, bytecode_store::out,                   
+      32 +    io::di, io::uo) is det.                                    
+      33  
+      34      % Environment operations.
+      35      %
+
+● Update(src/eval.m)
+  ⎿  Added 9 lines, removed 8 lines                                      
+      64  % Main evaluation
+      65  %--------------------------------------------------------------
+          ---------%
+      66  
+      67 -eval_terms(_, _, [], !Env, !Array, !Ptr, !ST, !IO).            
+      68 -eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !Array, !Ptr
+         -, !ST, !IO) :-                                                 
+      69 -    eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, 
+         -!IO),                                                          
+      70 -    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST
+         -, !IO).                                                        
+      67 +eval_terms(_, _, [], !Env, !Array, !Ptr, !ST, !BC, !IO).       
+      68 +eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !Array, !Ptr
+         +, !ST, !BC, !IO) :-                                            
+      69 +    eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, 
+         +!BC, !IO),                                                     
+      70 +    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST
+         +, !BC, !IO).                                                   
+      71  
+      72  :- pred eval_term(operator_table::in, string::in, term::in, env
+          ::in, env::out,
+      73      array(value)::array_di, array(value)::array_uo,
+      74      int::in, int::out, string_table::in, string_table::out,
+      75 +    bytecode_store::in, bytecode_store::out,                   
+      76      io::di, io::uo) is det.
+      77  
+      77 -eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !IO)
+         - :-                                                            
+      78 +eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC,
+         + !IO) :-                                                       
+      79      (
+      80          Term = identifier(NameId),
+      80 -        eval_identifier(OpTable, BaseDir, NameId, !Env, !Array,
+         - !Ptr, !ST, !IO)                                               
+      81 +        eval_identifier(OpTable, BaseDir, NameId, !Env, !Array,
+         + !Ptr, !ST, !BC, !IO)                                          
+      82      ;
+      83          Term = binder(NameId),
+      84          eval_binder(NameId, !Env, !Array, !Ptr)
+     ...
+      87          eval_function(Terms, !.Env, !Array, !Ptr)
+      88      ;
+      89          Term = generator(Terms),
+      89 -        eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !
+         -Ptr, !ST, !IO)                                                 
+      90 +        eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !
+         +Ptr, !ST, !BC, !IO)                                            
+      91      ;
+      92          Term = quoted(T),
+      93          datastack.push(termval(T), !Array, !Ptr)
+     ...
+       96          datastack.push(V, !Array, !Ptr)
+       97      ;
+       98          Term = apply_term,
+       98 -        eval_apply(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, 
+          -!IO)                                                          
+       99 +        eval_apply(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, 
+          +!BC, !IO)                                                     
+      100      ).
+      101  
+      102  %-------------------------------------------------------------
+           ----------%
+
+● Update(src/eval.m)
+  ⎿  Added 5 lines, removed 3 lines                                      
+      107      env::in, env::out,
+      108      array(value)::array_di, array(value)::array_uo,
+      109      int::in, int::out,
+      110 -    string_table::in, string_table::out, io::di, io::uo) is de
+          -t.                                                            
+      110 +    string_table::in, string_table::out,                      
+      111 +    bytecode_store::in, bytecode_store::out,                  
+      112 +    io::di, io::uo) is det.                                   
+      113  
+      112 -eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, 
+          -!ST, !IO) :-                                                  
+      114 +eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, 
+          +!ST, !BC, !IO) :-                                             
+      115      ( if get_env(NameId, V, !.Env) then
+      116          datastack.push(V, !Array, !Ptr)
+      117      else if map.search(OpTable, NameId, Info) then
+      118          ( if Info ^ oi_operator = op_import then
+      119              % import is special: it can modify Env and ST
+      118 -            eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, 
+          -!ST, !IO)                                                     
+      120 +            eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, 
+          +!ST, !BC, !IO)                                                
+      121          else if Info ^ oi_operator = op_restore then
+      122              % restore is special: it replaces the current Env
+      123              eval_restore(!Env, !Array, !Ptr)
+
+● Update(src/eval.m)
+  ⎿  Added 5 lines, removed 3 lines                                      
+      162      env::in, env::out,
+      163      array(value)::array_di, array(value)::array_uo,
+      164      int::in, int::out,
+      165 -    string_table::in, string_table::out, io::di, io::uo) is de
+          -t.                                                            
+      165 +    string_table::in, string_table::out,                      
+      166 +    bytecode_store::in, bytecode_store::out,                  
+      167 +    io::di, io::uo) is det.                                   
+      168  
+      167 -eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          -T, !IO) :-                                                    
+      169 +eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          +T, !BC, !IO) :-                                               
+      170      % Save current stack pointer
+      171      SavedPtr = !.Ptr,
+      172      % Evaluate generator terms (they push values onto the stac
+           k)
+      171 -    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          -T, !IO),                                                      
+      173 +    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          +T, !BC, !IO),                                                 
+      174      % Extract values pushed by the generator as an array
+      175      datastack.extract_range(!.Array, SavedPtr, !.Ptr, ResultAr
+           ray),
+      176      % Restore stack pointer and push the result array
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 3 lines                                      
+      184  :- pred eval_apply(operator_table::in, string::in, env::in, en
+           v::out,
+      185      array(value)::array_di, array(value)::array_uo,
+      186      int::in, int::out, string_table::in, string_table::out,
+      187 +    bytecode_store::in, bytecode_store::out,                  
+      188      io::di, io::uo) is det.
+      189  
+      189 -eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !IO)
+          - :-                                                           
+      190 +eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC,
+          + !IO) :-                                                      
+      191      datastack.pop("!", V, !Array, !Ptr),
+      192      ( if V = closureval(ClosureEnv, Terms) then
+      193          % Evaluate with closure's env, then discard env change
+           s (lexical scoping)
+      193 -        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Ar
+          -ray, !Ptr, !ST, !IO)                                          
+      194 +        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Ar
+          +ray, !Ptr, !ST, !BC, !IO)                                     
+      195      else if V = termval(identifier(Id)), map.search(OpTable, I
+           d, Info) then
+      196          ( if Info ^ oi_operator = op_import then
+      197              % import is special: it can modify Env (but we dis
+           card here like closures)
+      197 -            eval_import(OpTable, BaseDir, Env, _, !Array, !Ptr
+          -, !ST, !IO)                                                   
+      198 +            eval_import(OpTable, BaseDir, Env, _, !Array, !Ptr
+          +, !ST, !BC, !IO)                                              
+      199          else
+      200              % Apply a quoted operator
+      201              operators.eval_operator(OpTable, !.ST, Info ^ oi_o
+           perator, Env,
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 2 lines                                      
+      212  :- pred eval_import(operator_table::in, string::in, env::in, e
+           nv::out,
+      213      array(value)::array_di, array(value)::array_uo,
+      214      int::in, int::out,
+      215 -    string_table::in, string_table::out, io::di, io::uo) is de
+          -t.                                                            
+      215 +    string_table::in, string_table::out,                      
+      216 +    bytecode_store::in, bytecode_store::out,                  
+      217 +    io::di, io::uo) is det.                                   
+      218  
+      217 -eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !IO) :-
+      219 +eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !I
+          +O) :-                                                         
+      220      datastack.pop("import", V, !Array, !Ptr),
+      221      RelFilename = operators.value_to_string(!.ST, V),
+      222      % Resolve relative paths using BaseDir
+
+● Read(src/eval.m)
+  ⎿  Read 30 lines
+
+● Update(src/eval.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      235              parser.parse(Tokens, ParseResult),
+      236              (
+      237                  ParseResult = ok(Terms),
+      238 -                eval_terms(OpTable, NewBaseDir, Terms, !Env, !
+          -Array, !Ptr, !ST, !IO)                                        
+      238 +                eval_terms(OpTable, NewBaseDir, Terms, !Env, !
+          +Array, !Ptr, !ST, !BC, !IO)                                   
+      239              ;
+      240                  ParseResult = error(ParseError),
+      241                  throw_parse_error(Filename, ParseError)
+
+● Now let me update froth.m. First, let me see its structure:
+
+● Read(src/froth.m)
+  ⎿  Read 581 lines
+
+● This is a substantial file. Let me update it systematically:
+
+● Update(src/froth.m)
+  ⎿  Added 1 line                                                        
+      16  
+      17  :- import_module array.
+      18  :- import_module bool.
+      19 +:- import_module bytecode.                                     
+      20  :- import_module datastack.
+      21  :- import_module dir.
+      22  :- import_module eval.
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      130                       dir.make_path_name("lib", "stdlib.froth")
+           ).
+      131  
+      132  :- type init_result
+      133 -    --->    init_ok(operator_table, string_table, env)        
+      133 +    --->    init_ok(operator_table, string_table, bytecode_sto
+          +re, env)                                                      
+      134      ;       init_error.
+      135  
+      136  :- pred init_with_stdlib(init_result::out, io::di, io::uo) is 
+           cc_multi.
+
+● Update(src/froth.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      142          AccessResult = ok,
+      143          eval_stdlib(StdlibPath, EvalResult, !IO),
+      144          (
+      145 -            EvalResult = stdlib_ok(OpTable, ST, Env),         
+      146 -            Result = init_ok(OpTable, ST, Env)                
+      145 +            EvalResult = stdlib_ok(OpTable, ST, BC, Env),     
+      146 +            Result = init_ok(OpTable, ST, BC, Env)            
+      147          ;
+      148              EvalResult = stdlib_error,
+      149              Result = init_error
+     ...
+      152          AccessResult = error(_),
+      153          % Stdlib not found, initialize without it
+      154          init_tables(ST, OpTable),
+      155 -        Result = init_ok(OpTable, ST, map.init)               
+      155 +        Result = init_ok(OpTable, ST, bytecode.init, map.init)
+      156      ).
+      157  
+      158  :- pred init_without_stdlib(operator_table::out, string_table:
+           :out,
+
+● Update(src/froth.m)
+  ⎿  Added 4 lines, removed 3 lines                                      
+      156      ).
+      157  
+      158  :- pred init_without_stdlib(operator_table::out, string_table:
+           :out,
+      159 -    env::out) is det.                                         
+      159 +    bytecode_store::out, env::out) is det.                    
+      160  
+      161 -init_without_stdlib(OpTable, ST, Env) :-                      
+      161 +init_without_stdlib(OpTable, ST, BC, Env) :-                  
+      162      init_tables(ST, OpTable),
+      163 +    BC = bytecode.init,                                       
+      164      Env = map.init.
+      165  
+      166  :- type stdlib_result
+      166 -    --->    stdlib_ok(operator_table, string_table, env)      
+      167 +    --->    stdlib_ok(operator_table, string_table, bytecode_s
+          +tore, env)                                                    
+      168      ;       stdlib_error.
+      169  
+      170  :- pred eval_stdlib(string::in, stdlib_result::out, io::di, io
+           ::uo) is cc_multi.
+
+● Update(src/froth.m)
+  ⎿  Added 4 lines, removed 3 lines                                      
+      175      (
+      176          ReadResult = ok(Content),
+      177          init_tables(ST0, OpTable),
+      178 +        BC0 = bytecode.init,                                  
+      179          lexer.tokenize(Content, ST0, LexResult),
+      180          (
+      181              LexResult = ok(Tokens, ST1),
+     ...
+      183              (
+      184                  ParseResult = ok(Terms),
+      185                  datastack.init(Array0, Ptr0),
+      185 -                try_io(eval_terms_wrapper(OpTable, LibDir, ST1
+          -, Terms,                                                      
+      186 +                try_io(eval_terms_wrapper(OpTable, LibDir, ST1
+          +, BC0, Terms,                                                 
+      187                      map.init, Array0, Ptr0), EvalResult, !IO),
+      188                  (
+      188 -                    EvalResult = succeeded({ST, Env, _Array, _
+          -Ptr}),                                                        
+      189 -                    Result = stdlib_ok(OpTable, ST, Env)      
+      189 +                    EvalResult = succeeded({ST, BC, Env, _Arra
+          +y, _Ptr}),                                                    
+      190 +                    Result = stdlib_ok(OpTable, ST, BC, Env)  
+      191                  ;
+      192                      EvalResult = exception(Exn),
+      193                      ( if univ_to_type(Exn, EvalError) then
+
+● Update(src/froth.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      242  run_with_options(Opts, !IO) :-
+      243      % Initialize state
+      244      ( if Opts ^ opt_no_stdlib = yes then
+      245 -        init_without_stdlib(OpTable, ST0, Env0),              
+      245 +        init_without_stdlib(OpTable, ST0, BC0, Env0),         
+      246          datastack.init(Array0, Ptr0),
+      247 -        run_actions(Opts, OpTable, ST0, Env0, Array0, Ptr0, !I
+          -O)                                                            
+      247 +        run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr
+          +0, !IO)                                                       
+      248      else
+      249          init_with_stdlib(InitResult, !IO),
+      250          (
+      251 -            InitResult = init_ok(OpTable, ST0, Env0),         
+      251 +            InitResult = init_ok(OpTable, ST0, BC0, Env0),    
+      252              datastack.init(Array0, Ptr0),
+      253 -            run_actions(Opts, OpTable, ST0, Env0, Array0, Ptr0
+          -, !IO)                                                        
+      253 +            run_actions(Opts, OpTable, ST0, BC0, Env0, Array0,
+          + Ptr0, !IO)                                                   
+      254          ;
+      255              InitResult = init_error,
+      256              io.set_exit_status(1, !IO)
+
+● Update(src/froth.m)
+  ⎿  Added 6 lines, removed 6 lines                                      
+      262  %-------------------------------------------------------------
+           ----------%
+      263  
+      264  :- pred run_actions(options::in, operator_table::in,
+      265 -    string_table::in, env::in,                                
+      265 +    string_table::in, bytecode_store::in, env::in,            
+      266      array(value)::array_di, int::in, io::di, io::uo) is cc_mul
+           ti.
+      267  
+      268 -run_actions(Opts, OpTable, ST0, Env0, Array0, Ptr0, !IO) :-   
+      268 +run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, !IO) 
+          +:-                                                            
+      269      Actions = Opts ^ opt_actions,
+      270      (
+      271          Actions = [],
+      272          % No actions: start REPL
+      273 -        start_repl(Opts, OpTable, ST0, Env0, Array0, Ptr0, !IO
+          -)                                                             
+      273 +        start_repl(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0
+          +, !IO)                                                        
+      274      ;
+      275          Actions = [_ | _],
+      276 -        execute_actions(Actions, OpTable, ST0, ST, Env0, Env, 
+          -Array0, Array,                                                
+      277 -            Ptr0, Ptr, yes, Success, !IO),                    
+      276 +        execute_actions(Actions, OpTable, ST0, ST, BC0, BC, En
+          +v0, Env,                                                      
+      277 +            Array0, Array, Ptr0, Ptr, yes, Success, !IO),     
+      278          (
+      279              Success = yes,
+      280              ( if Opts ^ opt_interactive = yes then
+      281 -                start_repl(Opts, OpTable, ST, Env, Array, Ptr,
+          - !IO)                                                         
+      281 +                start_repl(Opts, OpTable, ST, BC, Env, Array, 
+          +Ptr, !IO)                                                     
+      282              else
+      283                  true
+      284              )
+
+● Update(src/froth.m)
+  ⎿  Added 6 lines, removed 5 lines                                      
+      290  
+      291  :- pred execute_actions(list(action)::in, operator_table::in,
+      292      string_table::in, string_table::out,
+      293 +    bytecode_store::in, bytecode_store::out,                  
+      294      env::in, env::out,
+      295      array(value)::array_di, array(value)::array_uo,
+      296      int::in, int::out,
+      297      bool::in, bool::out, io::di, io::uo) is cc_multi.
+      298  
+      298 -execute_actions([], _, !ST, !Env, !Array, !Ptr, !Success, !IO)
+          -.                                                             
+      299 -execute_actions([Action | Rest], OpTable, !ST, !Env, !Array, !
+          -Ptr, !Success, !IO) :-                                        
+      299 +execute_actions([], _, !ST, !BC, !Env, !Array, !Ptr, !Success,
+          + !IO).                                                        
+      300 +execute_actions([Action | Rest], OpTable, !ST, !BC, !Env, !Arr
+          +ay, !Ptr, !Success, !IO) :-                                   
+      301      (
+      302          !.Success = no
+      303          % Skip remaining actions if we already failed
+     ...
+      305          !.Success = yes,
+      306          (
+      307              Action = exec_code(Code),
+      307 -            execute_code(OpTable, Code, !ST, !Env, !Array, !Pt
+          -r, !Success, !IO)                                             
+      308 +            execute_code(OpTable, Code, !ST, !BC, !Env, !Array
+          +, !Ptr, !Success, !IO)                                        
+      309          ;
+      310              Action = exec_file(File),
+      310 -            execute_file(OpTable, File, !ST, !Env, !Array, !Pt
+          -r, !Success, !IO)                                             
+      311 +            execute_file(OpTable, File, !ST, !BC, !Env, !Array
+          +, !Ptr, !Success, !IO)                                        
+      312          ),
+      312 -        execute_actions(Rest, OpTable, !ST, !Env, !Array, !Ptr
+          -, !Success, !IO)                                              
+      313 +        execute_actions(Rest, OpTable, !ST, !BC, !Env, !Array,
+          + !Ptr, !Success, !IO)                                         
+      314      ).
+      315  
+      316  :- pred execute_code(operator_table::in, string::in,
+
+● Update(src/froth.m)
+  ⎿  Added 7 lines, removed 6 lines                                      
+      315  
+      316  :- pred execute_code(operator_table::in, string::in,
+      317      string_table::in, string_table::out,
+      318 +    bytecode_store::in, bytecode_store::out,                  
+      319      env::in, env::out,
+      320      array(value)::array_di, array(value)::array_uo,
+      321      int::in, int::out,
+      322      bool::in, bool::out, io::di, io::uo) is cc_multi.
+      323  
+      323 -execute_code(OpTable, Code, ST0, ST, Env0, Env, Array0, Array,
+          - Ptr0, Ptr,                                                   
+      324 +execute_code(OpTable, Code, ST0, ST, BC0, BC, Env0, Env, Array
+          +0, Array, Ptr0, Ptr,                                          
+      325          _, Success, !IO) :-
+      326      lexer.tokenize(Code, ST0, LexResult),
+      327      (
+     ...
+      330          (
+      331              ParseResult = ok(Terms),
+      332              % Use "." as BaseDir for code strings (current dir
+           ectory)
+      332 -            try_io(eval_terms_wrapper(OpTable, ".", ST1, Terms
+          -, Env0,                                                       
+      333 +            try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, 
+          +Terms, Env0,                                                  
+      334                  Array0, Ptr0), EvalResult, !IO),
+      335              (
+      335 -                EvalResult = succeeded({ST, Env, Array, Ptr}),
+      336 +                EvalResult = succeeded({ST, BC, Env, Array, Pt
+          +r}),                                                          
+      337                  Success = yes
+      338              ;
+      339                  EvalResult = exception(Exn),
+      340                  ( if univ_to_type(Exn, EvalError) then
+      341                      io.format("Runtime error: %s\n",
+      342                          [s(types.format_error(ST1, EvalError))
+           ], !IO),
+      342 -                    ST = ST1, Env = Env0,                     
+      343 +                    ST = ST1, BC = BC0, Env = Env0,           
+      344                      datastack.init(Array, Ptr),
+      345                      Success = no
+      346                  else
+     ...
+      350          ;
+      351              ParseResult = error(ParseError),
+      352              report_parse_error(ParseError, !IO),
+      352 -            ST = ST1, Env = Env0, Array = Array0, Ptr = Ptr0, 
+      353 +            ST = ST1, BC = BC0, Env = Env0, Array = Array0, Pt
+          +r = Ptr0,                                                     
+      354              Success = no
+      355          )
+      356      ;
+      357          LexResult = error(LexError),
+      358          report_lex_error(LexError, !IO),
+      358 -        ST = ST0, Env = Env0, Array = Array0, Ptr = Ptr0,     
+      359 +        ST = ST0, BC = BC0, Env = Env0, Array = Array0, Ptr = 
+          +Ptr0,                                                         
+      360          Success = no
+      361      ).
+      362  
+
+● Update(src/froth.m)
+  ⎿  Added 8 lines, removed 7 lines                                      
+      362  
+      363  :- pred execute_file(operator_table::in, string::in,
+      364      string_table::in, string_table::out,
+      365 +    bytecode_store::in, bytecode_store::out,                  
+      366      env::in, env::out,
+      367      array(value)::array_di, array(value)::array_uo,
+      368      int::in, int::out,
+      369      bool::in, bool::out, io::di, io::uo) is cc_multi.
+      370  
+      370 -execute_file(OpTable, Filename, ST0, ST, Env0, Env, Array0, Ar
+          -ray, Ptr0, Ptr,                                               
+      371 +execute_file(OpTable, Filename, ST0, ST, BC0, BC, Env0, Env, A
+          +rray0, Array, Ptr0, Ptr,                                      
+      372          _, Success, !IO) :-
+      373      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      374      (
+     ...
+      380              parser.parse(Tokens, ParseResult),
+      381              (
+      382                  ParseResult = ok(Terms),
+      382 -                try_io(eval_terms_wrapper(OpTable, BaseDir, ST
+          -1, Terms, Env0,                                               
+      383 +                try_io(eval_terms_wrapper(OpTable, BaseDir, ST
+          +1, BC0, Terms, Env0,                                          
+      384                      Array0, Ptr0), EvalResult, !IO),
+      385                  (
+      385 -                    EvalResult = succeeded({ST, Env, Array, Pt
+          -r}),                                                          
+      386 +                    EvalResult = succeeded({ST, BC, Env, Array
+          +, Ptr}),                                                      
+      387                      Success = yes
+      388                  ;
+      389                      EvalResult = exception(Exn),
+      390                      ( if univ_to_type(Exn, EvalError) then
+      391                          io.format("Runtime error: %s\n",
+      392                              [s(types.format_error(ST1, EvalErr
+           or))], !IO),
+      392 -                        ST = ST1, Env = Env0,                 
+      393 +                        ST = ST1, BC = BC0, Env = Env0,       
+      394                          datastack.init(Array, Ptr),
+      395                          Success = no
+      396                      else
+     ...
+      400              ;
+      401                  ParseResult = error(ParseError),
+      402                  report_parse_error(ParseError, !IO),
+      402 -                ST = ST1, Env = Env0, Array = Array0, Ptr = Pt
+          -r0,                                                           
+      403 +                ST = ST1, BC = BC0, Env = Env0, Array = Array0
+          +, Ptr = Ptr0,                                                 
+      404                  Success = no
+      405              )
+      406          ;
+      407              LexResult = error(LexError),
+      408              report_lex_error(LexError, !IO),
+      408 -            ST = ST0, Env = Env0, Array = Array0, Ptr = Ptr0, 
+      409 +            ST = ST0, BC = BC0, Env = Env0, Array = Array0, Pt
+          +r = Ptr0,                                                     
+      410              Success = no
+      411          )
+      412      ;
+      413          ReadResult = error(Error),
+      414          io.format("Error reading '%s': %s\n",
+      415              [s(Filename), s(io.error_message(Error))], !IO),
+      415 -        ST = ST0, Env = Env0, Array = Array0, Ptr = Ptr0,     
+      416 +        ST = ST0, BC = BC0, Env = Env0, Array = Array0, Ptr = 
+          +Ptr0,                                                         
+      417          Success = no
+      418      ).
+      419  
+
+● Update(src/froth.m)
+  ⎿  Added 17 lines, removed 15 lines                                    
+      422  %-------------------------------------------------------------
+           ----------%
+      423  
+      424  :- pred start_repl(options::in, operator_table::in, string_tab
+           le::in,
+      425 -    env::in, array(value)::array_di, int::in, io::di, io::uo) 
+          -is cc_multi.                                                  
+      425 +    bytecode_store::in, env::in, array(value)::array_di, int::
+          +in,                                                           
+      426 +    io::di, io::uo) is cc_multi.                              
+      427  
+      427 -start_repl(Opts, OpTable, ST, Env, Array, Ptr, !IO) :-        
+      428 +start_repl(Opts, OpTable, ST, BC, Env, Array, Ptr, !IO) :-    
+      429      ( if Opts ^ opt_quiet = no then
+      430          io.write_string("Froth REPL. Press Ctrl-D to exit.\n",
+            !IO)
+      431      else
+      432          true
+      433      ),
+      433 -    repl_loop(OpTable, ST, Env, Array, Ptr, !IO).             
+      434 +    repl_loop(OpTable, ST, BC, Env, Array, Ptr, !IO).         
+      435  
+      435 -:- pred repl_loop(operator_table::in, string_table::in, env::i
+          -n,                                                            
+      436 -    array(value)::array_di, int::in, io::di, io::uo) is cc_mul
+          -ti.                                                           
+      436 +:- pred repl_loop(operator_table::in, string_table::in, byteco
+          +de_store::in,                                                 
+      437 +    env::in, array(value)::array_di, int::in, io::di, io::uo) 
+          +is cc_multi.                                                  
+      438  
+      438 -repl_loop(OpTable, ST0, Env0, Array0, Ptr0, !IO) :-           
+      439 +repl_loop(OpTable, ST0, BC0, Env0, Array0, Ptr0, !IO) :-      
+      440      io.write_string("> ", !IO),
+      441      io.flush_output(!IO),
+      442      io.read_line_as_string(ReadResult, !IO),
+      443      (
+      444          ReadResult = ok(Line),
+      444 -        repl_eval(OpTable, Line, ST0, ST, Env0, Env, Array0, A
+          -rray, Ptr0, Ptr,                                              
+      445 -            !IO),                                             
+      446 -        repl_loop(OpTable, ST, Env, Array, Ptr, !IO)          
+      445 +        repl_eval(OpTable, Line, ST0, ST, BC0, BC, Env0, Env, 
+          +Array0, Array,                                                
+      446 +            Ptr0, Ptr, !IO),                                  
+      447 +        repl_loop(OpTable, ST, BC, Env, Array, Ptr, !IO)      
+      448      ;
+      449          ReadResult = eof,
+      450          io.nl(!IO)
+     ...
+      457  
+      458  :- pred repl_eval(operator_table::in, string::in,
+      459      string_table::in, string_table::out,
+      460 +    bytecode_store::in, bytecode_store::out,                  
+      461      env::in, env::out,
+      462      array(value)::array_di, array(value)::array_uo,
+      463      int::in, int::out, io::di, io::uo) is cc_multi.
+      464  
+      463 -repl_eval(OpTable, Input, ST0, ST, Env0, Env, Array0, Array, P
+          -tr0, Ptr, !IO) :-                                             
+      465 +repl_eval(OpTable, Input, ST0, ST, BC0, BC, Env0, Env, Array0,
+          + Array, Ptr0, Ptr, !IO) :-                                    
+      466      lexer.tokenize(Input, ST0, LexResult),
+      467      (
+      468          LexResult = ok(Tokens, ST1),
+      469          parser.parse(Tokens, ParseResult),
+      470          (
+      471              ParseResult = ok(Terms),
+      470 -            try_io(eval_terms_wrapper(OpTable, ".", ST1, Terms
+          -, Env0,                                                       
+      472 +            try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, 
+          +Terms, Env0,                                                  
+      473                  Array0, Ptr0), Result, !IO),
+      474              (
+      473 -                Result = succeeded({ST, Env, Array, Ptr})     
+      475 +                Result = succeeded({ST, BC, Env, Array, Ptr}) 
+      476              ;
+      477                  Result = exception(Exn),
+      478                  ( if univ_to_type(Exn, EvalError) then
+      479                      io.format("Runtime error: %s\n",
+      480                          [s(types.format_error(ST1, EvalError))
+           ], !IO),
+      479 -                    ST = ST1, Env = Env0,                     
+      481 +                    ST = ST1, BC = BC0, Env = Env0,           
+      482                      datastack.init(Array, Ptr)
+      483                  else
+      484                      rethrow(Result)
+     ...
+      487          ;
+      488              ParseResult = error(ParseError),
+      489              report_parse_error(ParseError, !IO),
+      488 -            ST = ST1, Env = Env0, Array = Array0, Ptr = Ptr0  
+      490 +            ST = ST1, BC = BC0, Env = Env0, Array = Array0, Pt
+          +r = Ptr0                                                      
+      491          )
+      492      ;
+      493          LexResult = error(LexError),
+      494          report_lex_error(LexError, !IO),
+      493 -        ST = ST0, Env = Env0, Array = Array0, Ptr = Ptr0      
+      495 +        ST = ST0, BC = BC0, Env = Env0, Array = Array0, Ptr = 
+          +Ptr0                                                          
+      496      ).
+      497  
+      498  %-------------------------------------------------------------
+           ----------%
+
+● Update(src/froth.m)
+  ⎿  Added 5 lines, removed 5 lines                                      
+      521  %-------------------------------------------------------------
+           ----------%
+      522  
+      523  :- pred eval_terms_wrapper(operator_table::in, string::in, str
+           ing_table::in,
+      524 -    list(term)::in, env::in, array(value)::array_di, int::in, 
+      525 -    {string_table, env, array(value), int}::out,              
+      524 +    bytecode_store::in, list(term)::in, env::in, array(value):
+          +:array_di, int::in,                                           
+      525 +    {string_table, bytecode_store, env, array(value), int}::ou
+          +t,                                                            
+      526      io::di, io::uo) is det.
+      527  
+      528 -eval_terms_wrapper(OpTable, BaseDir, ST0, Terms, Env0, Array0,
+          - Ptr0,                                                        
+      529 -        {ST, Env, Array, Ptr}, !IO) :-                        
+      528 +eval_terms_wrapper(OpTable, BaseDir, ST0, BC0, Terms, Env0, Ar
+          +ray0, Ptr0,                                                   
+      529 +        {ST, BC, Env, Array, Ptr}, !IO) :-                    
+      530      eval.eval_terms(OpTable, BaseDir, Terms, Env0, Env, Array0
+           , Array,
+      531 -        Ptr0, Ptr, ST0, ST, !IO).                             
+      531 +        Ptr0, Ptr, ST0, ST, BC0, BC, !IO).                    
+      532  
+      533  %-------------------------------------------------------------
+           ----------%
+      534  % Error reporting
+
+● Now let me build and test:
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth        
+     Making Mercury/int3s/froth.int3
+     Making Mercury/int3s/bytecode.int3
+     … +16 lines (ctrl+o to expand)
+
+● Build succeeded with a minor warning. Let me fix that and run the tests:
+
+● Update(src/bytecode.m)
+  ⎿  Error editing file
+
+● Read(src/bytecode.m)
+  ⎿  Read 20 lines
+
+● Update(src/bytecode.m)
+  ⎿  Removed 2 lines                                                     
+       6  :- module bytecode.
+       7  :- interface.
+       8  
+       9 -:- import_module array.                                        
+      10 -                                                               
+       9  %--------------------------------------------------------------
+          ---------%
+      10  
+      11      % The bytecode store holds all compiled bytecode.
+
+● Read(src/bytecode.m)
+  ⎿  Read 20 lines
+
+● Update(src/bytecode.m)
+  ⎿  Added 1 line                                                        
+      25  
+      26  :- implementation.
+      27  
+      28 +:- import_module array.                                        
+      29  :- import_module int.
+      30  
+      31  %--------------------------------------------------------------
+          ---------%
+
+● Bash(make 2>&1 && ./run_tests.sh 2>&1)
+  ⎿  cd src && mmc --make froth        
+     Making Mercury/int3s/bytecode.int3
+     Making Mercury/ints/bytecode.int
+     … +64 lines (ctrl+o to expand)
+
+● All 53 tests pass. The bytecode module is now created and threaded through the system like string_table.
+
+  Summary of what was added:
+  - bytecode.m: New module with bytecode_store type, init function, and size function
+  - eval.m: Updated eval_terms and all internal predicates to thread bytecode_store through
+  - froth.m: Updated all initialization, action execution, and REPL functions to thread bytecode_store
+
+  The bytecode store is currently just an empty shell - an array of integers with initial capacity 1024. We can now build on this foundation to add:
+  1. Instruction types/opcodes
+  2. Code emission functions
+  3. The compiler
+  4. The VM
+
+> The array will be destructively updated so it will need to have a unique 
+mode. When an array is put in a data structure it loses its uniqueness, 
+which means that we would need to take extra steps to handle uniqueness. For
+ this reason it is usually best to have such arrays as top-level arguments 
+with the `array_di` and `array_uo` modes, as we have done with the data 
+stack. In order to update the bytecode store we will also need to pass 
+around a integer representing the number of bytecodes already emitted. (The 
+"size" of the underlying array really represents the capacity of the 
+bytecode_store, so we need a separate value to indicate the size of the 
+store.) 
+
+● Excellent point. The same pattern as the datastack - separate array and size as top-level arguments with unique modes. Let me revise the approach:
+
+● Write(src/bytecode.m)
+  ⎿  Added 8 lines, removed 20 lines                                     
+       6  :- module bytecode.
+       7  :- interface.
+       8  
+       9 +:- import_module array.                                        
+      10 +                                                               
+      11  %--------------------------------------------------------------
+          ---------%
+      12  
+      11 -    % The bytecode store holds all compiled bytecode.          
+      12 -    % Code addresses are integer indices into this array.      
+      13 +    % init(Array, Size):                                       
+      14 +    % Create an empty bytecode store with initial capacity.    
+      15 +    % Size is the number of bytecodes emitted (initially 0).   
+      16      %
+      14 -:- type bytecode_store.                                        
+      17 +:- pred init(array(int)::array_uo, int::out) is det.           
+      18  
+      16 -    % Create an empty bytecode store.                          
+      17 -    %                                                          
+      18 -:- func init = bytecode_store.                                 
+      19 -                                                               
+      20 -    % Get the current size (next available address).           
+      21 -    %                                                          
+      22 -:- func size(bytecode_store) = int.                            
+      23 -                                                               
+      19  %--------------------------------------------------------------
+          ---------%
+      20  
+      21  :- implementation.
+      22  
+      28 -:- import_module array.                                        
+      23  :- import_module int.
+      24  
+      25  %--------------------------------------------------------------
+          ---------%
+      26  
+      33 -:- type bytecode_store                                         
+      34 -    --->    bytecode_store(                                    
+      35 -                bs_code :: array(int)                          
+      36 -            ).                                                 
+      37 -                                                               
+      27  :- func initial_capacity = int.
+      28  
+      29  initial_capacity = 1024.
+      30  
+      42 -init = bytecode_store(array.init(initial_capacity, 0)).        
+      31 +init(Array, 0) :-                                              
+      32 +    Array = array.init(initial_capacity, 0).                   
+      33  
+      44 -size(bytecode_store(Code)) = array.size(Code).                 
+      45 -                                                               
+      34  %--------------------------------------------------------------
+          ---------%
+      35  :- end_module bytecode.
+      36  %--------------------------------------------------------------
+          ---------%
+
+● Now let me update eval.m to thread the bytecode array and size separately:
+
+● Read(src/eval.m)
+  ⎿  Read 80 lines
+
+● Update(src/eval.m)
+  ⎿  Added 5 lines, removed 4 lines                                      
+       7  :- interface.
+       8  
+       9  :- import_module array.
+      10 -:- import_module bytecode.                                     
+      10  :- import_module io.
+      11  :- import_module list.
+      12  :- import_module types.
+      13  
+      14  %--------------------------------------------------------------
+          ---------%
+      15  
+      17 -    % eval_terms(OpTable, BaseDir, Terms, !Env, !StackArray, !S
+         -tackPtr, !ST, !BC, !IO):                                       
+      16 +    % eval_terms(OpTable, BaseDir, Terms, !Env, !Stack, !StackP
+         +tr,                                                            
+      17 +    %            !ST, !Bytecode, !BytecodeSize, !IO):          
+      18      % Evaluate a list of terms, updating the environment and st
+          ack.
+      19      % OpTable is read-only (fixed at engine startup).
+      20      % BaseDir is used to resolve relative paths in imports.
+      21      % StringTable is threaded through (may grow with dynamic im
+          ports).
+      22 -    % BytecodeStore is threaded through (may grow with compile 
+         -operator).                                                     
+      22 +    % Bytecode array and size are threaded through (may grow wi
+         +th compile).                                                   
+      23      % Stack is represented as an array and pointer (for efficie
+          nt operations).
+      24      % Throws eval_error on failure.
+      25      %
+     ...
+      28      array(value)::array_di, array(value)::array_uo,
+      29      int::in, int::out,
+      30      string_table::in, string_table::out,
+      31 -    bytecode_store::in, bytecode_store::out,                   
+      31 +    array(int)::array_di, array(int)::array_uo,                
+      32 +    int::in, int::out,                                         
+      33      io::di, io::uo) is det.
+      34  
+      35      % Environment operations.
+
+● Update(src/eval.m)
+  ⎿  Added 10 lines, removed 9 lines                                     
+      65  % Main evaluation
+      66  %--------------------------------------------------------------
+          ---------%
+      67  
+      68 -eval_terms(_, _, [], !Env, !Array, !Ptr, !ST, !BC, !IO).       
+      69 -eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !Array, !Ptr
+         -, !ST, !BC, !IO) :-                                            
+      70 -    eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, 
+         -!BC, !IO),                                                     
+      71 -    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST
+         -, !BC, !IO).                                                   
+      68 +eval_terms(_, _, [], !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO).
+      69 +eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !Array, !Ptr
+         +, !ST, !BC, !BCSz, !IO) :-                                     
+      70 +    eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, 
+         +!BC, !BCSz, !IO),                                              
+      71 +    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST
+         +, !BC, !BCSz, !IO).                                            
+      72  
+      73  :- pred eval_term(operator_table::in, string::in, term::in, env
+          ::in, env::out,
+      74      array(value)::array_di, array(value)::array_uo,
+      75      int::in, int::out, string_table::in, string_table::out,
+      76 -    bytecode_store::in, bytecode_store::out,                   
+      76 +    array(int)::array_di, array(int)::array_uo,                
+      77 +    int::in, int::out,                                         
+      78      io::di, io::uo) is det.
+      79  
+      79 -eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC,
+         - !IO) :-                                                       
+      80 +eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC,
+         + !BCSz, !IO) :-                                                
+      81      (
+      82          Term = identifier(NameId),
+      82 -        eval_identifier(OpTable, BaseDir, NameId, !Env, !Array,
+         - !Ptr, !ST, !BC, !IO)                                          
+      83 +        eval_identifier(OpTable, BaseDir, NameId, !Env, !Array,
+         + !Ptr, !ST, !BC, !BCSz, !IO)                                   
+      84      ;
+      85          Term = binder(NameId),
+      86          eval_binder(NameId, !Env, !Array, !Ptr)
+     ...
+      89          eval_function(Terms, !.Env, !Array, !Ptr)
+      90      ;
+      91          Term = generator(Terms),
+      91 -        eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !
+         -Ptr, !ST, !BC, !IO)                                            
+      92 +        eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !
+         +Ptr, !ST, !BC, !BCSz, !IO)                                     
+      93      ;
+      94          Term = quoted(T),
+      95          datastack.push(termval(T), !Array, !Ptr)
+     ...
+       98          datastack.push(V, !Array, !Ptr)
+       99      ;
+      100          Term = apply_term,
+      100 -        eval_apply(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, 
+          -!BC, !IO)                                                     
+      101 +        eval_apply(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, 
+          +!BC, !BCSz, !IO)                                              
+      102      ).
+      103  
+      104  %-------------------------------------------------------------
+           ----------%
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 3 lines                                      
+      110      array(value)::array_di, array(value)::array_uo,
+      111      int::in, int::out,
+      112      string_table::in, string_table::out,
+      113 -    bytecode_store::in, bytecode_store::out,                  
+      113 +    array(int)::array_di, array(int)::array_uo,               
+      114 +    int::in, int::out,                                        
+      115      io::di, io::uo) is det.
+      116  
+      116 -eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, 
+          -!ST, !BC, !IO) :-                                             
+      117 +eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, 
+          +!ST, !BC, !BCSz, !IO) :-                                      
+      118      ( if get_env(NameId, V, !.Env) then
+      119          datastack.push(V, !Array, !Ptr)
+      120      else if map.search(OpTable, NameId, Info) then
+      121          ( if Info ^ oi_operator = op_import then
+      122              % import is special: it can modify Env and ST
+      122 -            eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, 
+          -!ST, !BC, !IO)                                                
+      123 +            eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, 
+          +!ST, !BC, !BCSz, !IO)                                         
+      124          else if Info ^ oi_operator = op_restore then
+      125              % restore is special: it replaces the current Env
+      126              eval_restore(!Env, !Array, !Ptr)
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 3 lines                                      
+      166      array(value)::array_di, array(value)::array_uo,
+      167      int::in, int::out,
+      168      string_table::in, string_table::out,
+      169 -    bytecode_store::in, bytecode_store::out,                  
+      169 +    array(int)::array_di, array(int)::array_uo,               
+      170 +    int::in, int::out,                                        
+      171      io::di, io::uo) is det.
+      172  
+      172 -eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          -T, !BC, !IO) :-                                               
+      173 +eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          +T, !BC, !BCSz, !IO) :-                                        
+      174      % Save current stack pointer
+      175      SavedPtr = !.Ptr,
+      176      % Evaluate generator terms (they push values onto the stac
+           k)
+      176 -    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          -T, !BC, !IO),                                                 
+      177 +    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          +T, !BC, !BCSz, !IO),                                          
+      178      % Extract values pushed by the generator as an array
+      179      datastack.extract_range(!.Array, SavedPtr, !.Ptr, ResultAr
+           ray),
+      180      % Restore stack pointer and push the result array
+
+● Update(src/eval.m)
+  ⎿  Added 5 lines, removed 4 lines                                      
+      188  :- pred eval_apply(operator_table::in, string::in, env::in, en
+           v::out,
+      189      array(value)::array_di, array(value)::array_uo,
+      190      int::in, int::out, string_table::in, string_table::out,
+      191 -    bytecode_store::in, bytecode_store::out,                  
+      191 +    array(int)::array_di, array(int)::array_uo,               
+      192 +    int::in, int::out,                                        
+      193      io::di, io::uo) is det.
+      194  
+      194 -eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC,
+          - !IO) :-                                                      
+      195 +eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC,
+          + !BCSz, !IO) :-                                               
+      196      datastack.pop("!", V, !Array, !Ptr),
+      197      ( if V = closureval(ClosureEnv, Terms) then
+      198          % Evaluate with closure's env, then discard env change
+           s (lexical scoping)
+      198 -        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Ar
+          -ray, !Ptr, !ST, !BC, !IO)                                     
+      199 +        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Ar
+          +ray, !Ptr, !ST, !BC, !BCSz, !IO)                              
+      200      else if V = termval(identifier(Id)), map.search(OpTable, I
+           d, Info) then
+      201          ( if Info ^ oi_operator = op_import then
+      202              % import is special: it can modify Env (but we dis
+           card here like closures)
+      202 -            eval_import(OpTable, BaseDir, Env, _, !Array, !Ptr
+          -, !ST, !BC, !IO)                                              
+      203 +            eval_import(OpTable, BaseDir, Env, _, !Array, !Ptr
+          +, !ST, !BC, !BCSz, !IO)                                       
+      204          else
+      205              % Apply a quoted operator
+      206              operators.eval_operator(OpTable, !.ST, Info ^ oi_o
+           perator, Env,
+
+● Update(src/eval.m)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      218      array(value)::array_di, array(value)::array_uo,
+      219      int::in, int::out,
+      220      string_table::in, string_table::out,
+      221 -    bytecode_store::in, bytecode_store::out,                  
+      221 +    array(int)::array_di, array(int)::array_uo,               
+      222 +    int::in, int::out,                                        
+      223      io::di, io::uo) is det.
+      224  
+      224 -eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !I
+          -O) :-                                                         
+      225 +eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !B
+          +CSz, !IO) :-                                                  
+      226      datastack.pop("import", V, !Array, !Ptr),
+      227      RelFilename = operators.value_to_string(!.ST, V),
+      228      % Resolve relative paths using BaseDir
+
+● Update(src/eval.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      241              parser.parse(Tokens, ParseResult),
+      242              (
+      243                  ParseResult = ok(Terms),
+      244 -                eval_terms(OpTable, NewBaseDir, Terms, !Env, !
+          -Array, !Ptr, !ST, !BC, !IO)                                   
+      244 +                eval_terms(OpTable, NewBaseDir, Terms, !Env, !
+          +Array, !Ptr, !ST, !BC, !BCSz, !IO)                            
+      245              ;
+      246                  ParseResult = error(ParseError),
+      247                  throw_parse_error(Filename, ParseError)
+
+● Now let me update froth.m. This will require updating the tuple types and all places where bytecode is threaded:
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      130                       dir.make_path_name("lib", "stdlib.froth")
+           ).
+      131  
+      132  :- type init_result
+      133 -    --->    init_ok(operator_table, string_table, bytecode_sto
+          -re, env)                                                      
+      133 +    --->    init_ok(operator_table, string_table, array(int), 
+          +int, env)                                                     
+      134      ;       init_error.
+      135  
+      136  :- pred init_with_stdlib(init_result::out, io::di, io::uo) is 
+           cc_multi.
+
+● Update(src/froth.m)
+  ⎿  Added 4 lines, removed 3 lines                                      
+      142          AccessResult = ok,
+      143          eval_stdlib(StdlibPath, EvalResult, !IO),
+      144          (
+      145 -            EvalResult = stdlib_ok(OpTable, ST, BC, Env),     
+      146 -            Result = init_ok(OpTable, ST, BC, Env)            
+      145 +            EvalResult = stdlib_ok(OpTable, ST, BC, BCSz, Env)
+          +,                                                             
+      146 +            Result = init_ok(OpTable, ST, BC, BCSz, Env)      
+      147          ;
+      148              EvalResult = stdlib_error,
+      149              Result = init_error
+     ...
+      152          AccessResult = error(_),
+      153          % Stdlib not found, initialize without it
+      154          init_tables(ST, OpTable),
+      155 -        Result = init_ok(OpTable, ST, bytecode.init, map.init)
+      155 +        bytecode.init(BC, BCSz),                              
+      156 +        Result = init_ok(OpTable, ST, BC, BCSz, map.init)     
+      157      ).
+      158  
+      159  :- pred init_without_stdlib(operator_table::out, string_table:
+           :out,
+
+● Update(src/froth.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      157      ).
+      158  
+      159  :- pred init_without_stdlib(operator_table::out, string_table:
+           :out,
+      160 -    bytecode_store::out, env::out) is det.                    
+      160 +    array(int)::array_uo, int::out, env::out) is det.         
+      161  
+      162 -init_without_stdlib(OpTable, ST, BC, Env) :-                  
+      162 +init_without_stdlib(OpTable, ST, BC, BCSz, Env) :-            
+      163      init_tables(ST, OpTable),
+      164 -    BC = bytecode.init,                                       
+      164 +    bytecode.init(BC, BCSz),                                  
+      165      Env = map.init.
+      166  
+      167  :- type stdlib_result
+      168 -    --->    stdlib_ok(operator_table, string_table, bytecode_s
+          -tore, env)                                                    
+      168 +    --->    stdlib_ok(operator_table, string_table, array(int)
+          +, int, env)                                                   
+      169      ;       stdlib_error.
+      170  
+      171  :- pred eval_stdlib(string::in, stdlib_result::out, io::di, io
+           ::uo) is cc_multi.
+
+● Update(src/froth.m)
+  ⎿  Added 5 lines, removed 5 lines                                      
+      176      (
+      177          ReadResult = ok(Content),
+      178          init_tables(ST0, OpTable),
+      179 -        BC0 = bytecode.init,                                  
+      179 +        bytecode.init(BC0, BCSz0),                            
+      180          lexer.tokenize(Content, ST0, LexResult),
+      181          (
+      182              LexResult = ok(Tokens, ST1),
+     ...
+      184              (
+      185                  ParseResult = ok(Terms),
+      186                  datastack.init(Array0, Ptr0),
+      187 -                try_io(eval_terms_wrapper(OpTable, LibDir, ST1
+          -, BC0, Terms,                                                 
+      188 -                    map.init, Array0, Ptr0), EvalResult, !IO),
+      187 +                try_io(eval_terms_wrapper(OpTable, LibDir, ST1
+          +, BC0, BCSz0,                                                 
+      188 +                    Terms, map.init, Array0, Ptr0), EvalResult
+          +, !IO),                                                       
+      189                  (
+      190 -                    EvalResult = succeeded({ST, BC, Env, _Arra
+          -y, _Ptr}),                                                    
+      191 -                    Result = stdlib_ok(OpTable, ST, BC, Env)  
+      190 +                    EvalResult = succeeded({ST, BC, BCSz, Env,
+          + _Array, _Ptr}),                                              
+      191 +                    Result = stdlib_ok(OpTable, ST, BC, BCSz, 
+          +Env)                                                          
+      192                  ;
+      193                      EvalResult = exception(Exn),
+      194                      ( if univ_to_type(Exn, EvalError) then
+
+● Update(src/froth.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      243  run_with_options(Opts, !IO) :-
+      244      % Initialize state
+      245      ( if Opts ^ opt_no_stdlib = yes then
+      246 -        init_without_stdlib(OpTable, ST0, BC0, Env0),         
+      246 +        init_without_stdlib(OpTable, ST0, BC0, BCSz0, Env0),  
+      247          datastack.init(Array0, Ptr0),
+      248 -        run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr
+          -0, !IO)                                                       
+      248 +        run_actions(Opts, OpTable, ST0, BC0, BCSz0, Env0, Arra
+          +y0, Ptr0, !IO)                                                
+      249      else
+      250          init_with_stdlib(InitResult, !IO),
+      251          (
+      252 -            InitResult = init_ok(OpTable, ST0, BC0, Env0),    
+      252 +            InitResult = init_ok(OpTable, ST0, BC0, BCSz0, Env
+          +0),                                                           
+      253              datastack.init(Array0, Ptr0),
+      254 -            run_actions(Opts, OpTable, ST0, BC0, Env0, Array0,
+          - Ptr0, !IO)                                                   
+      254 +            run_actions(Opts, OpTable, ST0, BC0, BCSz0, Env0, 
+          +Array0, Ptr0, !IO)                                            
+      255          ;
+      256              InitResult = init_error,
+      257              io.set_exit_status(1, !IO)
+
+● Update(src/froth.m)
+  ⎿  Added 6 lines, removed 6 lines                                      
+      263  %-------------------------------------------------------------
+           ----------%
+      264  
+      265  :- pred run_actions(options::in, operator_table::in,
+      266 -    string_table::in, bytecode_store::in, env::in,            
+      266 +    string_table::in, array(int)::array_di, int::in, env::in, 
+      267      array(value)::array_di, int::in, io::di, io::uo) is cc_mul
+           ti.
+      268  
+      269 -run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, !IO) 
+          -:-                                                            
+      269 +run_actions(Opts, OpTable, ST0, BC0, BCSz0, Env0, Array0, Ptr0
+          +, !IO) :-                                                     
+      270      Actions = Opts ^ opt_actions,
+      271      (
+      272          Actions = [],
+      273          % No actions: start REPL
+      274 -        start_repl(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0
+          -, !IO)                                                        
+      274 +        start_repl(Opts, OpTable, ST0, BC0, BCSz0, Env0, Array
+          +0, Ptr0, !IO)                                                 
+      275      ;
+      276          Actions = [_ | _],
+      277 -        execute_actions(Actions, OpTable, ST0, ST, BC0, BC, En
+          -v0, Env,                                                      
+      278 -            Array0, Array, Ptr0, Ptr, yes, Success, !IO),     
+      277 +        execute_actions(Actions, OpTable, ST0, ST, BC0, BC, BC
+          +Sz0, BCSz,                                                    
+      278 +            Env0, Env, Array0, Array, Ptr0, Ptr, yes, Success,
+          + !IO),                                                        
+      279          (
+      280              Success = yes,
+      281              ( if Opts ^ opt_interactive = yes then
+      282 -                start_repl(Opts, OpTable, ST, BC, Env, Array, 
+          -Ptr, !IO)                                                     
+      282 +                start_repl(Opts, OpTable, ST, BC, BCSz, Env, A
+          +rray, Ptr, !IO)                                               
+      283              else
+      284                  true
+      285              )
+
+● Update(src/froth.m)
+  ⎿  Added 7 lines, removed 6 lines                                      
+      291  
+      292  :- pred execute_actions(list(action)::in, operator_table::in,
+      293      string_table::in, string_table::out,
+      294 -    bytecode_store::in, bytecode_store::out,                  
+      294 +    array(int)::array_di, array(int)::array_uo,               
+      295 +    int::in, int::out,                                        
+      296      env::in, env::out,
+      297      array(value)::array_di, array(value)::array_uo,
+      298      int::in, int::out,
+      299      bool::in, bool::out, io::di, io::uo) is cc_multi.
+      300  
+      300 -execute_actions([], _, !ST, !BC, !Env, !Array, !Ptr, !Success,
+          - !IO).                                                        
+      301 -execute_actions([Action | Rest], OpTable, !ST, !BC, !Env, !Arr
+          -ay, !Ptr, !Success, !IO) :-                                   
+      301 +execute_actions([], _, !ST, !BC, !BCSz, !Env, !Array, !Ptr, !S
+          +uccess, !IO).                                                 
+      302 +execute_actions([Action | Rest], OpTable, !ST, !BC, !BCSz, !En
+          +v, !Array, !Ptr, !Success, !IO) :-                            
+      303      (
+      304          !.Success = no
+      305          % Skip remaining actions if we already failed
+     ...
+      307          !.Success = yes,
+      308          (
+      309              Action = exec_code(Code),
+      309 -            execute_code(OpTable, Code, !ST, !BC, !Env, !Array
+          -, !Ptr, !Success, !IO)                                        
+      310 +            execute_code(OpTable, Code, !ST, !BC, !BCSz, !Env,
+          + !Array, !Ptr, !Success, !IO)                                 
+      311          ;
+      312              Action = exec_file(File),
+      312 -            execute_file(OpTable, File, !ST, !BC, !Env, !Array
+          -, !Ptr, !Success, !IO)                                        
+      313 +            execute_file(OpTable, File, !ST, !BC, !BCSz, !Env,
+          + !Array, !Ptr, !Success, !IO)                                 
+      314          ),
+      314 -        execute_actions(Rest, OpTable, !ST, !BC, !Env, !Array,
+          - !Ptr, !Success, !IO)                                         
+      315 +        execute_actions(Rest, OpTable, !ST, !BC, !BCSz, !Env, 
+          +!Array, !Ptr, !Success, !IO)                                  
+      316      ).
+      317  
+      318  :- pred execute_code(operator_table::in, string::in,
+
+● Update(src/froth.m)
+  ⎿  Added 10 lines, removed 9 lines                                     
+      317  
+      318  :- pred execute_code(operator_table::in, string::in,
+      319      string_table::in, string_table::out,
+      320 -    bytecode_store::in, bytecode_store::out,                  
+      320 +    array(int)::array_di, array(int)::array_uo,               
+      321 +    int::in, int::out,                                        
+      322      env::in, env::out,
+      323      array(value)::array_di, array(value)::array_uo,
+      324      int::in, int::out,
+      325      bool::in, bool::out, io::di, io::uo) is cc_multi.
+      326  
+      326 -execute_code(OpTable, Code, ST0, ST, BC0, BC, Env0, Env, Array
+          -0, Array, Ptr0, Ptr,                                          
+      327 -        _, Success, !IO) :-                                   
+      327 +execute_code(OpTable, Code, ST0, ST, BC0, BC, BCSz0, BCSz, Env
+          +0, Env,                                                       
+      328 +        Array0, Array, Ptr0, Ptr, _, Success, !IO) :-         
+      329      lexer.tokenize(Code, ST0, LexResult),
+      330      (
+      331          LexResult = ok(Tokens, ST1),
+     ...
+      333          (
+      334              ParseResult = ok(Terms),
+      335              % Use "." as BaseDir for code strings (current dir
+           ectory)
+      335 -            try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, 
+          -Terms, Env0,                                                  
+      336 -                Array0, Ptr0), EvalResult, !IO),              
+      336 +            try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, 
+          +BCSz0, Terms,                                                 
+      337 +                Env0, Array0, Ptr0), EvalResult, !IO),        
+      338              (
+      338 -                EvalResult = succeeded({ST, BC, Env, Array, Pt
+          -r}),                                                          
+      339 +                EvalResult = succeeded({ST, BC, BCSz, Env, Arr
+          +ay, Ptr}),                                                    
+      340                  Success = yes
+      341              ;
+      342                  EvalResult = exception(Exn),
+      343                  ( if univ_to_type(Exn, EvalError) then
+      344                      io.format("Runtime error: %s\n",
+      345                          [s(types.format_error(ST1, EvalError))
+           ], !IO),
+      345 -                    ST = ST1, BC = BC0, Env = Env0,           
+      346 +                    ST = ST1, BC = BC0, BCSz = BCSz0, Env = En
+          +v0,                                                           
+      347                      datastack.init(Array, Ptr),
+      348                      Success = no
+      349                  else
+     ...
+      353          ;
+      354              ParseResult = error(ParseError),
+      355              report_parse_error(ParseError, !IO),
+      355 -            ST = ST1, BC = BC0, Env = Env0, Array = Array0, Pt
+          -r = Ptr0,                                                     
+      356 +            ST = ST1, BC = BC0, BCSz = BCSz0, Env = Env0, Arra
+          +y = Array0, Ptr = Ptr0,                                       
+      357              Success = no
+      358          )
+      359      ;
+      360          LexResult = error(LexError),
+      361          report_lex_error(LexError, !IO),
+      361 -        ST = ST0, BC = BC0, Env = Env0, Array = Array0, Ptr = 
+          -Ptr0,                                                         
+      362 +        ST = ST0, BC = BC0, BCSz = BCSz0, Env = Env0, Array = 
+          +Array0, Ptr = Ptr0,                                           
+      363          Success = no
+      364      ).
+      365  
+
+● Update(src/froth.m)
+  ⎿  Added 11 lines, removed 10 lines                                    
+      365  
+      366  :- pred execute_file(operator_table::in, string::in,
+      367      string_table::in, string_table::out,
+      368 -    bytecode_store::in, bytecode_store::out,                  
+      368 +    array(int)::array_di, array(int)::array_uo,               
+      369 +    int::in, int::out,                                        
+      370      env::in, env::out,
+      371      array(value)::array_di, array(value)::array_uo,
+      372      int::in, int::out,
+      373      bool::in, bool::out, io::di, io::uo) is cc_multi.
+      374  
+      374 -execute_file(OpTable, Filename, ST0, ST, BC0, BC, Env0, Env, A
+          -rray0, Array, Ptr0, Ptr,                                      
+      375 -        _, Success, !IO) :-                                   
+      375 +execute_file(OpTable, Filename, ST0, ST, BC0, BC, BCSz0, BCSz,
+          + Env0, Env,                                                   
+      376 +        Array0, Array, Ptr0, Ptr, _, Success, !IO) :-         
+      377      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      378      (
+      379          ReadResult = ok(Content),
+     ...
+      384              parser.parse(Tokens, ParseResult),
+      385              (
+      386                  ParseResult = ok(Terms),
+      386 -                try_io(eval_terms_wrapper(OpTable, BaseDir, ST
+          -1, BC0, Terms, Env0,                                          
+      387 -                    Array0, Ptr0), EvalResult, !IO),          
+      387 +                try_io(eval_terms_wrapper(OpTable, BaseDir, ST
+          +1, BC0, BCSz0,                                                
+      388 +                    Terms, Env0, Array0, Ptr0), EvalResult, !I
+          +O),                                                           
+      389                  (
+      389 -                    EvalResult = succeeded({ST, BC, Env, Array
+          -, Ptr}),                                                      
+      390 +                    EvalResult = succeeded({ST, BC, BCSz, Env,
+          + Array, Ptr}),                                                
+      391                      Success = yes
+      392                  ;
+      393                      EvalResult = exception(Exn),
+      394                      ( if univ_to_type(Exn, EvalError) then
+      395                          io.format("Runtime error: %s\n",
+      396                              [s(types.format_error(ST1, EvalErr
+           or))], !IO),
+      396 -                        ST = ST1, BC = BC0, Env = Env0,       
+      397 +                        ST = ST1, BC = BC0, BCSz = BCSz0, Env 
+          += Env0,                                                       
+      398                          datastack.init(Array, Ptr),
+      399                          Success = no
+      400                      else
+     ...
+      404              ;
+      405                  ParseResult = error(ParseError),
+      406                  report_parse_error(ParseError, !IO),
+      406 -                ST = ST1, BC = BC0, Env = Env0, Array = Array0
+          -, Ptr = Ptr0,                                                 
+      407 +                ST = ST1, BC = BC0, BCSz = BCSz0, Env = Env0, 
+          +Array = Array0, Ptr = Ptr0,                                   
+      408                  Success = no
+      409              )
+      410          ;
+      411              LexResult = error(LexError),
+      412              report_lex_error(LexError, !IO),
+      412 -            ST = ST0, BC = BC0, Env = Env0, Array = Array0, Pt
+          -r = Ptr0,                                                     
+      413 +            ST = ST0, BC = BC0, BCSz = BCSz0, Env = Env0, Arra
+          +y = Array0, Ptr = Ptr0,                                       
+      414              Success = no
+      415          )
+      416      ;
+      417          ReadResult = error(Error),
+      418          io.format("Error reading '%s': %s\n",
+      419              [s(Filename), s(io.error_message(Error))], !IO),
+      419 -        ST = ST0, BC = BC0, Env = Env0, Array = Array0, Ptr = 
+          -Ptr0,                                                         
+      420 +        ST = ST0, BC = BC0, BCSz = BCSz0, Env = Env0, Array = 
+          +Array0, Ptr = Ptr0,                                           
+      421          Success = no
+      422      ).
+      423  
+
+● Update(src/froth.m)
+  ⎿  Added 20 lines, removed 17 lines                                    
+      426  %-------------------------------------------------------------
+           ----------%
+      427  
+      428  :- pred start_repl(options::in, operator_table::in, string_tab
+           le::in,
+      429 -    bytecode_store::in, env::in, array(value)::array_di, int::
+          -in,                                                           
+      429 +    array(int)::array_di, int::in, env::in, array(value)::arra
+          +y_di, int::in,                                                
+      430      io::di, io::uo) is cc_multi.
+      431  
+      432 -start_repl(Opts, OpTable, ST, BC, Env, Array, Ptr, !IO) :-    
+      432 +start_repl(Opts, OpTable, ST, BC, BCSz, Env, Array, Ptr, !IO) 
+          +:-                                                            
+      433      ( if Opts ^ opt_quiet = no then
+      434          io.write_string("Froth REPL. Press Ctrl-D to exit.\n",
+            !IO)
+      435      else
+      436          true
+      437      ),
+      438 -    repl_loop(OpTable, ST, BC, Env, Array, Ptr, !IO).         
+      438 +    repl_loop(OpTable, ST, BC, BCSz, Env, Array, Ptr, !IO).   
+      439  
+      440 -:- pred repl_loop(operator_table::in, string_table::in, byteco
+          -de_store::in,                                                 
+      441 -    env::in, array(value)::array_di, int::in, io::di, io::uo) 
+          -is cc_multi.                                                  
+      440 +:- pred repl_loop(operator_table::in, string_table::in,       
+      441 +    array(int)::array_di, int::in, env::in,                   
+      442 +    array(value)::array_di, int::in, io::di, io::uo) is cc_mul
+          +ti.                                                           
+      443  
+      443 -repl_loop(OpTable, ST0, BC0, Env0, Array0, Ptr0, !IO) :-      
+      444 +repl_loop(OpTable, ST0, BC0, BCSz0, Env0, Array0, Ptr0, !IO) :
+          +-                                                             
+      445      io.write_string("> ", !IO),
+      446      io.flush_output(!IO),
+      447      io.read_line_as_string(ReadResult, !IO),
+      448      (
+      449          ReadResult = ok(Line),
+      449 -        repl_eval(OpTable, Line, ST0, ST, BC0, BC, Env0, Env, 
+          -Array0, Array,                                                
+      450 -            Ptr0, Ptr, !IO),                                  
+      451 -        repl_loop(OpTable, ST, BC, Env, Array, Ptr, !IO)      
+      450 +        repl_eval(OpTable, Line, ST0, ST, BC0, BC, BCSz0, BCSz
+          +, Env0, Env,                                                  
+      451 +            Array0, Array, Ptr0, Ptr, !IO),                   
+      452 +        repl_loop(OpTable, ST, BC, BCSz, Env, Array, Ptr, !IO)
+      453      ;
+      454          ReadResult = eof,
+      455          io.nl(!IO)
+     ...
+      462  
+      463  :- pred repl_eval(operator_table::in, string::in,
+      464      string_table::in, string_table::out,
+      464 -    bytecode_store::in, bytecode_store::out,                  
+      465 +    array(int)::array_di, array(int)::array_uo,               
+      466 +    int::in, int::out,                                        
+      467      env::in, env::out,
+      468      array(value)::array_di, array(value)::array_uo,
+      469      int::in, int::out, io::di, io::uo) is cc_multi.
+      470  
+      469 -repl_eval(OpTable, Input, ST0, ST, BC0, BC, Env0, Env, Array0,
+          - Array, Ptr0, Ptr, !IO) :-                                    
+      471 +repl_eval(OpTable, Input, ST0, ST, BC0, BC, BCSz0, BCSz, Env0,
+          + Env,                                                         
+      472 +        Array0, Array, Ptr0, Ptr, !IO) :-                     
+      473      lexer.tokenize(Input, ST0, LexResult),
+      474      (
+      475          LexResult = ok(Tokens, ST1),
+      476          parser.parse(Tokens, ParseResult),
+      477          (
+      478              ParseResult = ok(Terms),
+      476 -            try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, 
+          -Terms, Env0,                                                  
+      477 -                Array0, Ptr0), Result, !IO),                  
+      479 +            try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, 
+          +BCSz0, Terms,                                                 
+      480 +                Env0, Array0, Ptr0), Result, !IO),            
+      481              (
+      479 -                Result = succeeded({ST, BC, Env, Array, Ptr}) 
+      482 +                Result = succeeded({ST, BC, BCSz, Env, Array, 
+          +Ptr})                                                         
+      483              ;
+      484                  Result = exception(Exn),
+      485                  ( if univ_to_type(Exn, EvalError) then
+      486                      io.format("Runtime error: %s\n",
+      487                          [s(types.format_error(ST1, EvalError))
+           ], !IO),
+      485 -                    ST = ST1, BC = BC0, Env = Env0,           
+      488 +                    ST = ST1, BC = BC0, BCSz = BCSz0, Env = En
+          +v0,                                                           
+      489                      datastack.init(Array, Ptr)
+      490                  else
+      491                      rethrow(Result)
+     ...
+      494          ;
+      495              ParseResult = error(ParseError),
+      496              report_parse_error(ParseError, !IO),
+      494 -            ST = ST1, BC = BC0, Env = Env0, Array = Array0, Pt
+          -r = Ptr0                                                      
+      497 +            ST = ST1, BC = BC0, BCSz = BCSz0, Env = Env0, Arra
+          +y = Array0, Ptr = Ptr0                                        
+      498          )
+      499      ;
+      500          LexResult = error(LexError),
+      501          report_lex_error(LexError, !IO),
+      499 -        ST = ST0, BC = BC0, Env = Env0, Array = Array0, Ptr = 
+          -Ptr0                                                          
+      502 +        ST = ST0, BC = BC0, BCSz = BCSz0, Env = Env0, Array = 
+          +Array0, Ptr = Ptr0                                            
+      503      ).
+      504  
+      505  %-------------------------------------------------------------
+           ----------%
+
+● Update(src/froth.m)
+  ⎿  Added 6 lines, removed 5 lines                                      
+      528  %-------------------------------------------------------------
+           ----------%
+      529  
+      530  :- pred eval_terms_wrapper(operator_table::in, string::in, str
+           ing_table::in,
+      531 -    bytecode_store::in, list(term)::in, env::in, array(value):
+          -:array_di, int::in,                                           
+      532 -    {string_table, bytecode_store, env, array(value), int}::ou
+          -t,                                                            
+      531 +    array(int)::array_di, int::in, list(term)::in, env::in,   
+      532 +    array(value)::array_di, int::in,                          
+      533 +    {string_table, array(int), int, env, array(value), int}::o
+          +ut,                                                           
+      534      io::di, io::uo) is det.
+      535  
+      535 -eval_terms_wrapper(OpTable, BaseDir, ST0, BC0, Terms, Env0, Ar
+          -ray0, Ptr0,                                                   
+      536 -        {ST, BC, Env, Array, Ptr}, !IO) :-                    
+      536 +eval_terms_wrapper(OpTable, BaseDir, ST0, BC0, BCSz0, Terms, E
+          +nv0, Array0, Ptr0,                                            
+      537 +        {ST, BC, BCSz, Env, Array, Ptr}, !IO) :-              
+      538      eval.eval_terms(OpTable, BaseDir, Terms, Env0, Env, Array0
+           , Array,
+      538 -        Ptr0, Ptr, ST0, ST, BC0, BC, !IO).                    
+      539 +        Ptr0, Ptr, ST0, ST, BC0, BC, BCSz0, BCSz, !IO).       
+      540  
+      541  %-------------------------------------------------------------
+           ----------%
+      542  % Error reporting
+
+● Now let's build and test:
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/froth.int3
+     Making Mercury/int3s/bytecode.int3
+     Making Mercury/int3s/eval.int3
+     Making Mercury/ints/froth.int
+     Making Mercury/ints/eval.int
+     Making Mercury/ints/bytecode.int
+     Making Mercury/cs/bytecode.c
+     Making Mercury/cs/eval.c
+     … +24 lines (ctrl+o to see all)
+
+● Same unique mode issue as we had with the datastack. On exception, we need to reinitialize the bytecode array instead of reusing the consumed one:
+
+● Update(src/froth.m)
+  ⎿  Added 6 lines, removed 3 lines                                      
+      343                  ( if univ_to_type(Exn, EvalError) then
+      344                      io.format("Runtime error: %s\n",
+      345                          [s(types.format_error(ST1, EvalError))
+           ], !IO),
+      346 -                    ST = ST1, BC = BC0, BCSz = BCSz0, Env = En
+          -v0,                                                           
+      346 +                    ST = ST1, Env = Env0,                     
+      347 +                    bytecode.init(BC, BCSz),                  
+      348                      datastack.init(Array, Ptr),
+      349                      Success = no
+      350                  else
+     ...
+      354          ;
+      355              ParseResult = error(ParseError),
+      356              report_parse_error(ParseError, !IO),
+      356 -            ST = ST1, BC = BC0, BCSz = BCSz0, Env = Env0, Arra
+          -y = Array0, Ptr = Ptr0,                                       
+      357 +            ST = ST1, Env = Env0,                             
+      358 +            BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = Ptr0
+          +,                                                             
+      359              Success = no
+      360          )
+      361      ;
+      362          LexResult = error(LexError),
+      363          report_lex_error(LexError, !IO),
+      362 -        ST = ST0, BC = BC0, BCSz = BCSz0, Env = Env0, Array = 
+          -Array0, Ptr = Ptr0,                                           
+      364 +        ST = ST0, Env = Env0,                                 
+      365 +        BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = Ptr0,   
+      366          Success = no
+      367      ).
+      368  
+
+● Update(src/froth.m)
+  ⎿  Added 8 lines, removed 4 lines                                      
+      397                      ( if univ_to_type(Exn, EvalError) then
+      398                          io.format("Runtime error: %s\n",
+      399                              [s(types.format_error(ST1, EvalErr
+           or))], !IO),
+      400 -                        ST = ST1, BC = BC0, BCSz = BCSz0, Env 
+          -= Env0,                                                       
+      400 +                        ST = ST1, Env = Env0,                 
+      401 +                        bytecode.init(BC, BCSz),              
+      402                          datastack.init(Array, Ptr),
+      403                          Success = no
+      404                      else
+     ...
+      408              ;
+      409                  ParseResult = error(ParseError),
+      410                  report_parse_error(ParseError, !IO),
+      410 -                ST = ST1, BC = BC0, BCSz = BCSz0, Env = Env0, 
+          -Array = Array0, Ptr = Ptr0,                                   
+      411 +                ST = ST1, Env = Env0,                         
+      412 +                BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = 
+          +Ptr0,                                                         
+      413                  Success = no
+      414              )
+      415          ;
+      416              LexResult = error(LexError),
+      417              report_lex_error(LexError, !IO),
+      416 -            ST = ST0, BC = BC0, BCSz = BCSz0, Env = Env0, Arra
+          -y = Array0, Ptr = Ptr0,                                       
+      418 +            ST = ST0, Env = Env0,                             
+      419 +            BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = Ptr0
+          +,                                                             
+      420              Success = no
+      421          )
+      422      ;
+      423          ReadResult = error(Error),
+      424          io.format("Error reading '%s': %s\n",
+      425              [s(Filename), s(io.error_message(Error))], !IO),
+      423 -        ST = ST0, BC = BC0, BCSz = BCSz0, Env = Env0, Array = 
+          -Array0, Ptr = Ptr0,                                           
+      426 +        ST = ST0, Env = Env0,                                 
+      427 +        BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = Ptr0,   
+      428          Success = no
+      429      ).
+      430  
+
+● Update(src/froth.m)
+  ⎿  Added 6 lines, removed 3 lines                                      
+      492                  ( if univ_to_type(Exn, EvalError) then
+      493                      io.format("Runtime error: %s\n",
+      494                          [s(types.format_error(ST1, EvalError))
+           ], !IO),
+      495 -                    ST = ST1, BC = BC0, BCSz = BCSz0, Env = En
+          -v0,                                                           
+      495 +                    ST = ST1, Env = Env0,                     
+      496 +                    bytecode.init(BC, BCSz),                  
+      497                      datastack.init(Array, Ptr)
+      498                  else
+      499                      rethrow(Result)
+     ...
+      502          ;
+      503              ParseResult = error(ParseError),
+      504              report_parse_error(ParseError, !IO),
+      504 -            ST = ST1, BC = BC0, BCSz = BCSz0, Env = Env0, Arra
+          -y = Array0, Ptr = Ptr0                                        
+      505 +            ST = ST1, Env = Env0,                             
+      506 +            BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = Ptr0
+      507          )
+      508      ;
+      509          LexResult = error(LexError),
+      510          report_lex_error(LexError, !IO),
+      509 -        ST = ST0, BC = BC0, BCSz = BCSz0, Env = Env0, Array = 
+          -Array0, Ptr = Ptr0                                            
+      511 +        ST = ST0, Env = Env0,                                 
+      512 +        BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = Ptr0    
+      513      ).
+      514  
+      515  %-------------------------------------------------------------
+           ----------%
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth     
+     Making Mercury/int3s/froth.int3
+     Making Mercury/ints/froth.int
+     … +6 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  PASS: add                     
+     PASS: analysis
+     PASS: apply_op
+     … +53 lines (ctrl+o to expand)
+
+● All 53 tests pass. The bytecode array and size are now threaded through as separate top-level arguments with proper unique modes:
+
+  - array(int)::array_di, array(int)::array_uo for the bytecode array
+  - int::in, int::out for the bytecode size
+
+  This mirrors the datastack pattern and ensures we can destructively update the bytecode array when we implement the compiler.
+
+> Let's add an `emit` operator that takes an integer and appends it to the 
+bytecode store. 
+
+● I'll add emit as a special operator (like import and restore) since it needs access to the bytecode array which operators.eval_operator doesn't have.
+
+● Read(src/types.m)
+  ⎿  Read 20 lines
+
+● Update(src/types.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      69      ;       op_close        % close       ( env body -- closure
+           )
+      70      ;       op_closure_env  % closureEnv  ( closure -- env )
+      71      ;       op_closure_body % closureBody ( closure -- body )
+      72 -    ;       op_is_closure.  % isClosure   ( a -- int )         
+      72 +    ;       op_is_closure   % isClosure   ( a -- int )         
+      73 +    ;       op_emit.        % emit        ( int -- )           
+      74  
+      75  :- type operator_info
+      76      --->    operator_info(
+
+● Now add the emit function to bytecode.m:
+
+● Update(src/bytecode.m)
+  ⎿  Added 7 lines                                                       
+      16      %
+      17  :- pred init(array(int)::array_uo, int::out) is det.
+      18  
+      19 +    % emit(Value, !Array, !Size):                              
+      20 +    % Append an integer to the bytecode store. Grows the array 
+         +if needed.                                                     
+      21 +    %                                                          
+      22 +:- pred emit(int::in,                                          
+      23 +    array(int)::array_di, array(int)::array_uo,                
+      24 +    int::in, int::out) is det.                                 
+      25 +                                                               
+      26  %--------------------------------------------------------------
+          ---------%
+      27  
+      28  :- implementation.
+
+● Update(src/bytecode.m)
+  ⎿  Added 28 lines                                                      
+      39      Array = array.init(initial_capacity, 0).
+      40  
+      41  %--------------------------------------------------------------
+          ---------%
+      42 +                                                               
+      43 +emit(Value, !Array, !Size) :-                                  
+      44 +    Capacity = array.size(!.Array),                            
+      45 +    ( if !.Size >= Capacity then                               
+      46 +        % Double the array size                                
+      47 +        NewCapacity = Capacity * 2,                            
+      48 +        Array1 = array.init(NewCapacity, 0),                   
+      49 +        copy_elements(0, Capacity, !.Array, Array1, Array2),   
+      50 +        array.set(!.Size, Value, Array2, !:Array),             
+      51 +        !:Size = !.Size + 1                                    
+      52 +    else                                                       
+      53 +        array.set(!.Size, Value, !Array),                      
+      54 +        !:Size = !.Size + 1                                    
+      55 +    ).                                                         
+      56 +                                                               
+      57 +:- pred copy_elements(int::in, int::in, array(int)::in,        
+      58 +    array(int)::array_di, array(int)::array_uo) is det.        
+      59 +                                                               
+      60 +copy_elements(I, Size, Src, !Dst) :-                           
+      61 +    ( if I >= Size then                                        
+      62 +        true                                                   
+      63 +    else                                                       
+      64 +        array.lookup(Src, I, Value),                           
+      65 +        array.set(I, Value, !Dst),                             
+      66 +        copy_elements(I + 1, Size, Src, !Dst)                  
+      67 +    ).                                                         
+      68 +                                                               
+      69 +%--------------------------------------------------------------
+         +---------%                                                     
+      70  :- end_module bytecode.
+      71  %--------------------------------------------------------------
+          ---------%
+
+● Now add emit to the operator table in operators.m:
+
+● Search(pattern: "op_is_closure", path: "src/operators.m", output_mode:
+        "content")
+  ⎿  Found 3 lines (ctrl+o to expand)
+
+● Read(src/operators.m)
+  ⎿  Read 20 lines
+
+● Update(src/operators.m)
+  ⎿  Added 1 line                                                        
+      217  operator("closureEnv", op_closure_env).
+      218  operator("closureBody", op_closure_body).
+      219  operator("isClosure", op_is_closure).
+      220 +operator("emit", op_emit).                                    
+      221  
+      222  %-------------------------------------------------------------
+           ----------%
+      223  % Operator arity (number of values popped from stack)
+
+● Read(src/operators.m)
+  ⎿  Read 15 lines
+
+● Update(src/operators.m)
+  ⎿  Added 1 line                                                        
+      277  operator_arity(op_closure_env) = 1.
+      278  operator_arity(op_closure_body) = 1.
+      279  operator_arity(op_is_closure) = 1.
+      280 +operator_arity(op_emit) = 1.                                  
+      281  
+      282  %-------------------------------------------------------------
+           ----------%
+      283  % init_operators: intern all operator names and build the oper
+           ator table
+
+● Now handle emit specially in eval.m (like import and restore):
+
+● Update(src/eval.m)
+  ⎿  Added 1 line                                                        
+      41  
+      42  :- implementation.
+      43  
+      44 +:- import_module bytecode.                                     
+      45  :- import_module datastack.
+      46  :- import_module dir.
+      47  :- import_module exception.
+
+● Update(src/eval.m)
+  ⎿  Added 3 lines                                                       
+      125          else if Info ^ oi_operator = op_restore then
+      126              % restore is special: it replaces the current Env
+      127              eval_restore(!Env, !Array, !Ptr)
+      128 +        else if Info ^ oi_operator = op_emit then             
+      129 +            % emit is special: it modifies the bytecode store 
+      130 +            eval_emit(!Array, !Ptr, !BC, !BCSz)               
+      131          else
+      132              operators.eval_operator(OpTable, !.ST, Info ^ oi_o
+           perator, !.Env,
+      133                  !Array, !Ptr, !IO)
+
+● Read(src/eval.m)
+  ⎿  Read 8 lines
+
+● Update(src/eval.m)
+  ⎿  Added 18 lines                                                      
+      322      ).
+      323  
+      324  %-------------------------------------------------------------
+           ----------%
+      325 +% emit: ( int -- ) Append an integer to the bytecode store    
+      326 +%-------------------------------------------------------------
+          +----------%                                                   
+      327 +                                                              
+      328 +:- pred eval_emit(                                            
+      329 +    array(value)::array_di, array(value)::array_uo,           
+      330 +    int::in, int::out,                                        
+      331 +    array(int)::array_di, array(int)::array_uo,               
+      332 +    int::in, int::out) is det.                                
+      333 +                                                              
+      334 +eval_emit(!Array, !Ptr, !BC, !BCSz) :-                        
+      335 +    datastack.pop("emit", V, !Array, !Ptr),                   
+      336 +    ( if V = intval(I) then                                   
+      337 +        bytecode.emit(I, !BC, !BCSz)                          
+      338 +    else                                                      
+      339 +        throw(type_error("int", V))                           
+      340 +    ).                                                        
+      341 +                                                              
+      342 +%-------------------------------------------------------------
+          +----------%                                                   
+      343  :- end_module eval.
+      344  %-------------------------------------------------------------
+           ----------%
+
+● Now let's build and test:
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/bytecode.int3
+     Making Mercury/int3s/types.int3
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/operators.int3
+     Making Mercury/ints/types.int
+     Making Mercury/ints/parser.int
+     Making Mercury/ints/operators.int
+     Making Mercury/ints/lexer.int
+     … +19 lines (ctrl+o to see all)
+
+● I need to add a case for op_emit in the eval_operator switch. Since it's handled specially in eval.m, this case should never be reached, but Mercury requires exhaustive switches:
+
+● Read(src/operators.m)
+  ⎿  Read 30 lines
+
+● Search(pattern: "op_import|op_restore", path: "src/operators.m", output_mode:
+        "content")
+  ⎿  Found 6 lines (ctrl+o to expand)
+
+● Read(src/operators.m)
+  ⎿  Read 25 lines
+
+● Update(src/operators.m)
+  ⎿  Added 4 lines                                                       
+      476      ;
+      477          Op = op_is_closure,
+      478          operator_is_closure(!Array, !Ptr)
+      479 +    ;                                                         
+      480 +        Op = op_emit,                                         
+      481 +        % emit is handled specially in eval.m, should not reac
+          +h here                                                        
+      482 +        unexpected($pred, "emit should be handled in eval.m") 
+      483      ).
+      484  
+      485  %-------------------------------------------------------------
+           ----------%
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth         
+     Making Mercury/int3s/operators.int3
+     Making Mercury/ints/operators.int
+     … +13 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  PASS: add                     
+     PASS: analysis
+     PASS: apply_op
+     … +53 lines (ctrl+o to expand)
+
+● All tests pass. Let me verify emit works:
+
+● Bash(echo '1 emit 2 emit 3 emit "done" println!' | ./bin/froth -n -q 2>&1)
+  ⎿  > 1:36: invalid token: '\'
+     >
+
+● Bash(./bin/froth -n -q -e '1 emit 2 emit 3 emit' 2>&1)
+  ⎿  Error: Exit code 1
+     Runtime error: undefined name: emit
+
+● Read(src/operators.m)
+  ⎿  Read 50 lines
+
+● I need to add "emit" to the operator names list:
+
+● Update(src/operators.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      297          "isValue", "unwrap", "intern",
+      298          "idToString", "idToIdent", "idToBinder", "isOperator",
+            "arity",
+      299          "stack", "import", "time", "restore",
+      300 -        "close", "closureEnv", "closureBody", "isClosure"     
+      300 +        "close", "closureEnv", "closureBody", "isClosure",    
+      301 +        "emit"                                                
+      302      ],
+      303      list.foldl2(intern_operator, OpNames, map.init, OpTable, !
+           ST).
+      304  
+
+● Bash(make 2>&1 && ./bin/froth -n -q -e '1 emit 2 emit 3 emit')
+  ⎿  cd src && mmc --make froth         
+     Making Mercury/int3s/operators.int3
+     Making Mercury/ints/operators.int
+     … +4 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | tail -5)
+  ⎿  PASS: type_error             
+     PASS: type_tests
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● All tests pass. The emit operator is now working. It:
+  - Takes an integer from the stack
+  - Appends it to the bytecode array
+  - Grows the array if needed (doubles capacity)
+
+  Summary of changes:
+  - types.m: Added op_emit to the operator type
+  - bytecode.m: Added emit/5 predicate to append integers with automatic growth
+  - operators.m: Added operator mapping, arity (1), name in init list, and unreachable case in switch
+  - eval.m: Added special handling for emit in eval_identifier, plus eval_emit/8 predicate
+
+> /export transcript25.txt 
+  ⎿  Conversation exported to: transcript25.txt
+
+> Create a FROTH_BYTECODE.md file that concisely summarizes the design 
+decisions we have made, and any open questions we have. 
+
+● Write(FROTH_BYTECODE.md)
+  ⎿  Wrote 106 lines to FROTH_BYTECODE.md                                
+      1 # Froth Bytecode Compiler Design
+      2 ## Overview
+      3 A bytecode compiler for Froth to improve execution performance by
+         eliminating tree-walking overhead.
+      4 ## Design Decisions
+      5 ### Global Bytecode Array
+     … +96 lines (ctrl+o to expand)
+
+● Created FROTH_BYTECODE.md summarizing:
+
+  Design Decisions:
+  - Global bytecode array with integer code addresses
+  - Unique-mode threading of array and size (like datastack)
+  - Compiled closures with context array + code address
+  - Hybrid interpreter that dispatches to VM for compiled closures
+  - Frame stack growing downwards from top of datastack
+  - Explicit compile operator that can fail for dynamic features
+  - Planned opcode set for frames, values, variables, generators, operators, and control flow
+
+  Open Questions:
+  - Error handling and stack traces
+  - Exact frame layout
+  - Tail call detection
+  - Whether to compile nested closures recursively
+  - Constant pool structure
+  - Generator compilation strategy
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀   claude-opus-4-5-20251101 · 193k/200k tokens (97%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 74 tokens (0.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 130.5k tokens (65.3%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 7k (3.3%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 19 tokens
+     └ MERCURY.md: 55 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
