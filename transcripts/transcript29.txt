@@ -1,0 +1,1332 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read FROTH.md (188 lines)
+  ⎿  Read README.md (241 lines)
+  ⎿  Read FROTHLIB.md (267 lines)
+  ⎿  Read tests/vm.froth (107 lines)
+  ⎿  Read src/eval.m (369 lines)
+
+> Let's do a thorough review of the Mercury code for clarity and modularity.
+ Think about any modules that may usefully be split off from existing 
+modules. 
+
+● I'll explore the Mercury source files to understand the current module structure and identify opportunities for improvement.
+
+● Explore(Review Mercury modules)
+  ⎿  Done (11 tool uses · 69.7k tokens · 50s)                              
+
+● Excellent analysis. Here's a summary of the findings:
+
+  Module Health Overview
+
+  | Module      | Lines | Health      | Notes                         |
+  |-------------|-------|-------------|-------------------------------|
+  | bytecode.m  | 71    | ✓ Excellent | Simple, focused               |
+  | datastack.m | 190   | ✓ Excellent | Clean API                     |
+  | parser.m    | 234   | ✓ Excellent | Well-focused                  |
+  | vm.m        | 229   | ✓ Good      | Well-isolated                 |
+  | types.m     | 248   | ✓ Good      | Core types (unavoidable size) |
+  | eval.m      | 368   | ✓ Good      | Clean evaluation logic        |
+  | lexer.m     | 595   | ✓ Excellent | Well-organized state machine  |
+  | froth.m     | 606   | Fair        | CLI + init (reasonable scope) |
+  | operators.m | 1,407 | ⚠ Refactor  | Mixed responsibilities        |
+
+  Main Issue: operators.m
+
+  At 1,407 lines, operators.m mixes 5 distinct concerns:
+
+  1. Operator table definitions (~250 lines) - name/arity/bytecode mappings
+  2. Operator dispatcher (~170 lines) - massive if-else chain in eval_operator
+  3. Individual operators (~580 lines) - arithmetic, comparison, data structures
+  4. String conversion (~200 lines) - value_to_string, term_to_string, escape handling
+  5. Type testing (~100 lines) - isInt, isString, isOperator, arity
+
+  Recommended Split
+
+  Option A: Three modules
+  - operator_table.m - Metadata (specs, arity, numbering)
+  - operator_impl.m - Execution (individual operator implementations)
+  - value_format.m - String conversion and display
+
+  Option B: Two modules
+  - format.m - String conversion only (simpler extraction)
+  - operators.m - Everything else
+
+  Would you like to proceed with splitting operators.m? If so, which approach appeals to you, or would you like to discuss a different structure?
+
+> let's do option A 
+
+● I'll split operators.m into three focused modules. Let me start by reading the current file to plan the extraction carefully.
+
+● Read(src/operators.m)
+  ⎿  Read 1408 lines
+
+● Now I have a clear picture. Let me create the three new modules. I'll start with operator_table.m:
+
+● Write(src/operator_table.m)
+  ⎿  Wrote 325 lines to src/operator_table.m                             
+      1 %----------------------------------------------------------------
+        -------%
+      2 % operator_table.m
+      3 % Operator metadata: name mappings, arity, and bytecode encoding.
+      4 % NOTE: Operator numbers must be kept in sync with lib/bytecode.f
+        roth
+      5 %----------------------------------------------------------------
+        -------%
+      6 :- module operator_table.
+      7 :- interface.
+      8 :- import_module types.
+     … +315 lines (ctrl+o to expand)
+
+● Now let me create value_format.m:
+
+● Write(src/value_format.m)
+  ⎿  Wrote 153 lines to src/value_format.m                               
+      1 %----------------------------------------------------------------
+        -------%
+      2 % value_format.m
+      3 % String conversion utilities for Froth values and terms.
+      4 %----------------------------------------------------------------
+        -------%
+      5 :- module value_format.
+      6 :- interface.
+      7 :- import_module types.
+     … +143 lines (ctrl+o to expand)
+
+● Now let me refactor operators.m to use the new modules and remove the duplicated code:
+
+● Write(src/operators.m)
+  ⎿  Added 21 lines, removed 377 lines                                   
+      1  %---------------------------------------------------------------
+         --------%
+      2  % operators.m
+      3 -% Operator definitions for the Froth programming language.      
+      3 +% Operator implementations for the Froth programming language.  
+      4  %---------------------------------------------------------------
+         --------%
+      5  
+      6  :- module operators.
+     ...
+      12  
+      13  %--------------------------------------------------------------
+          ---------%
+      14  
+      15 -    % init_operators(!ST, OpTable):                            
+      16 -    % Initialize the operator table by interning all operator n
+         -ames.                                                          
+      17 -    % Returns the operator table and updated string table.     
+      15 +    % Re-export operator_table predicates for convenience.     
+      16      %
+      17 +:- import_module operator_table.                               
+      18 +:- pred operator(string::in, operator::out) is semidet.        
+      19 +:- func operator_to_int(operator) = int.                       
+      20 +:- pred int_to_operator(int::in, operator::out) is semidet.    
+      21 +:- func num_operators = int.                                   
+      22  :- pred init_operators(string_table::in, string_table::out,
+      23      operator_table::out) is det.
+      24  
+      22 -    % operator(Name, Op):                                      
+      23 -    % Map a name to an operator.                               
+      25 +    % Re-export value_format functions for convenience.        
+      26      %
+      25 -:- pred operator(string::in, operator::out) is semidet.        
+      27 +:- import_module value_format.                                 
+      28 +:- func value_to_string(string_table, value) = string.         
+      29  
+      30      % eval_operator(OpTable, ST, Op, Env, !StackArray, !StackPt
+          r, !IO):
+      31      % Execute an operator. OpTable and ST are read-only.
+     ...
+      145  :- pred operator_is_closure(array(value)::array_di, array(valu
+           e)::array_uo,
+      146      int::in, int::out) is det.
+      147  
+      145 -    % value_to_string(ST, Value) = String:                    
+      146 -    % Convert a value to its string representation (for print/
+          -import).                                                      
+      147 -    %                                                         
+      148 -:- func value_to_string(string_table, value) = string.        
+      149 -                                                              
+      150 -    % operator_to_int(Op) = Int:                              
+      151 -    % Convert an operator to its integer representation for by
+          -tecode.                                                       
+      152 -    %                                                         
+      153 -:- func operator_to_int(operator) = int.                      
+      154 -                                                              
+      155 -    % int_to_operator(Int) = Op:                              
+      156 -    % Convert an integer to an operator. Fails if out of range
+          -.                                                             
+      157 -    %                                                         
+      158 -:- pred int_to_operator(int::in, operator::out) is semidet.   
+      159 -                                                              
+      160 -    % num_operators:                                          
+      161 -    % The total number of operators.                          
+      162 -    %                                                         
+      163 -:- func num_operators = int.                                  
+      164 -                                                              
+      148  %-------------------------------------------------------------
+           ----------%
+      149  
+      150  :- implementation.
+      151  
+      152  :- import_module assoc_list.
+      170 -:- import_module datastack.                                   
+      153  :- import_module bool.
+      154 +:- import_module datastack.                                   
+      155  :- import_module exception.
+      156  :- import_module int.
+      157  :- import_module list.
+     ...
+      162  :- import_module time.
+      163  
+      164  %-------------------------------------------------------------
+           ----------%
+      182 -                                                              
+      183 -operator("print", op_print).                                  
+      184 -operator("env", op_env).                                      
+      185 -operator("+", op_add).                                        
+      186 -operator("-", op_sub).                                        
+      187 -operator("*", op_mul).                                        
+      188 -operator(">", op_gt).                                         
+      189 -operator("<", op_lt).                                         
+      190 -operator(">=", op_gte).                                       
+      191 -operator("<=", op_lte).                                       
+      192 -operator("@", op_get).                                        
+      193 -operator("#", op_length).                                     
+      194 -operator("=", op_eq).                                         
+      195 -operator("?", op_ite).                                        
+      196 -operator(".", op_nil).                                        
+      197 -operator(",", op_cons).                                       
+      198 -operator("fst", op_fst).                                      
+      199 -operator("snd", op_snd).                                      
+      200 -operator("write", op_write).                                  
+      201 -operator("fwrite", op_fwrite).                                
+      202 -operator("$", op_empty).                                      
+      203 -operator("keys", op_keys).                                    
+      204 -operator(":", op_store).                                      
+      205 -operator("in", op_in).                                        
+      206 -operator("delete", op_delete).                                
+      207 -operator("isInt", op_is_int).                                 
+      208 -operator("isString", op_is_string).                           
+      209 -operator("isArray", op_is_array).                             
+      210 -operator("isMap", op_is_map).                                 
+      211 -operator("isNil", op_is_nil).                                 
+      212 -operator("isCons", op_is_cons).                               
+      213 -operator("isIdent", op_is_ident).                             
+      214 -operator("isBinder", op_is_binder).                           
+      215 -operator("isFunc", op_is_func).                               
+      216 -operator("isGen", op_is_gen).                                 
+      217 -operator("isQuote", op_is_quote).                             
+      218 -operator("isApply", op_is_apply).                             
+      219 -operator("isValue", op_is_value).                             
+      220 -operator("unwrap", op_unwrap).                                
+      221 -operator("intern", op_intern).                                
+      222 -operator("idToString", op_id_to_string).                      
+      223 -operator("idToIdent", op_id_to_ident).                        
+      224 -operator("idToBinder", op_id_to_binder).                      
+      225 -operator("isOperator", op_is_operator).                       
+      226 -operator("arity", op_arity).                                  
+      227 -operator("stack", op_stack).                                  
+      228 -operator("import", op_import).                                
+      229 -operator("time", op_time).                                    
+      230 -operator("restore", op_restore).                              
+      231 -operator("close", op_close).                                  
+      232 -operator("closureEnv", op_closure_env).                       
+      233 -operator("closureBody", op_closure_body).                     
+      234 -operator("isClosure", op_is_closure).                         
+      235 -operator("emit", op_emit).                                    
+      236 -operator("here", op_here).                                    
+      237 -                                                              
+      165 +% Re-exports from operator_table                              
+      166  %-------------------------------------------------------------
+           ----------%
+      239 -% Operator arity (number of values popped from stack)         
+      240 -%-------------------------------------------------------------
+          -----------%                                                   
+      167  
+      242 -:- func operator_arity(operator) = int.                       
+      168 +operator(Name, Op) :- operator_table.operator(Name, Op).      
+      169 +operator_to_int(Op) = operator_table.operator_to_int(Op).     
+      170 +int_to_operator(Int, Op) :- operator_table.int_to_operator(Int
+          +, Op).                                                        
+      171 +num_operators = operator_table.num_operators.                 
+      172 +init_operators(!ST, OpTable) :- operator_table.init_operators(
+          +!ST, OpTable).                                                
+      173  
+      244 -operator_arity(op_print) = 1.                                 
+      245 -operator_arity(op_env) = 0.                                   
+      246 -operator_arity(op_add) = 2.                                   
+      247 -operator_arity(op_sub) = 2.                                   
+      248 -operator_arity(op_mul) = 2.                                   
+      249 -operator_arity(op_gt) = 2.                                    
+      250 -operator_arity(op_lt) = 2.                                    
+      251 -operator_arity(op_gte) = 2.                                   
+      252 -operator_arity(op_lte) = 2.                                   
+      253 -operator_arity(op_get) = 2.                                   
+      254 -operator_arity(op_length) = 1.                                
+      255 -operator_arity(op_eq) = 2.                                    
+      256 -operator_arity(op_ite) = 3.                                   
+      257 -operator_arity(op_nil) = 0.                                   
+      258 -operator_arity(op_cons) = 2.                                  
+      259 -operator_arity(op_fst) = 1.                                   
+      260 -operator_arity(op_snd) = 1.                                   
+      261 -operator_arity(op_write) = 1.                                 
+      262 -operator_arity(op_fwrite) = 2.                                
+      263 -operator_arity(op_empty) = 0.                                 
+      264 -operator_arity(op_keys) = 1.                                  
+      265 -operator_arity(op_store) = 3.                                 
+      266 -operator_arity(op_in) = 2.                                    
+      267 -operator_arity(op_delete) = 2.                                
+      268 -operator_arity(op_is_int) = 1.                                
+      269 -operator_arity(op_is_string) = 1.                             
+      270 -operator_arity(op_is_array) = 1.                              
+      271 -operator_arity(op_is_map) = 1.                                
+      272 -operator_arity(op_is_nil) = 1.                                
+      273 -operator_arity(op_is_cons) = 1.                               
+      274 -operator_arity(op_is_ident) = 1.                              
+      275 -operator_arity(op_is_binder) = 1.                             
+      276 -operator_arity(op_is_func) = 1.                               
+      277 -operator_arity(op_is_gen) = 1.                                
+      278 -operator_arity(op_is_quote) = 1.                              
+      279 -operator_arity(op_is_apply) = 1.                              
+      280 -operator_arity(op_is_value) = 1.                              
+      281 -operator_arity(op_unwrap) = 1.                                
+      282 -operator_arity(op_intern) = 1.                                
+      283 -operator_arity(op_id_to_string) = 1.                          
+      284 -operator_arity(op_id_to_ident) = 1.                           
+      285 -operator_arity(op_id_to_binder) = 1.                          
+      286 -operator_arity(op_is_operator) = 1.                           
+      287 -operator_arity(op_arity) = 1.                                 
+      288 -operator_arity(op_stack) = 0.                                 
+      289 -operator_arity(op_import) = 1.                                
+      290 -operator_arity(op_time) = 0.                                  
+      291 -operator_arity(op_restore) = 1.                               
+      292 -operator_arity(op_close) = 2.                                 
+      293 -operator_arity(op_closure_env) = 1.                           
+      294 -operator_arity(op_closure_body) = 1.                          
+      295 -operator_arity(op_is_closure) = 1.                            
+      296 -operator_arity(op_emit) = 1.                                  
+      297 -operator_arity(op_here) = 0.                                  
+      298 -                                                              
+      174  %-------------------------------------------------------------
+           ----------%
+      300 -% Operator to/from integer conversion for bytecode            
+      301 -% NOTE: These numbers must be kept in sync with lib/bytecode.f
+          -roth                                                          
+      175 +% Re-exports from value_format                                
+      176  %-------------------------------------------------------------
+           ----------%
+      177  
+      304 -num_operators = 54.                                           
+      178 +value_to_string(ST, V) = value_format.value_to_string(ST, V). 
+      179  
+      306 -operator_to_int(op_print) = 0.                                
+      307 -operator_to_int(op_env) = 1.                                  
+      308 -operator_to_int(op_add) = 2.                                  
+      309 -operator_to_int(op_sub) = 3.                                  
+      310 -operator_to_int(op_mul) = 4.                                  
+      311 -operator_to_int(op_gt) = 5.                                   
+      312 -operator_to_int(op_lt) = 6.                                   
+      313 -operator_to_int(op_gte) = 7.                                  
+      314 -operator_to_int(op_lte) = 8.                                  
+      315 -operator_to_int(op_get) = 9.                                  
+      316 -operator_to_int(op_length) = 10.                              
+      317 -operator_to_int(op_eq) = 11.                                  
+      318 -operator_to_int(op_ite) = 12.                                 
+      319 -operator_to_int(op_nil) = 13.                                 
+      320 -operator_to_int(op_cons) = 14.                                
+      321 -operator_to_int(op_fst) = 15.                                 
+      322 -operator_to_int(op_snd) = 16.                                 
+      323 -operator_to_int(op_write) = 17.                               
+      324 -operator_to_int(op_fwrite) = 18.                              
+      325 -operator_to_int(op_empty) = 19.                               
+      326 -operator_to_int(op_keys) = 20.                                
+      327 -operator_to_int(op_store) = 21.                               
+      328 -operator_to_int(op_in) = 22.                                  
+      329 -operator_to_int(op_delete) = 23.                              
+      330 -operator_to_int(op_is_int) = 24.                              
+      331 -operator_to_int(op_is_string) = 25.                           
+      332 -operator_to_int(op_is_array) = 26.                            
+      333 -operator_to_int(op_is_map) = 27.                              
+      334 -operator_to_int(op_is_nil) = 28.                              
+      335 -operator_to_int(op_is_cons) = 29.                             
+      336 -operator_to_int(op_is_ident) = 30.                            
+      337 -operator_to_int(op_is_binder) = 31.                           
+      338 -operator_to_int(op_is_func) = 32.                             
+      339 -operator_to_int(op_is_gen) = 33.                              
+      340 -operator_to_int(op_is_quote) = 34.                            
+      341 -operator_to_int(op_is_apply) = 35.                            
+      342 -operator_to_int(op_is_value) = 36.                            
+      343 -operator_to_int(op_unwrap) = 37.                              
+      344 -operator_to_int(op_intern) = 38.                              
+      345 -operator_to_int(op_id_to_string) = 39.                        
+      346 -operator_to_int(op_id_to_ident) = 40.                         
+      347 -operator_to_int(op_id_to_binder) = 41.                        
+      348 -operator_to_int(op_is_operator) = 42.                         
+      349 -operator_to_int(op_arity) = 43.                               
+      350 -operator_to_int(op_stack) = 44.                               
+      351 -operator_to_int(op_import) = 45.                              
+      352 -operator_to_int(op_time) = 46.                                
+      353 -operator_to_int(op_restore) = 47.                             
+      354 -operator_to_int(op_close) = 48.                               
+      355 -operator_to_int(op_closure_env) = 49.                         
+      356 -operator_to_int(op_closure_body) = 50.                        
+      357 -operator_to_int(op_is_closure) = 51.                          
+      358 -operator_to_int(op_emit) = 52.                                
+      359 -operator_to_int(op_here) = 53.                                
+      360 -                                                              
+      361 -int_to_operator(0, op_print).                                 
+      362 -int_to_operator(1, op_env).                                   
+      363 -int_to_operator(2, op_add).                                   
+      364 -int_to_operator(3, op_sub).                                   
+      365 -int_to_operator(4, op_mul).                                   
+      366 -int_to_operator(5, op_gt).                                    
+      367 -int_to_operator(6, op_lt).                                    
+      368 -int_to_operator(7, op_gte).                                   
+      369 -int_to_operator(8, op_lte).                                   
+      370 -int_to_operator(9, op_get).                                   
+      371 -int_to_operator(10, op_length).                               
+      372 -int_to_operator(11, op_eq).                                   
+      373 -int_to_operator(12, op_ite).                                  
+      374 -int_to_operator(13, op_nil).                                  
+      375 -int_to_operator(14, op_cons).                                 
+      376 -int_to_operator(15, op_fst).                                  
+      377 -int_to_operator(16, op_snd).                                  
+      378 -int_to_operator(17, op_write).                                
+      379 -int_to_operator(18, op_fwrite).                               
+      380 -int_to_operator(19, op_empty).                                
+      381 -int_to_operator(20, op_keys).                                 
+      382 -int_to_operator(21, op_store).                                
+      383 -int_to_operator(22, op_in).                                   
+      384 -int_to_operator(23, op_delete).                               
+      385 -int_to_operator(24, op_is_int).                               
+      386 -int_to_operator(25, op_is_string).                            
+      387 -int_to_operator(26, op_is_array).                             
+      388 -int_to_operator(27, op_is_map).                               
+      389 -int_to_operator(28, op_is_nil).                               
+      390 -int_to_operator(29, op_is_cons).                              
+      391 -int_to_operator(30, op_is_ident).                             
+      392 -int_to_operator(31, op_is_binder).                            
+      393 -int_to_operator(32, op_is_func).                              
+      394 -int_to_operator(33, op_is_gen).                               
+      395 -int_to_operator(34, op_is_quote).                             
+      396 -int_to_operator(35, op_is_apply).                             
+      397 -int_to_operator(36, op_is_value).                             
+      398 -int_to_operator(37, op_unwrap).                               
+      399 -int_to_operator(38, op_intern).                               
+      400 -int_to_operator(39, op_id_to_string).                         
+      401 -int_to_operator(40, op_id_to_ident).                          
+      402 -int_to_operator(41, op_id_to_binder).                         
+      403 -int_to_operator(42, op_is_operator).                          
+      404 -int_to_operator(43, op_arity).                                
+      405 -int_to_operator(44, op_stack).                                
+      406 -int_to_operator(45, op_import).                               
+      407 -int_to_operator(46, op_time).                                 
+      408 -int_to_operator(47, op_restore).                              
+      409 -int_to_operator(48, op_close).                                
+      410 -int_to_operator(49, op_closure_env).                          
+      411 -int_to_operator(50, op_closure_body).                         
+      412 -int_to_operator(51, op_is_closure).                           
+      413 -int_to_operator(52, op_emit).                                 
+      414 -int_to_operator(53, op_here).                                 
+      415 -                                                              
+      180  %-------------------------------------------------------------
+           ----------%
+      417 -% init_operators: intern all operator names and build the oper
+          -ator table                                                    
+      418 -%-------------------------------------------------------------
+          -----------%                                                   
+      419 -                                                              
+      420 -init_operators(!ST, OpTable) :-                               
+      421 -    OpNames = [                                               
+      422 -        "print", "env",                                       
+      423 -        "+", "-", "*",                                        
+      424 -        ">", "<", ">=", "<=",                                 
+      425 -        "@", "#", "=", "?",                                   
+      426 -        ".", ",", "fst", "snd",                               
+      427 -        "write", "fwrite",                                    
+      428 -        "$", "keys", ":", "in", "delete",                     
+      429 -        "isInt", "isString", "isArray", "isMap", "isNil", "isC
+          -ons",                                                         
+      430 -        "isIdent", "isBinder", "isFunc", "isGen", "isQuote", "
+          -isApply",                                                     
+      431 -        "isValue", "unwrap", "intern",                        
+      432 -        "idToString", "idToIdent", "idToBinder", "isOperator",
+          - "arity",                                                     
+      433 -        "stack", "import", "time", "restore",                 
+      434 -        "close", "closureEnv", "closureBody", "isClosure",    
+      435 -        "emit", "here"                                        
+      436 -    ],                                                        
+      437 -    list.foldl2(intern_operator, OpNames, map.init, OpTable, !
+          -ST).                                                          
+      438 -                                                              
+      439 -:- pred intern_operator(string::in, operator_table::in, operat
+          -or_table::out,                                                
+      440 -    string_table::in, string_table::out) is det.              
+      441 -                                                              
+      442 -intern_operator(Name, !OpTable, !ST) :-                       
+      443 -    ( if operator(Name, Op) then                              
+      444 -        intern_string(Name, Id, !ST),                         
+      445 -        Arity = operator_arity(Op),                           
+      446 -        map.det_insert(Id, operator_info(Op, Arity), !OpTable)
+      447 -    else                                                      
+      448 -        unexpected($pred, "unknown operator: " ++ Name)       
+      449 -    ).                                                        
+      450 -                                                              
+      451 -%-------------------------------------------------------------
+          -----------%                                                   
+      181  % eval_operator: dispatch to operator implementation
+      182  %-------------------------------------------------------------
+           ----------%
+      183  
+     ...
+      359      io.write_string(value_to_string(ST, V), !IO).
+      360  
+      361  %-------------------------------------------------------------
+           ----------%
+      633 -% value_to_string: convert a value to its string representatio
+          -n                                                             
+      634 -%-------------------------------------------------------------
+          -----------%                                                   
+      635 -                                                              
+      636 -value_to_string(_, intval(I)) = int_to_string(I).             
+      637 -value_to_string(ST, stringval(StrId)) = lookup_string(ST, StrI
+          -d).                                                           
+      638 -value_to_string(ST, arrayval(A)) = String :-                  
+      639 -    array.to_list(A, List),                                   
+      640 -    Strings = list.map(value_to_string(ST), List),            
+      641 -    String = string.append_list(Strings).                     
+      642 -value_to_string(_, mapval(M)) = string.format("<map:%d>", [i(m
+          -ap.count(M))]).                                               
+      643 -value_to_string(ST, termval(T)) = term_to_string(ST, T).      
+      644 -value_to_string(_, nilval) = ".".                             
+      645 -value_to_string(ST, consval(H, T)) =                          
+      646 -    "(" ++ value_to_string(ST, H) ++ "," ++ value_to_string(ST
+          -, T) ++ ")".                                                  
+      647 -value_to_string(ST, closureval(_, Body)) =                    
+      648 -    "<closure:" ++ terms_to_string(ST, Body) ++ ">".          
+      649 -value_to_string(_, bytecodeval(_, Addr)) =                    
+      650 -    "<bytecode:" ++ int_to_string(Addr) ++ ">".               
+      651 -                                                              
+      652 -:- func term_to_string(string_table, term) = string.          
+      653 -                                                              
+      654 -term_to_string(ST, identifier(NameId)) = lookup_string(ST, Nam
+          -eId).                                                         
+      655 -term_to_string(ST, binder(NameId)) = "/" ++ lookup_string(ST, 
+          -NameId).                                                      
+      656 -term_to_string(ST, function(Terms)) = "{ " ++ terms_to_string(
+          -ST, Terms) ++ "}".                                            
+      657 -term_to_string(ST, generator(Terms)) = "[ " ++ terms_to_string
+          -(ST, Terms) ++ "]".                                           
+      658 -term_to_string(ST, quoted(T)) = "'" ++ term_to_string(ST, T). 
+      659 -term_to_string(ST, value(V)) = value_to_string(ST, V).        
+      660 -term_to_string(_, apply_term) = "!".                          
+      661 -                                                              
+      662 -:- func terms_to_string(string_table, list(term)) = string.   
+      663 -                                                              
+      664 -terms_to_string(_, []) = "".                                  
+      665 -terms_to_string(ST, [T | Ts]) =                               
+      666 -    term_to_string(ST, T) ++ " " ++ terms_to_string(ST, Ts).  
+      667 -                                                              
+      668 -%-------------------------------------------------------------
+          -----------%                                                   
+      362  % env: ( -- map ) Push the current environment as a map
+      363  %-------------------------------------------------------------
+           ----------%
+      364  
+     ...
+       687  
+       688  operator_write(ST, !Array, !Ptr, !IO) :-
+       689      datastack.pop("write", V, !Array, !Ptr),
+       997 -    io.write_string(value_to_write_string(ST, V), !IO).      
+       690 +    io.write_string(value_format.value_to_write_string(ST, V)
+           +, !IO).                                                      
+       691  
+       692  %------------------------------------------------------------
+            -----------%
+      1000 -% value_to_write_string: convert a value to executable string
+           - form                                                        
+      1001 -%------------------------------------------------------------
+           ------------%                                                 
+      1002 -                                                             
+      1003 -:- func value_to_write_string(string_table, value) = string. 
+      1004 -                                                             
+      1005 -value_to_write_string(_, intval(I)) = int_to_string(I).      
+      1006 -value_to_write_string(ST, stringval(StrId)) =                
+      1007 -    "\"" ++ escape_string(lookup_string(ST, StrId)) ++ "\"". 
+      1008 -value_to_write_string(ST, arrayval(A)) = "[ " ++ ArrayElems +
+           -+ "]" :-                                                     
+      1009 -    array.to_list(A, List),                                  
+      1010 -    ElemStrings = list.map(                                  
+      1011 -        (func(V) = value_to_write_string(ST, V) ++ " "),     
+      1012 -        List),                                               
+      1013 -    ArrayElems = string.append_list(ElemStrings).            
+      1014 -value_to_write_string(ST, mapval(M)) = Result :-             
+      1015 -    map.foldl(map_entry_to_string(ST), M, "$", Result).      
+      1016 -value_to_write_string(ST, termval(T)) = "'" ++ term_to_write_
+           -string(ST, T).                                               
+      1017 -value_to_write_string(_, nilval) = ".".                      
+      1018 -value_to_write_string(ST, consval(H, T)) =                   
+      1019 -    value_to_write_string(ST, T) ++ " " ++ value_to_write_str
+           -ing(ST, H) ++ " ,".                                          
+      1020 -value_to_write_string(ST, closureval(_, Body)) =             
+      1021 -    "<closure:{ " ++ terms_to_write_string(ST, Body) ++ "}>".
+      1022 -value_to_write_string(_, bytecodeval(_, Addr)) =             
+      1023 -    "<bytecode:" ++ int_to_string(Addr) ++ ">".              
+      1024 -                                                             
+      1025 -:- pred map_entry_to_string(string_table::in, string_id::in, 
+           -value::in,                                                   
+      1026 -    string::in, string::out) is det.                         
+      1027 -                                                             
+      1028 -map_entry_to_string(ST, NameId, V, !Acc) :-                  
+      1029 -    !:Acc = !.Acc ++ " " ++ value_to_write_string(ST, V) ++ "
+           - '" ++                                                       
+      1030 -        lookup_string(ST, NameId) ++ " :".                   
+      1031 -                                                             
+      1032 -:- func term_to_write_string(string_table, term) = string.   
+      1033 -                                                             
+      1034 -term_to_write_string(ST, identifier(NameId)) = lookup_string(
+           -ST, NameId).                                                 
+      1035 -term_to_write_string(ST, binder(NameId)) = "/" ++ lookup_stri
+           -ng(ST, NameId).                                              
+      1036 -term_to_write_string(ST, function(Terms)) = "{ " ++ terms_to_
+           -write_string(ST, Terms) ++ "}".                              
+      1037 -term_to_write_string(ST, generator(Terms)) = "[ " ++ terms_to
+           -_write_string(ST, Terms) ++ "]".                             
+      1038 -term_to_write_string(ST, quoted(T)) = "'" ++ term_to_write_st
+           -ring(ST, T).                                                 
+      1039 -term_to_write_string(ST, value(V)) = value_to_write_string(ST
+           -, V).                                                        
+      1040 -term_to_write_string(_, apply_term) = "!".                   
+      1041 -                                                             
+      1042 -:- func terms_to_write_string(string_table, list(term)) = str
+           -ing.                                                         
+      1043 -                                                             
+      1044 -terms_to_write_string(_, []) = "".                           
+      1045 -terms_to_write_string(ST, [T | Ts]) =                        
+      1046 -    term_to_write_string(ST, T) ++ " " ++ terms_to_write_stri
+           -ng(ST, Ts).                                                  
+      1047 -                                                             
+      1048 -%------------------------------------------------------------
+           ------------%                                                 
+       693  % fwrite: ( value file -- ) Write value to file in executable
+             form
+       694  %------------------------------------------------------------
+            -----------%
+       695  
+     ...
+       697      datastack.pop("fwrite", FileVal, !Array, !Ptr),
+       698      datastack.pop("fwrite", V, !Array, !Ptr),
+       699      Filename = value_to_string(ST, FileVal),
+      1056 -    Content = value_to_write_string(ST, V),                  
+       700 +    Content = value_format.value_to_write_string(ST, V),     
+       701      io.open_output(Filename, Result, !IO),
+       702      (
+       703          Result = ok(Stream),
+
+● Read(src/types.m)
+  ⎿  Read 249 lines
+
+● I see there's an escape_string function in types.m as well. Let me update value_format.m to use the one from types.m instead of having a duplicate:
+
+● Update(src/value_format.m)
+  ⎿  Removed 5 lines                                                     
+      25      %
+      26  :- func term_to_string(string_table, term) = string.
+      27  
+      28 -    % escape_string(S) = Escaped:                              
+      29 -    % Escape special characters in a string for output.        
+      30 -    %                                                          
+      31 -:- func escape_string(string) = string.                        
+      32 -                                                               
+      28  %--------------------------------------------------------------
+          ---------%
+      29  
+      30  :- implementation.
+
+● Update(src/value_format.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      75  
+      76  value_to_write_string(_, intval(I)) = int_to_string(I).
+      77  value_to_write_string(ST, stringval(StrId)) =
+      78 -    "\"" ++ escape_string(lookup_string(ST, StrId)) ++ "\"".   
+      78 +    "\"" ++ types.escape_string(lookup_string(ST, StrId)) ++ "\
+         +"".                                                            
+      79  value_to_write_string(ST, arrayval(A)) = "[ " ++ ArrayElems ++ 
+          "]" :-
+      80      array.to_list(A, List),
+      81      ElemStrings = list.map(
+
+● Update(src/value_format.m)
+  ⎿  Error editing file
+
+● Read(src/value_format.m)
+  ⎿  Read 54 lines
+
+● Update(src/value_format.m)
+  ⎿  Removed 26 lines                                                    
+      117      term_to_write_string(ST, T) ++ " " ++ terms_to_write_strin
+           g(ST, Ts).
+      118  
+      119  %-------------------------------------------------------------
+           ----------%
+      120 -% escape_string: escape special characters for string output  
+      121 -%-------------------------------------------------------------
+          -----------%                                                   
+      122 -                                                              
+      123 -escape_string(S) = Escaped :-                                 
+      124 -    string.to_char_list(S, Chars),                            
+      125 -    EscapedChars = list.foldr(escape_char, Chars, []),        
+      126 -    string.from_char_list(EscapedChars, Escaped).             
+      127 -                                                              
+      128 -:- func escape_char(char, list(char)) = list(char).           
+      129 -                                                              
+      130 -escape_char(C, Acc) = Result :-                               
+      131 -    ( if C = ('\\') then                                      
+      132 -        Result = ['\\', '\\' | Acc]                           
+      133 -    else if C = ('"') then                                    
+      134 -        Result = ['\\', '"' | Acc]                            
+      135 -    else if C = ('\n') then                                   
+      136 -        Result = ['\\', 'n' | Acc]                            
+      137 -    else if C = ('\t') then                                   
+      138 -        Result = ['\\', 't' | Acc]                            
+      139 -    else if C = ('\r') then                                   
+      140 -        Result = ['\\', 'r' | Acc]                            
+      141 -    else                                                      
+      142 -        Result = [C | Acc]                                    
+      143 -    ).                                                        
+      144 -                                                              
+      145 -%-------------------------------------------------------------
+          -----------%                                                   
+      120  :- end_module value_format.
+      121  %-------------------------------------------------------------
+           ----------%
+
+● Now let me try building to see if there are any issues:
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/operators.int3
+     Making Mercury/int3s/operator_table.int3
+     Making Mercury/int3s/value_format.int3
+     Making Mercury/ints/vm.int
+     Making Mercury/ints/value_format.int
+     Making Mercury/ints/operators.int
+     Making Mercury/ints/operator_table.int
+     Making Mercury/ints/froth.int
+     … +15 lines (ctrl+o to see all)
+
+● There's a string concatenation issue in operator_table.m - it needs the string module imported:
+
+● Update(src/operator_table.m)
+  ⎿  Added 1 line                                                        
+      49  :- import_module list.
+      50  :- import_module map.
+      51  :- import_module require.
+      52 +:- import_module string.                                       
+      53  
+      54  %--------------------------------------------------------------
+          ---------%
+      55  % Operator name to enum mapping
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/operator_table.int3
+     Making Mercury/ints/operator_table.int
+     Making Mercury/cs/operator_table.c
+     Making Mercury/cs/operators.c
+     operators.m:017: In module `operators':
+     operators.m:017:   warning: module `operator_table' is imported in the
+     operators.m:017:   interface, but it is not used in the interface.
+     operators.m:027: In module `operators':
+     … +45 lines (ctrl+o to see all)
+
+● I need to fix the module structure. The re-export approach isn't working well in Mercury. Let me simplify it:
+
+● Update(src/operators.m)
+  ⎿  Removed 15 lines                                                    
+      12  
+      13  %--------------------------------------------------------------
+          ---------%
+      14  
+      15 -    % Re-export operator_table predicates for convenience.     
+      16 -    %                                                          
+      17 -:- import_module operator_table.                               
+      18 -:- pred operator(string::in, operator::out) is semidet.        
+      19 -:- func operator_to_int(operator) = int.                       
+      20 -:- pred int_to_operator(int::in, operator::out) is semidet.    
+      21 -:- func num_operators = int.                                   
+      22 -:- pred init_operators(string_table::in, string_table::out,    
+      23 -    operator_table::out) is det.                               
+      24 -                                                               
+      25 -    % Re-export value_format functions for convenience.        
+      26 -    %                                                          
+      27 -:- import_module value_format.                                 
+      28 -:- func value_to_string(string_table, value) = string.         
+      29 -                                                               
+      15      % eval_operator(OpTable, ST, Op, Env, !StackArray, !StackPt
+          r, !IO):
+      16      % Execute an operator. OpTable and ST are read-only.
+      17      % Env is read-only (for the env operator).
+
+● Update(src/operators.m)
+  ⎿  Added 2 lines, removed 16 lines                                     
+      141  :- import_module int.
+      142  :- import_module list.
+      143  :- import_module map.
+      144 +:- import_module operator_table.                              
+      145  :- import_module pair.
+      146  :- import_module require.
+      147  :- import_module string.
+      148  :- import_module time.
+      149 +:- import_module value_format.                                
+      150  
+      151  %-------------------------------------------------------------
+           ----------%
+      150 -% Re-exports from operator_table                              
+      151 -%-------------------------------------------------------------
+          -----------%                                                   
+      152 -                                                              
+      153 -operator(Name, Op) :- operator_table.operator(Name, Op).      
+      154 -operator_to_int(Op) = operator_table.operator_to_int(Op).     
+      155 -int_to_operator(Int, Op) :- operator_table.int_to_operator(Int
+          -, Op).                                                        
+      156 -num_operators = operator_table.num_operators.                 
+      157 -init_operators(!ST, OpTable) :- operator_table.init_operators(
+          -!ST, OpTable).                                                
+      158 -                                                              
+      159 -%-------------------------------------------------------------
+          -----------%                                                   
+      160 -% Re-exports from value_format                                
+      161 -%-------------------------------------------------------------
+          -----------%                                                   
+      162 -                                                              
+      163 -value_to_string(ST, V) = value_format.value_to_string(ST, V). 
+      164 -                                                              
+      165 -%-------------------------------------------------------------
+          -----------%                                                   
+      152  % eval_operator: dispatch to operator implementation
+      153  %-------------------------------------------------------------
+           ----------%
+      154  
+
+● Now let me check and update the calls to use properly qualified module names:
+
+● Search(pattern: "value_to_string", path: "src/operators.m", output_mode:
+        "content")
+  ⎿  Found 2 lines (ctrl+o to expand)
+
+● Update(src/operators.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      327  
+      328  operator_print(ST, !Array, !Ptr, !IO) :-
+      329      datastack.pop("print", V, !Array, !Ptr),
+      330 -    io.write_string(value_to_string(ST, V), !IO).             
+      330 +    io.write_string(value_format.value_to_string(ST, V), !IO).
+      331  
+      332  %-------------------------------------------------------------
+           ----------%
+      333  % env: ( -- map ) Push the current environment as a map
+
+● Update(src/operators.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      667  operator_fwrite(ST, !Array, !Ptr, !IO) :-
+      668      datastack.pop("fwrite", FileVal, !Array, !Ptr),
+      669      datastack.pop("fwrite", V, !Array, !Ptr),
+      670 -    Filename = value_to_string(ST, FileVal),                  
+      670 +    Filename = value_format.value_to_string(ST, FileVal),     
+      671      Content = value_format.value_to_write_string(ST, V),
+      672      io.open_output(Filename, Result, !IO),
+      673      (
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/operators.int3
+     Making Mercury/ints/operators.int
+     Making Mercury/cs/eval.c
+     eval.m:243: In clause for predicate `eval_import'/16:
+     eval.m:243:   error: undefined symbol `operators.value_to_string'/2.
+     eval.m:243:   (Did you mean `char_to_string', `float_to_string',
+     eval.m:243:   `int16_to_string', `int32_to_string', `int64_to_string',
+     eval.m:243:   `int8_to_string', `int_to_string', `op_id_to_string',
+     … +3 lines (ctrl+o to see all)
+
+● Now I need to update eval.m to use value_format instead of operators:
+
+● Read(src/eval.m)
+  ⎿  Read 10 lines
+
+● Update(src/eval.m)
+  ⎿  Added 1 line                                                        
+      51  :- import_module operators.
+      52  :- import_module parser.
+      53  :- import_module string.
+      54 +:- import_module value_format.                                 
+      55  :- import_module vm.
+      56  
+      57  %--------------------------------------------------------------
+          ---------%
+
+● Update(src/eval.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      241  
+      242  eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !B
+           CSz, !IO) :-
+      243      datastack.pop("import", V, !Array, !Ptr),
+      244 -    RelFilename = operators.value_to_string(!.ST, V),         
+      244 +    RelFilename = value_format.value_to_string(!.ST, V),      
+      245      % Resolve relative paths using BaseDir
+      246      ( if dir.path_name_is_absolute(RelFilename) then
+      247          Filename = RelFilename
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/eval.int3
+     Making Mercury/ints/eval.int
+     Making Mercury/cs/eval.c
+     Making Mercury/cs/froth.c
+     froth.m:117: In clause for predicate `init_tables'/2:
+     froth.m:117:   error: call to undefined predicate
+     `operators.init_operators'/3.
+     ** Error making `Mercury/cs/froth.c'.
+     make: *** [Makefile:13: froth] Error 1
+
+● Now I need to update froth.m to use operator_table:
+
+● Search(pattern: "operators\.(init_operators|operator|operator_to_int|int_to_op
+        erator|num_operators)", path: "src/froth.m", output_mode: "content")
+  ⎿  Found 1 line (ctrl+o to expand)
+
+● Read(src/froth.m)
+  ⎿  Read 50 lines
+
+● Update(src/froth.m)
+  ⎿  Added 1 line                                                        
+      25  :- import_module lexer.
+      26  :- import_module list.
+      27  :- import_module map.
+      28 +:- import_module operator_table.                               
+      29  :- import_module operators.
+      30  :- import_module parser.
+      31  :- import_module string.
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      115  :- pred init_tables(string_table::out, operator_table::out) is
+            det.
+      116  
+      117  init_tables(ST, OpTable) :-
+      118 -    operators.init_operators(empty_string_table, ST, OpTable).
+      118 +    operator_table.init_operators(empty_string_table, ST, OpTa
+          +ble).                                                         
+      119  
+      120  %-------------------------------------------------------------
+           ----------%
+      121  % Standard library loading
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/froth.int3
+     Making Mercury/ints/froth.int
+     Making Mercury/cs/froth.c
+     Making Mercury/cs/operators.c
+     Making Mercury/cs/value_format.c
+     Making Mercury/cs/vm.c
+     vm.m:117: In clause for predicate `execute'/18:
+     vm.m:117:   error: call to undefined predicate
+     `operators.int_to_operator'/2.
+     … +2 lines (ctrl+o to see all)
+
+● Now I need to update vm.m:
+
+● Search(pattern: "operators\.(int_to_operator|operator_to_int|operator_arity)",
+         path: "src/vm.m", output_mode: "content")
+  ⎿  Found 1 line (ctrl+o to expand)
+
+● Read(src/vm.m)
+  ⎿  Read 50 lines
+
+● Search(pattern: "^:- import_module", path: "src/vm.m", output_mode: "content")
+  ⎿  Found 8 lines (ctrl+o to expand)
+
+● Update(src/vm.m)
+  ⎿  Added 1 line                                                        
+      66  :- import_module datastack.
+      67  :- import_module exception.
+      68  :- import_module int.
+      69 +:- import_module operator_table.                               
+      70  :- import_module operators.
+      71  
+      72  %--------------------------------------------------------------
+          ---------%
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      115      else if Opcode = oc_op then
+      116          % op n: execute operator n
+      117          array.lookup(BC, IP + 1, OpNum),
+      118 -        ( if operators.int_to_operator(OpNum, Op) then        
+      118 +        ( if operator_table.int_to_operator(OpNum, Op) then   
+      119              operators.eval_operator(OpTable, ST, Op, Env, !Sta
+           ck, !SP, !IO),
+      120              run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !
+           Stack, !SP, FP, GenStack, !IO)
+      121          else
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth   
+     Making Mercury/int3s/vm.int3
+     Making Mercury/ints/vm.int
+     … +9 lines (ctrl+o to expand)
+
+● The build succeeded. Now let me run the tests:
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  PASS: add                     
+     PASS: analysis
+     PASS: apply_op
+     … +54 lines (ctrl+o to expand)
+
+● All 54 tests pass. Let me update the todo list and summarize the results:
+
+● Let me check the new module sizes:
+
+● Bash(wc -l /home/mark/Documents/projects/froth/src/*.m | sort -n)
+  ⎿      71 /home/mark/Documents/projects/froth/src/bytecode.m    
+        121 /home/mark/Documents/projects/froth/src/value_format.m
+        150 /home/mark/Documents/projects/froth/src/lexer_test.m
+     … +13 lines (ctrl+o to expand)
+
+● The refactoring is complete. Here's the summary:
+
+  Module Split Results
+
+  Before: operators.m was 1,407 lines
+
+  After:
+  | Module           | Lines | Purpose                                            |
+  |------------------|-------|----------------------------------------------------|
+  | operators.m      | 1,022 | Operator implementations                           |
+  | operator_table.m | 325   | Metadata (name mappings, arity, bytecode encoding) |
+  | value_format.m   | 121   | String conversion (display and executable forms)   |
+
+  Updated Module Health
+
+  | Module           | Lines | Status                                     |
+  |------------------|-------|--------------------------------------------|
+  | bytecode.m       | 71    | ✓ Focused                                  |
+  | value_format.m   | 121   | ✓ NEW - String formatting                  |
+  | datastack.m      | 190   | ✓ Focused                                  |
+  | vm.m             | 230   | ✓ Good                                     |
+  | parser.m         | 234   | ✓ Good                                     |
+  | types.m          | 248   | ✓ Core types                               |
+  | operator_table.m | 325   | ✓ NEW - Operator metadata                  |
+  | eval.m           | 369   | ✓ Good                                     |
+  | lexer.m          | 595   | ✓ Good                                     |
+  | froth.m          | 607   | Fair                                       |
+  | operators.m      | 1,022 | ✓ Reduced - Now focused on implementations |
+
+  Benefits
+
+  1. Better separation of concerns - Operator metadata is now isolated from implementations
+  2. Reusable formatting - value_format.m can be imported independently
+  3. Easier maintenance - Adding new operators only requires updates to operator_table.m
+  4. Reduced coupling - Modules like eval.m can import just what they need
+
+  All 54 tests pass.
+
+> Should we split up froth.m? Perhaps there ought to be separate modules for
+ option handling and/or the repl? What do you recommend? 
+
+● Let me examine froth.m to understand its structure:
+
+● Read(src/froth.m)
+  ⎿  Read 608 lines
+
+● Looking at froth.m's structure:
+
+  | Section          | Lines   | Description                       |
+  |------------------|---------|-----------------------------------|
+  | Option parsing   | 35-109  | Types and arg parsing (~75 lines) |
+  | Initialization   | 111-220 | stdlib loading (~110 lines)       |
+  | Main/dispatch    | 222-260 | Entry point (~40 lines)           |
+  | Action execution | 262-430 | Batch mode (~170 lines)           |
+  | REPL             | 432-514 | Interactive loop (~80 lines)      |
+  | Help             | 516-535 | Usage text (~20 lines)            |
+  | Error reporting  | 537-603 | Error formatting (~65 lines)      |
+
+  My Recommendation: Don't split
+
+  At 607 lines, froth.m is already within acceptable limits. I'd suggest leaving it as-is for these reasons:
+
+  1. High cohesion - Everything relates to "running the interpreter"
+  2. Tight integration - Batch mode and REPL share state, error handling, and initialization
+  3. Low reuse potential - REPL and option parsing are Froth-specific
+  4. Module overhead - Extraction adds boilerplate without clear benefit
+
+  If you do want to extract something:
+
+  Best candidate: error_report.m (~100 lines)
+  - Consolidate report_lex_error, report_parse_error, token_to_string from froth.m
+  - Merge with similar code in eval.m (throw_lex_error, throw_parse_error)
+  - Benefit: Single place for all error formatting, removes duplication
+
+  Second choice: repl.m (~80 lines)
+  - start_repl, repl_loop, repl_eval
+  - Clean separation but low reuse value
+
+  The operators.m split was worthwhile because it was 1,400+ lines mixing unrelated concerns (metadata, formatting, implementations). froth.m doesn't have that problem - it's a coherent "application shell" module.
+
+  Would you like to proceed with extracting error reporting, or leave froth.m as-is?
+
+> update README 
+
+● Read(README.md)
+  ⎿  Read 241 lines
+
+● Update(README.md)
+  ⎿  Added 6 lines, removed 1 line                                       
+      19  │   ├── lexer.m           # Tokenizer
+      20  │   ├── parser.m          # Parser
+      21  │   ├── eval.m            # Evaluator
+      22 -│   ├── operators.m       # Operator definitions               
+      22 +│   ├── operators.m       # Operator implementations           
+      23 +│   ├── operator_table.m  # Operator metadata (arity, bytecode 
+         +encoding)                                                      
+      24 +│   ├── value_format.m    # Value-to-string conversion         
+      25 +│   ├── vm.m              # Bytecode virtual machine           
+      26 +│   ├── datastack.m       # Stack implementation               
+      27 +│   ├── bytecode.m        # Bytecode storage                   
+      28  │   └── types.m           # Type definitions
+      29  ├── tests/                # Regression tests
+      30  │   ├── *.froth           # Test programs
+
+● Updated the README with the new module structure. Let me verify the build still works:
+
+● Bash(make test 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● Done. Updated the README to list all Mercury source modules:
+
+  - operators.m - Operator implementations (renamed from "definitions")
+  - operator_table.m - NEW: Operator metadata (arity, bytecode encoding)
+  - value_format.m - NEW: Value-to-string conversion
+  - vm.m - NEW: Bytecode virtual machine
+  - datastack.m - NEW: Stack implementation
+  - bytecode.m - NEW: Bytecode storage
+
+  All 54 tests pass.
+
+> Let's review the whole README for consistency with the rest of the 
+project. 
+
+● Read(README.md)
+  ⎿  Read 246 lines
+
+● Bash(ls -la /home/mark/Documents/projects/froth/lib/*.froth)
+  ⎿ -rw------- 1 mark mark 3974 Dec 24 16:52 /home/mark/Documents/projects/
+    froth/lib/analysis.froth
+    -rw------- 1 mark mark 2626 Dec 24 17:03 /home/mark/Documents/projects/
+    … +25 lines (ctrl+o to expand)
+
+
+
+● Bash(ls /home/mark/Documents/projects/froth/*.md)
+  ⎿  /home/mark/Documents/projects/froth/CLAUDE.md        
+     /home/mark/Documents/projects/froth/FROTH_BYTECODE.md
+     /home/mark/Documents/projects/froth/FROTHLIB.md
+     … +3 lines (ctrl+o to expand)
+
+● Bash(ls /home/mark/Documents/projects/froth/tests/lib/ 2>/dev/null || echo "No
+       tests/lib directory")
+  ⎿  a.froth         
+     b.froth
+     core.froth
+     import_lib.froth
+
+● Bash(./bin/froth -n -e '{ 1 2 + } /f f fst' 2>&1)
+  ⎿  Error: Exit code 1
+     Runtime error: type error: expected cons, got closure
+
+● Bash(./bin/froth -n -e '{ 1 2 + } /f f closureEnv # print')
+  ⎿  0
+
+● Bash(./bin/froth -n -e '{ 1 2 + } /f f closureBody print')
+  ⎿  { 1 2 + }
+
+● Found several issues:
+
+  1. Inspecting Closures section is incorrect - Uses fst/snd but closures use closureEnv/closureBody
+  2. Library file list is incomplete - Shows 4 files but there are 14
+  3. Documentation section missing FROTH_BYTECODE.md
+
+  Let me fix these:
+
+● Update(README.md)
+  ⎿  Added 13 lines, removed 3 lines                                     
+      10  froth/
+      11  ├── bin/                  # Compiled binary
+      12  ├── lib/                  # Standard library
+      13 -│   ├── stdlib.froth      # Standard library (auto-loaded)     
+      13 +│   ├── stdlib.froth      # Standard library loader (auto-loade
+         +d)                                                             
+      14 +│   ├── defs.froth        # Definition utilities (def-fn)      
+      15  │   ├── io.froth          # I/O utilities (nl, println, writeln
+          )
+      15 -│   ├── array.froth       # Array utilities (fold, map, filter)
+      16 -│   └── eval.froth        # Meta-interpreter                   
+      16 +│   ├── array.froth       # Array utilities (foldl, map, filter
+         +)                                                              
+      17 +│   ├── list.froth        # Cons list utilities (lfoldl, lrever
+         +se)                                                            
+      18 +│   ├── map.froth         # Map utilities (restrict, transform-
+         +values)                                                        
+      19 +│   ├── data.froth        # Generic data utilities (transform) 
+      20 +│   ├── bool.froth        # Boolean operations (not, and, or)  
+      21 +│   ├── math.froth        # Math utilities (fib)               
+      22 +│   ├── bench.froth       # Benchmarking (bench)               
+      23 +│   ├── eval.froth        # Meta-interpreter                   
+      24 +│   ├── analysis.froth    # Static analysis (free-vars)        
+      25 +│   ├── optimize.froth    # Closure optimization               
+      26 +│   └── bytecode.froth    # Bytecode constants and utilities   
+      27  ├── src/                  # Mercury source
+      28  │   ├── froth.m           # Main entry point, REPL
+      29  │   ├── lexer.m           # Tokenizer
+
+● Update(README.md)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      134  
+      135  ### Inspecting Closures
+      136  
+      137 -Closures are represented as cons pairs of `(environment-map, q
+          -uoted-function)`:                                             
+      137 +Use `closureEnv` and `closureBody` to inspect closures:       
+      138  
+      139  ```
+      140  { 1 2 + } /f
+      141 -f fst # print          ; prints number of bindings in closure'
+          -s environment                                                 
+      142 -f snd print            ; prints: { 1 2 + }                    
+      141 +f closureEnv # print   ; prints number of bindings in closure'
+          +s environment                                                 
+      142 +f closureBody print    ; prints: { 1 2 + }                    
+      143  ```
+      144  
+      145  ### Shell Escaping
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 30 lines
+
+● Update(README.md)
+  ⎿  Added 1 line                                                        
+      41  │   ├── *.expected        # Expected outputs
+      42  │   └── lib/              # Test library files
+      43  ├── FROTH.md              # Language reference
+      44 +├── FROTHLIB.md           # Standard library reference         
+      45  ├── Makefile              # Build: make, make test, make clean
+      46  └── run_tests.sh          # Test runner script
+      47  ```
+
+● Let me verify the examples still work correctly:
+
+● Bash(./bin/froth -e '{ 1 2 + } /f f closureEnv # print' 2>&1)
+  ⎿  101
+
+● Bash(./bin/froth -e '{ 1 2 + } /f f closureBody print' 2>&1)
+  ⎿  { 1 2 + }
+
+● All examples work. Here's a summary of the changes made to README.md:
+
+  Changes Made
+
+  1. Library file list - Expanded from 4 to 14 files:
+    - Added: defs.froth, list.froth, map.froth, data.froth, bool.froth, math.froth, bench.froth, analysis.froth, optimize.froth, bytecode.froth
+    - Fixed description: "fold" → "foldl"
+  2. Project tree - Added FROTHLIB.md to the file listing
+  3. Inspecting Closures section - Fixed incorrect example:
+    - Before: Used fst/snd (which only work on cons cells)
+    - After: Uses closureEnv/closureBody (the correct operators)
+  4. Source modules - Already updated earlier with:
+    - operator_table.m, value_format.m, vm.m, datastack.m, bytecode.m
+
+  The README is now consistent with the actual project structure. Note: I did not add FROTH_BYTECODE.md to the documentation section as it appears to be internal developer documentation rather than user-facing.
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                   
+     Changes to be committed:
+       (use "git restore --staged <file>..." to unstage)
+     … +7 lines (ctrl+o to expand)
+
+● Bash(git diff --stat)
+  ⎿  (No content)
+
+● Bash(git log --oneline -3)
+  ⎿  f6495a7 add transcripts 27 and 28                        
+     3c66715 Reorganize documentation into focused files
+     10dd0e5 Add here operator to get current bytecode address
+
+● Bash(git diff --cached --stat)
+  ⎿   README.md            |  30 +++-
+      src/eval.m           |   3 +-
+      src/froth.m          |   3 +-
+     … +6 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Split operators.m into focused modules…)
+  ⎿  [master e8cbaa5] Split operators.m into focused modules
+      7 files changed, 483 insertions(+), 403 deletions(-)
+      create mode 100644 src/operator_table.m
+      create mode 100644 src/value_format.m
+
+● Bash(git log --oneline -1)
+  ⎿  e8cbaa5 Split operators.m into focused modules
+
+● Committed as e8cbaa5:
+
+  - operator_table.m (325 lines) - Operator metadata, arity, bytecode encoding
+  - value_format.m (121 lines) - Value-to-string conversion
+  - operators.m reduced from 1,407 to 1,022 lines
+  - README updated with complete project structure
+
+> /export transcript29.txt 
+  ⎿  Conversation exported to: transcript29.txt
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀   claude-opus-4-5-20251101 · 198k/200k tokens (99%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 74 tokens (0.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 135.6k tokens (67.8%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 2k (0.8%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 19 tokens
+     └ MERCURY.md: 55 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
