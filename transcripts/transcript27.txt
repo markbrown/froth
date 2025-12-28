@@ -1,0 +1,2313 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read tests/vm.expected (11 lines)
+  ⎿  Read tests/vm.froth (91 lines)
+  ⎿  Read src/vm.m (174 lines)
+  ⎿  Read lib/bytecode.froth (88 lines)
+  ⎿  Read src/eval.m (353 lines)
+
+> What bytecodes do we still need to implement? 
+
+● Looking at the design document and comparing with the current vm.m implementation:
+
+  Implemented (12 opcodes):
+  - pushInt (0), op (1), return (2), pushString (3)
+  - pushContext (4), popUnused (5), pushLocal (6), popLocal (7)
+  - enterFrame (8), leaveFrame (9), startArray (10), endArray (11)
+
+  Not yet implemented:
+  - call - invoke a closure (push return address, jump to code)
+  - tailCall - invoke a closure without pushing return address
+  - saveContextPtr / restoreContextPtr - caller-saves for context array
+  - saveReturnPtr / restoreReturnPtr - caller-saves for return address
+
+  The caller-saves instructions are needed when a compiled function calls another closure - the caller needs to save its own context and return address before the call, then restore them after.
+
+  Currently bytecode closures can only be invoked from the term evaluator (via ! on a bytecodeval), which handles the setup/teardown. To have bytecode call bytecode, we need call/tailCall and the save/restore instructions.
+
+> In order to implement return properly we should use a sentinel value like 
+-1 for the initial return pointer. When the return instruction sees this it 
+should stop execution and return back to eval_apply, instead of setting the 
+instruction pointer. We may need to thread the return pointer through as 
+another argument to the execute predicate in order to implement call. 
+
+● Right, that makes sense. Let me update vm.m to thread the return pointer through and use -1 as the sentinel for returning to eval_apply.
+
+● Read(src/vm.m)
+  ⎿  Read 174 lines
+
+● Update(src/vm.m)
+  ⎿  Added 3 lines, removed 1 line                                       
+      13  
+      14  %--------------------------------------------------------------
+          ---------%
+      15  
+      16 -    % run(Bytecode, IP, Context, OpTable, ST, Env, !Stack, !SP,
+         - FP, GenStack, !IO):                                           
+      16 +    % run(Bytecode, IP, RP, Context, OpTable, ST, Env, !Stack, 
+         +!SP, FP, GenStack, !IO):                                       
+      17      % Execute bytecode starting at IP until return.
+      18 +    % RP is the return pointer (-1 means return to eval_apply).
+      19      % Context is the closure's captured environment array.
+      20      % Env is passed for operators that need it (like env).
+      21      % FP is the frame pointer (top of frame stack, grows downwa
+          rd).
+     ...
+      24  :- pred run(
+      25      array(int)::in,
+      26      int::in,
+      27 +    int::in,                                                   
+      28      array(value)::in,
+      29      operator_table::in,
+      30      string_table::in,
+
+● Update(src/vm.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      83  % VM execution
+      84  %--------------------------------------------------------------
+          ---------%
+      85  
+      86 -run(BC, IP, Context, OpTable, ST, Env, !Stack, !SP, FP, GenStac
+         -k, !IO) :-                                                     
+      86 +run(BC, IP, RP, Context, OpTable, ST, Env, !Stack, !SP, FP, Gen
+         +Stack, !IO) :-                                                 
+      87      array.lookup(BC, IP, Opcode),
+      88 -    execute(Opcode, BC, IP, Context, OpTable, ST, Env, !Stack, 
+         -!SP, FP, GenStack, !IO).                                       
+      88 +    execute(Opcode, BC, IP, RP, Context, OpTable, ST, Env, !Sta
+         +ck, !SP, FP, GenStack, !IO).                                   
+      89  
+      90 -:- pred execute(int::in, array(int)::in, int::in, array(value):
+         -:in,                                                           
+      90 +:- pred execute(int::in, array(int)::in, int::in, int::in, arra
+         +y(value)::in,                                                  
+      91      operator_table::in, string_table::in, env::in,
+      92      array(value)::array_di, array(value)::array_uo,
+      93      int::in, int::out, int::in, list(int)::in, io::di, io::uo) 
+          is det.
+      94  
+      95 -execute(Opcode, BC, IP, Context, OpTable, ST, Env, !Stack, !SP,
+         - FP, GenStack, !IO) :-                                         
+      95 +execute(Opcode, BC, IP, RP, Context, OpTable, ST, Env, !Stack, 
+         +!SP, FP, GenStack, !IO) :-                                     
+      96      ( if Opcode = oc_pushInt then
+      97          % pushInt n: push integer n onto stack
+      98          array.lookup(BC, IP + 1, N),
+
+● Now I need to update all the recursive run calls to pass RP through, and update the return instruction:
+
+● Update(src/vm.m)
+  ⎿  Added 18 lines, removed 13 lines                                    
+       97          % pushInt n: push integer n onto stack
+       98          array.lookup(BC, IP + 1, N),
+       99          datastack.push(intval(N), !Stack, !SP),
+      100 -        run(BC, IP + 2, Context, OpTable, ST, Env, !Stack, !SP
+          -, FP, GenStack, !IO)                                          
+      100 +        run(BC, IP + 2, RP, Context, OpTable, ST, Env, !Stack,
+          + !SP, FP, GenStack, !IO)                                      
+      101      else if Opcode = oc_op then
+      102          % op n: execute operator n
+      103          array.lookup(BC, IP + 1, OpNum),
+      104          ( if operators.int_to_operator(OpNum, Op) then
+      105              operators.eval_operator(OpTable, ST, Op, Env, !Sta
+           ck, !SP, !IO),
+      106 -            run(BC, IP + 2, Context, OpTable, ST, Env, !Stack,
+          - !SP, FP, GenStack, !IO)                                      
+      106 +            run(BC, IP + 2, RP, Context, OpTable, ST, Env, !St
+          +ack, !SP, FP, GenStack, !IO)                                  
+      107          else
+      108              throw(vm_error("invalid operator number"))
+      109          )
+      110      else if Opcode = oc_return then
+      111 -        % return: stop execution                              
+      112 -        true                                                  
+      111 +        % return: if RP is -1, stop execution (return to eval_
+          +apply)                                                        
+      112 +        % otherwise jump to return address                    
+      113 +        ( if RP = -1 then                                     
+      114 +            true                                              
+      115 +        else                                                  
+      116 +            run(BC, RP, -1, Context, OpTable, ST, Env, !Stack,
+          + !SP, FP, GenStack, !IO)                                      
+      117 +        )                                                     
+      118      else if Opcode = oc_pushString then
+      119          % pushString n: push string with intern ID n
+      120          array.lookup(BC, IP + 1, StrId),
+      121          datastack.push(stringval(StrId), !Stack, !SP),
+      117 -        run(BC, IP + 2, Context, OpTable, ST, Env, !Stack, !SP
+          -, FP, GenStack, !IO)                                          
+      122 +        run(BC, IP + 2, RP, Context, OpTable, ST, Env, !Stack,
+          + !SP, FP, GenStack, !IO)                                      
+      123      else if Opcode = oc_pushContext then
+      124          % pushContext n: push value from context slot n
+      125          array.lookup(BC, IP + 1, Slot),
+      126          array.lookup(Context, Slot, Val),
+      127          datastack.push(Val, !Stack, !SP),
+      123 -        run(BC, IP + 2, Context, OpTable, ST, Env, !Stack, !SP
+          -, FP, GenStack, !IO)                                          
+      128 +        run(BC, IP + 2, RP, Context, OpTable, ST, Env, !Stack,
+          + !SP, FP, GenStack, !IO)                                      
+      129      else if Opcode = oc_popUnused then
+      130          % popUnused: pop and discard top of stack
+      131          datastack.pop("popUnused", _, !Stack, !SP),
+      127 -        run(BC, IP + 1, Context, OpTable, ST, Env, !Stack, !SP
+          -, FP, GenStack, !IO)                                          
+      132 +        run(BC, IP + 1, RP, Context, OpTable, ST, Env, !Stack,
+          + !SP, FP, GenStack, !IO)                                      
+      133      else if Opcode = oc_pushLocal then
+      134          % pushLocal n: push value from frame slot n
+      135          array.lookup(BC, IP + 1, Slot),
+      136          array.lookup(!.Stack, FP + Slot, Val),
+      137          datastack.push(Val, !Stack, !SP),
+      133 -        run(BC, IP + 2, Context, OpTable, ST, Env, !Stack, !SP
+          -, FP, GenStack, !IO)                                          
+      138 +        run(BC, IP + 2, RP, Context, OpTable, ST, Env, !Stack,
+          + !SP, FP, GenStack, !IO)                                      
+      139      else if Opcode = oc_popLocal then
+      140          % popLocal n: pop value into frame slot n
+      141          array.lookup(BC, IP + 1, Slot),
+      142          datastack.pop("popLocal", Val, !Stack, !SP),
+      143          array.set(FP + Slot, Val, !Stack),
+      139 -        run(BC, IP + 2, Context, OpTable, ST, Env, !Stack, !SP
+          -, FP, GenStack, !IO)                                          
+      144 +        run(BC, IP + 2, RP, Context, OpTable, ST, Env, !Stack,
+          + !SP, FP, GenStack, !IO)                                      
+      145      else if Opcode = oc_enterFrame then
+      146          % enterFrame n: allocate n frame slots (FP -= n)
+      147          array.lookup(BC, IP + 1, N),
+     ...
+      149          ( if NewFP < !.SP then
+      150              throw(vm_error("stack overflow: frame collision"))
+      151          else
+      147 -            run(BC, IP + 2, Context, OpTable, ST, Env, !Stack,
+          - !SP, NewFP, GenStack, !IO)                                   
+      152 +            run(BC, IP + 2, RP, Context, OpTable, ST, Env, !St
+          +ack, !SP, NewFP, GenStack, !IO)                               
+      153          )
+      154      else if Opcode = oc_leaveFrame then
+      155          % leaveFrame n: deallocate n frame slots (FP += n)
+      156          array.lookup(BC, IP + 1, N),
+      157          NewFP = FP + N,
+      153 -        run(BC, IP + 2, Context, OpTable, ST, Env, !Stack, !SP
+          -, NewFP, GenStack, !IO)                                       
+      158 +        run(BC, IP + 2, RP, Context, OpTable, ST, Env, !Stack,
+          + !SP, NewFP, GenStack, !IO)                                   
+      159      else if Opcode = oc_startArray then
+      160          % startArray: save current SP for later array extracti
+           on
+      156 -        run(BC, IP + 1, Context, OpTable, ST, Env, !Stack, !SP
+          -, FP, [!.SP | GenStack], !IO)                                 
+      161 +        run(BC, IP + 1, RP, Context, OpTable, ST, Env, !Stack,
+          + !SP, FP, [!.SP | GenStack], !IO)                             
+      162      else if Opcode = oc_endArray then
+      163          % endArray: extract values since saved SP as array
+      164          (
+     ...
+      166              datastack.extract_range(!.Stack, SavedSP, !.SP, Re
+           sultArray),
+      167              !:SP = SavedSP,
+      168              datastack.push(arrayval(ResultArray), !Stack, !SP)
+           ,
+      164 -            run(BC, IP + 1, Context, OpTable, ST, Env, !Stack,
+          - !SP, FP, RestGenStack, !IO)                                  
+      169 +            run(BC, IP + 1, RP, Context, OpTable, ST, Env, !St
+          +ack, !SP, FP, RestGenStack, !IO)                              
+      170          ;
+      171              GenStack = [],
+      172              throw(vm_error("endArray without matching startArr
+           ay"))
+
+● Now I need to update eval.m to pass -1 as the initial return pointer:
+
+● Update(src/eval.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      205      else if V = bytecodeval(Context, CodeAddr) then
+      206          % Execute bytecode closure via VM
+      207          % Note: bytecode array is read-only during VM executio
+           n
+      208 +        % RP=-1 means return to eval_apply (sentinel value)   
+      209          % FP starts at top of stack array (frame grows downwar
+           d)
+      210          % GenStack starts empty (no active generators)
+      211          FP = array.size(!.Array),
+      211 -        vm.run(!.BC, CodeAddr, Context, OpTable, !.ST, Env, !A
+          -rray, !Ptr, FP, [], !IO)                                      
+      212 +        vm.run(!.BC, CodeAddr, -1, Context, OpTable, !.ST, Env
+          +, !Array, !Ptr, FP, [], !IO)                                  
+      213      else if V = termval(identifier(Id)), map.search(OpTable, I
+           d, Info) then
+      214          ( if Info ^ oi_operator = op_import then
+      215              % import is special: it can modify Env (but we dis
+           card here like closures)
+
+● Let me build and run the tests to make sure everything works:
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth    
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/vm.int3
+     … +8 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | tail -20)
+  ⎿  PASS: optimize                          
+     PASS: optimize2
+     SKIP: optimize_bench (no .expected file)
+     … +17 lines (ctrl+o to expand)
+
+● All tests pass. However, I realize there's an issue with the return implementation. When return jumps to RP, the caller needs to restore its saved RP before it can return again. This means restoreReturnPtr needs to be able to update RP.
+
+  Currently RP is an input-only parameter. To implement call/return properly with caller-saves, we need to thread RP through as in/out so that saveReturnPtr and restoreReturnPtr can read and modify it.
+
+  Let me update the VM to thread RP through:
+
+● Update(src/vm.m)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      13  
+      14  %--------------------------------------------------------------
+          ---------%
+      15  
+      16 -    % run(Bytecode, IP, RP, Context, OpTable, ST, Env, !Stack, 
+         -!SP, FP, GenStack, !IO):                                       
+      16 +    % run(Bytecode, IP, !RP, Context, OpTable, ST, Env, !Stack,
+         + !SP, FP, GenStack, !IO):                                      
+      17      % Execute bytecode starting at IP until return.
+      18      % RP is the return pointer (-1 means return to eval_apply).
+      19 +    % RP is threaded through so saveReturnPtr/restoreReturnPtr 
+         +can modify it.                                                 
+      20      % Context is the closure's captured environment array.
+      21      % Env is passed for operators that need it (like env).
+      22      % FP is the frame pointer (top of frame stack, grows downwa
+          rd).
+     ...
+      25  :- pred run(
+      26      array(int)::in,
+      27      int::in,
+      27 -    int::in,                                                   
+      28 +    int::in, int::out,                                         
+      29      array(value)::in,
+      30      operator_table::in,
+      31      string_table::in,
+  ⎿  Interrupted · What should Claude do instead?
+
+> continue 
+
+● Update(src/vm.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      84  % VM execution
+      85  %--------------------------------------------------------------
+          ---------%
+      86  
+      87 -run(BC, IP, RP, Context, OpTable, ST, Env, !Stack, !SP, FP, Gen
+         -Stack, !IO) :-                                                 
+      87 +run(BC, IP, !RP, Context, OpTable, ST, Env, !Stack, !SP, FP, Ge
+         +nStack, !IO) :-                                                
+      88      array.lookup(BC, IP, Opcode),
+      89 -    execute(Opcode, BC, IP, RP, Context, OpTable, ST, Env, !Sta
+         -ck, !SP, FP, GenStack, !IO).                                   
+      89 +    execute(Opcode, BC, IP, !RP, Context, OpTable, ST, Env, !St
+         +ack, !SP, FP, GenStack, !IO).                                  
+      90  
+      91 -:- pred execute(int::in, array(int)::in, int::in, int::in, arra
+         -y(value)::in,                                                  
+      91 +:- pred execute(int::in, array(int)::in, int::in, int::in, int:
+         +:out, array(value)::in,                                        
+      92      operator_table::in, string_table::in, env::in,
+      93      array(value)::array_di, array(value)::array_uo,
+      94      int::in, int::out, int::in, list(int)::in, io::di, io::uo) 
+          is det.
+      95  
+      96 -execute(Opcode, BC, IP, RP, Context, OpTable, ST, Env, !Stack, 
+         -!SP, FP, GenStack, !IO) :-                                     
+      96 +execute(Opcode, BC, IP, !RP, Context, OpTable, ST, Env, !Stack,
+         + !SP, FP, GenStack, !IO) :-                                    
+      97      ( if Opcode = oc_pushInt then
+      98          % pushInt n: push integer n onto stack
+      99          array.lookup(BC, IP + 1, N),
+
+● Now I need to update all the recursive run calls to thread !RP:
+
+● Update(src/vm.m)
+  ⎿  Added 14 lines, removed 14 lines                                    
+       98          % pushInt n: push integer n onto stack
+       99          array.lookup(BC, IP + 1, N),
+      100          datastack.push(intval(N), !Stack, !SP),
+      101 -        run(BC, IP + 2, RP, Context, OpTable, ST, Env, !Stack,
+          - !SP, FP, GenStack, !IO)                                      
+      101 +        run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !Stack
+          +, !SP, FP, GenStack, !IO)                                     
+      102      else if Opcode = oc_op then
+      103          % op n: execute operator n
+      104          array.lookup(BC, IP + 1, OpNum),
+      105          ( if operators.int_to_operator(OpNum, Op) then
+      106              operators.eval_operator(OpTable, ST, Op, Env, !Sta
+           ck, !SP, !IO),
+      107 -            run(BC, IP + 2, RP, Context, OpTable, ST, Env, !St
+          -ack, !SP, FP, GenStack, !IO)                                  
+      107 +            run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !S
+          +tack, !SP, FP, GenStack, !IO)                                 
+      108          else
+      109              throw(vm_error("invalid operator number"))
+      110          )
+      111      else if Opcode = oc_return then
+      112          % return: if RP is -1, stop execution (return to eval_
+           apply)
+      113 -        % otherwise jump to return address                    
+      114 -        ( if RP = -1 then                                     
+      113 +        % otherwise jump to return address (caller will restor
+          +e RP)                                                         
+      114 +        ( if !.RP = -1 then                                   
+      115              true
+      116          else
+      117 -            run(BC, RP, -1, Context, OpTable, ST, Env, !Stack,
+          - !SP, FP, GenStack, !IO)                                      
+      117 +            run(BC, !.RP, !RP, Context, OpTable, ST, Env, !Sta
+          +ck, !SP, FP, GenStack, !IO)                                   
+      118          )
+      119      else if Opcode = oc_pushString then
+      120          % pushString n: push string with intern ID n
+      121          array.lookup(BC, IP + 1, StrId),
+      122          datastack.push(stringval(StrId), !Stack, !SP),
+      123 -        run(BC, IP + 2, RP, Context, OpTable, ST, Env, !Stack,
+          - !SP, FP, GenStack, !IO)                                      
+      123 +        run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !Stack
+          +, !SP, FP, GenStack, !IO)                                     
+      124      else if Opcode = oc_pushContext then
+      125          % pushContext n: push value from context slot n
+      126          array.lookup(BC, IP + 1, Slot),
+      127          array.lookup(Context, Slot, Val),
+      128          datastack.push(Val, !Stack, !SP),
+      129 -        run(BC, IP + 2, RP, Context, OpTable, ST, Env, !Stack,
+          - !SP, FP, GenStack, !IO)                                      
+      129 +        run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !Stack
+          +, !SP, FP, GenStack, !IO)                                     
+      130      else if Opcode = oc_popUnused then
+      131          % popUnused: pop and discard top of stack
+      132          datastack.pop("popUnused", _, !Stack, !SP),
+      133 -        run(BC, IP + 1, RP, Context, OpTable, ST, Env, !Stack,
+          - !SP, FP, GenStack, !IO)                                      
+      133 +        run(BC, IP + 1, !RP, Context, OpTable, ST, Env, !Stack
+          +, !SP, FP, GenStack, !IO)                                     
+      134      else if Opcode = oc_pushLocal then
+      135          % pushLocal n: push value from frame slot n
+      136          array.lookup(BC, IP + 1, Slot),
+      137          array.lookup(!.Stack, FP + Slot, Val),
+      138          datastack.push(Val, !Stack, !SP),
+      139 -        run(BC, IP + 2, RP, Context, OpTable, ST, Env, !Stack,
+          - !SP, FP, GenStack, !IO)                                      
+      139 +        run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !Stack
+          +, !SP, FP, GenStack, !IO)                                     
+      140      else if Opcode = oc_popLocal then
+      141          % popLocal n: pop value into frame slot n
+      142          array.lookup(BC, IP + 1, Slot),
+      143          datastack.pop("popLocal", Val, !Stack, !SP),
+      144          array.set(FP + Slot, Val, !Stack),
+      145 -        run(BC, IP + 2, RP, Context, OpTable, ST, Env, !Stack,
+          - !SP, FP, GenStack, !IO)                                      
+      145 +        run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !Stack
+          +, !SP, FP, GenStack, !IO)                                     
+      146      else if Opcode = oc_enterFrame then
+      147          % enterFrame n: allocate n frame slots (FP -= n)
+      148          array.lookup(BC, IP + 1, N),
+     ...
+      150          ( if NewFP < !.SP then
+      151              throw(vm_error("stack overflow: frame collision"))
+      152          else
+      153 -            run(BC, IP + 2, RP, Context, OpTable, ST, Env, !St
+          -ack, !SP, NewFP, GenStack, !IO)                               
+      153 +            run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !S
+          +tack, !SP, NewFP, GenStack, !IO)                              
+      154          )
+      155      else if Opcode = oc_leaveFrame then
+      156          % leaveFrame n: deallocate n frame slots (FP += n)
+      157          array.lookup(BC, IP + 1, N),
+      158          NewFP = FP + N,
+      159 -        run(BC, IP + 2, RP, Context, OpTable, ST, Env, !Stack,
+          - !SP, NewFP, GenStack, !IO)                                   
+      159 +        run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !Stack
+          +, !SP, NewFP, GenStack, !IO)                                  
+      160      else if Opcode = oc_startArray then
+      161          % startArray: save current SP for later array extracti
+           on
+      162 -        run(BC, IP + 1, RP, Context, OpTable, ST, Env, !Stack,
+          - !SP, FP, [!.SP | GenStack], !IO)                             
+      162 +        run(BC, IP + 1, !RP, Context, OpTable, ST, Env, !Stack
+          +, !SP, FP, [!.SP | GenStack], !IO)                            
+      163      else if Opcode = oc_endArray then
+      164          % endArray: extract values since saved SP as array
+      165          (
+     ...
+      167              datastack.extract_range(!.Stack, SavedSP, !.SP, Re
+           sultArray),
+      168              !:SP = SavedSP,
+      169              datastack.push(arrayval(ResultArray), !Stack, !SP)
+           ,
+      170 -            run(BC, IP + 1, RP, Context, OpTable, ST, Env, !St
+          -ack, !SP, FP, RestGenStack, !IO)                              
+      170 +            run(BC, IP + 1, !RP, Context, OpTable, ST, Env, !S
+          +tack, !SP, FP, RestGenStack, !IO)                             
+      171          ;
+      172              GenStack = [],
+      173              throw(vm_error("endArray without matching startArr
+           ay"))
+
+● Now update eval.m to handle the threaded RP (we can ignore the output since we're returning to the term evaluator):
+
+● Update(src/eval.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      209          % FP starts at top of stack array (frame grows downwar
+           d)
+      210          % GenStack starts empty (no active generators)
+      211          FP = array.size(!.Array),
+      212 -        vm.run(!.BC, CodeAddr, -1, Context, OpTable, !.ST, Env
+          -, !Array, !Ptr, FP, [], !IO)                                  
+      212 +        vm.run(!.BC, CodeAddr, -1, _, Context, OpTable, !.ST, 
+          +Env, !Array, !Ptr, FP, [], !IO)                               
+      213      else if V = termval(identifier(Id)), map.search(OpTable, I
+           d, Info) then
+      214          ( if Info ^ oi_operator = op_import then
+      215              % import is special: it can modify Env (but we dis
+           card here like closures)
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth    
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/vm.int3
+     … +8 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | tail -10)
+  ⎿  PASS: term_access            
+     PASS: term_convert
+     PASS: time
+     … +7 lines (ctrl+o to expand)
+
+● All tests pass. Now RP is threaded as in/out, which enables implementing:
+
+  - saveReturnPtr - push current RP onto data stack
+  - restoreReturnPtr - pop from data stack into RP
+  - call - set RP = return address, jump to target
+
+  The calling convention for bytecode-to-bytecode calls would be:
+  saveReturnPtr        ; save current RP to stack
+  <push closure>
+  call                 ; sets RP = IP+2, jumps to closure's code
+  restoreReturnPtr     ; restore saved RP (first thing after call returns)
+
+  Would you like me to implement these instructions now?
+
+> Will we need to thread the context through in the same way, for 
+restoreContextPtr? 
+
+● Yes, good point. When call executes, it needs to:
+  1. Pop the bytecodeval(CalleeContext, CodeAddr) from the stack
+  2. Set RP = return address
+  3. Switch to the callee's Context
+  4. Jump to CodeAddr
+
+  And then restoreContextPtr needs to restore the caller's saved Context after the call returns.
+
+  So Context should be threaded as in/out just like RP. Let me update that:
+
+● Update(src/vm.m)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      13  
+      14  %--------------------------------------------------------------
+          ---------%
+      15  
+      16 -    % run(Bytecode, IP, !RP, Context, OpTable, ST, Env, !Stack,
+         - !SP, FP, GenStack, !IO):                                      
+      16 +    % run(Bytecode, IP, !RP, !Context, OpTable, ST, Env, !Stack
+         +, !SP, FP, GenStack, !IO):                                     
+      17      % Execute bytecode starting at IP until return.
+      18      % RP is the return pointer (-1 means return to eval_apply).
+      19      % RP is threaded through so saveReturnPtr/restoreReturnPtr 
+          can modify it.
+      20      % Context is the closure's captured environment array.
+      21 +    % Context is threaded through so call/restoreContextPtr can
+         + modify it.                                                    
+      22      % Env is passed for operators that need it (like env).
+      23      % FP is the frame pointer (top of frame stack, grows downwa
+          rd).
+      24      % GenStack is a list of saved stack pointers for generators
+          .
+     ...
+      27      array(int)::in,
+      28      int::in,
+      29      int::in, int::out,
+      29 -    array(value)::in,                                          
+      30 +    array(value)::in, array(value)::out,                       
+      31      operator_table::in,
+      32      string_table::in,
+      33      env::in,
+
+● Update(src/vm.m)
+  ⎿  Added 5 lines, removed 4 lines                                      
+       85  % VM execution
+       86  %-------------------------------------------------------------
+           ----------%
+       87  
+       88 -run(BC, IP, !RP, Context, OpTable, ST, Env, !Stack, !SP, FP, G
+          -enStack, !IO) :-                                              
+       88 +run(BC, IP, !RP, !Context, OpTable, ST, Env, !Stack, !SP, FP, 
+          +GenStack, !IO) :-                                             
+       89      array.lookup(BC, IP, Opcode),
+       90 -    execute(Opcode, BC, IP, !RP, Context, OpTable, ST, Env, !S
+          -tack, !SP, FP, GenStack, !IO).                                
+       90 +    execute(Opcode, BC, IP, !RP, !Context, OpTable, ST, Env, !
+          +Stack, !SP, FP, GenStack, !IO).                               
+       91  
+       92 -:- pred execute(int::in, array(int)::in, int::in, int::in, int
+          -::out, array(value)::in,                                      
+       92 +:- pred execute(int::in, array(int)::in, int::in, int::in, int
+          +::out,                                                        
+       93 +    array(value)::in, array(value)::out,                      
+       94      operator_table::in, string_table::in, env::in,
+       95      array(value)::array_di, array(value)::array_uo,
+       96      int::in, int::out, int::in, list(int)::in, io::di, io::uo)
+            is det.
+       97  
+       97 -execute(Opcode, BC, IP, !RP, Context, OpTable, ST, Env, !Stack
+          -, !SP, FP, GenStack, !IO) :-                                  
+       98 +execute(Opcode, BC, IP, !RP, !Context, OpTable, ST, Env, !Stac
+          +k, !SP, FP, GenStack, !IO) :-                                 
+       99      ( if Opcode = oc_pushInt then
+      100          % pushInt n: push integer n onto stack
+      101          array.lookup(BC, IP + 1, N),
+
+● Now update all recursive run calls to thread !Context:
+
+● Update(src/vm.m)
+  ⎿  Added 14 lines, removed 14 lines                                    
+      100          % pushInt n: push integer n onto stack
+      101          array.lookup(BC, IP + 1, N),
+      102          datastack.push(intval(N), !Stack, !SP),
+      103 -        run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !Stack
+          -, !SP, FP, GenStack, !IO)                                     
+      103 +        run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !Stac
+          +k, !SP, FP, GenStack, !IO)                                    
+      104      else if Opcode = oc_op then
+      105          % op n: execute operator n
+      106          array.lookup(BC, IP + 1, OpNum),
+      107          ( if operators.int_to_operator(OpNum, Op) then
+      108              operators.eval_operator(OpTable, ST, Op, Env, !Sta
+           ck, !SP, !IO),
+      109 -            run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !S
+          -tack, !SP, FP, GenStack, !IO)                                 
+      109 +            run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !
+          +Stack, !SP, FP, GenStack, !IO)                                
+      110          else
+      111              throw(vm_error("invalid operator number"))
+      112          )
+      113      else if Opcode = oc_return then
+      114          % return: if RP is -1, stop execution (return to eval_
+           apply)
+      115 -        % otherwise jump to return address (caller will restor
+          -e RP)                                                         
+      115 +        % otherwise jump to return address (caller will restor
+          +e RP and Context)                                             
+      116          ( if !.RP = -1 then
+      117              true
+      118          else
+      119 -            run(BC, !.RP, !RP, Context, OpTable, ST, Env, !Sta
+          -ck, !SP, FP, GenStack, !IO)                                   
+      119 +            run(BC, !.RP, !RP, !Context, OpTable, ST, Env, !St
+          +ack, !SP, FP, GenStack, !IO)                                  
+      120          )
+      121      else if Opcode = oc_pushString then
+      122          % pushString n: push string with intern ID n
+      123          array.lookup(BC, IP + 1, StrId),
+      124          datastack.push(stringval(StrId), !Stack, !SP),
+      125 -        run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !Stack
+          -, !SP, FP, GenStack, !IO)                                     
+      125 +        run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !Stac
+          +k, !SP, FP, GenStack, !IO)                                    
+      126      else if Opcode = oc_pushContext then
+      127          % pushContext n: push value from context slot n
+      128          array.lookup(BC, IP + 1, Slot),
+      129 -        array.lookup(Context, Slot, Val),                     
+      129 +        array.lookup(!.Context, Slot, Val),                   
+      130          datastack.push(Val, !Stack, !SP),
+      131 -        run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !Stack
+          -, !SP, FP, GenStack, !IO)                                     
+      131 +        run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !Stac
+          +k, !SP, FP, GenStack, !IO)                                    
+      132      else if Opcode = oc_popUnused then
+      133          % popUnused: pop and discard top of stack
+      134          datastack.pop("popUnused", _, !Stack, !SP),
+      135 -        run(BC, IP + 1, !RP, Context, OpTable, ST, Env, !Stack
+          -, !SP, FP, GenStack, !IO)                                     
+      135 +        run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !Stac
+          +k, !SP, FP, GenStack, !IO)                                    
+      136      else if Opcode = oc_pushLocal then
+      137          % pushLocal n: push value from frame slot n
+      138          array.lookup(BC, IP + 1, Slot),
+      139          array.lookup(!.Stack, FP + Slot, Val),
+      140          datastack.push(Val, !Stack, !SP),
+      141 -        run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !Stack
+          -, !SP, FP, GenStack, !IO)                                     
+      141 +        run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !Stac
+          +k, !SP, FP, GenStack, !IO)                                    
+      142      else if Opcode = oc_popLocal then
+      143          % popLocal n: pop value into frame slot n
+      144          array.lookup(BC, IP + 1, Slot),
+      145          datastack.pop("popLocal", Val, !Stack, !SP),
+      146          array.set(FP + Slot, Val, !Stack),
+      147 -        run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !Stack
+          -, !SP, FP, GenStack, !IO)                                     
+      147 +        run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !Stac
+          +k, !SP, FP, GenStack, !IO)                                    
+      148      else if Opcode = oc_enterFrame then
+      149          % enterFrame n: allocate n frame slots (FP -= n)
+      150          array.lookup(BC, IP + 1, N),
+     ...
+      152          ( if NewFP < !.SP then
+      153              throw(vm_error("stack overflow: frame collision"))
+      154          else
+      155 -            run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !S
+          -tack, !SP, NewFP, GenStack, !IO)                              
+      155 +            run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !
+          +Stack, !SP, NewFP, GenStack, !IO)                             
+      156          )
+      157      else if Opcode = oc_leaveFrame then
+      158          % leaveFrame n: deallocate n frame slots (FP += n)
+      159          array.lookup(BC, IP + 1, N),
+      160          NewFP = FP + N,
+      161 -        run(BC, IP + 2, !RP, Context, OpTable, ST, Env, !Stack
+          -, !SP, NewFP, GenStack, !IO)                                  
+      161 +        run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !Stac
+          +k, !SP, NewFP, GenStack, !IO)                                 
+      162      else if Opcode = oc_startArray then
+      163          % startArray: save current SP for later array extracti
+           on
+      164 -        run(BC, IP + 1, !RP, Context, OpTable, ST, Env, !Stack
+          -, !SP, FP, [!.SP | GenStack], !IO)                            
+      164 +        run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !Stac
+          +k, !SP, FP, [!.SP | GenStack], !IO)                           
+      165      else if Opcode = oc_endArray then
+      166          % endArray: extract values since saved SP as array
+      167          (
+     ...
+      169              datastack.extract_range(!.Stack, SavedSP, !.SP, Re
+           sultArray),
+      170              !:SP = SavedSP,
+      171              datastack.push(arrayval(ResultArray), !Stack, !SP)
+           ,
+      172 -            run(BC, IP + 1, !RP, Context, OpTable, ST, Env, !S
+          -tack, !SP, FP, RestGenStack, !IO)                             
+      172 +            run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !
+          +Stack, !SP, FP, RestGenStack, !IO)                            
+      173          ;
+      174              GenStack = [],
+      175              throw(vm_error("endArray without matching startArr
+           ay"))
+
+● Now update eval.m for the new signature:
+
+● Update(src/eval.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      209          % FP starts at top of stack array (frame grows downwar
+           d)
+      210          % GenStack starts empty (no active generators)
+      211          FP = array.size(!.Array),
+      212 -        vm.run(!.BC, CodeAddr, -1, _, Context, OpTable, !.ST, 
+          -Env, !Array, !Ptr, FP, [], !IO)                               
+      212 +        vm.run(!.BC, CodeAddr, -1, _, Context, _, OpTable, !.S
+          +T, Env, !Array, !Ptr, FP, [], !IO)                            
+      213      else if V = termval(identifier(Id)), map.search(OpTable, I
+           d, Info) then
+      214          ( if Info ^ oi_operator = op_import then
+      215              % import is special: it can modify Env (but we dis
+           card here like closures)
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth    
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/vm.int3
+     … +8 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● All tests pass. Now both RP and Context are threaded through, enabling:
+
+  - saveReturnPtr - push RP onto data stack
+  - restoreReturnPtr - pop into RP
+  - saveContextPtr - push Context as arrayval onto data stack
+  - restoreContextPtr - pop arrayval into Context
+  - call - pop bytecodeval(NewContext, Addr), set RP = IP+1, Context = NewContext, jump to Addr
+
+  Ready to implement these when you'd like.
+
+> implement those 
+
+● I'll add the new opcodes to vm.m and bytecode.froth.
+
+● Read(src/vm.m)
+  ⎿  Read 184 lines
+
+● Update(src/vm.m)
+  ⎿  Added 5 lines                                                       
+      53  :- func oc_leaveFrame = int.
+      54  :- func oc_startArray = int.
+      55  :- func oc_endArray = int.
+      56 +:- func oc_call = int.                                         
+      57 +:- func oc_saveReturnPtr = int.                                
+      58 +:- func oc_restoreReturnPtr = int.                             
+      59 +:- func oc_saveContextPtr = int.                               
+      60 +:- func oc_restoreContextPtr = int.                            
+      61  
+      62  %--------------------------------------------------------------
+          ---------%
+      63  
+
+● Update(src/vm.m)
+  ⎿  Added 5 lines                                                       
+      85  oc_leaveFrame = 9.
+      86  oc_startArray = 10.
+      87  oc_endArray = 11.
+      88 +oc_call = 12.                                                  
+      89 +oc_saveReturnPtr = 13.                                         
+      90 +oc_restoreReturnPtr = 14.                                      
+      91 +oc_saveContextPtr = 15.                                        
+      92 +oc_restoreContextPtr = 16.                                     
+      93  
+      94  %--------------------------------------------------------------
+          ---------%
+      95  % VM execution
+
+● Now add the implementation of these opcodes:
+
+● Update(src/vm.m)
+  ⎿  Added 36 lines                                                      
+      184              GenStack = [],
+      185              throw(vm_error("endArray without matching startArr
+           ay"))
+      186          )
+      187 +    else if Opcode = oc_call then                             
+      188 +        % call: pop closure, set RP to return address, switch 
+          +context, jump                                                 
+      189 +        datastack.pop("call", V, !Stack, !SP),                
+      190 +        ( if V = bytecodeval(CalleeContext, CodeAddr) then    
+      191 +            !:RP = IP + 1,                                    
+      192 +            !:Context = CalleeContext,                        
+      193 +            run(BC, CodeAddr, !RP, !Context, OpTable, ST, Env,
+          + !Stack, !SP, FP, GenStack, !IO)                              
+      194 +        else                                                  
+      195 +            throw(type_error("bytecode closure", V))          
+      196 +        )                                                     
+      197 +    else if Opcode = oc_saveReturnPtr then                    
+      198 +        % saveReturnPtr: push current RP onto data stack      
+      199 +        datastack.push(intval(!.RP), !Stack, !SP),            
+      200 +        run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !Stac
+          +k, !SP, FP, GenStack, !IO)                                    
+      201 +    else if Opcode = oc_restoreReturnPtr then                 
+      202 +        % restoreReturnPtr: pop RP from data stack            
+      203 +        datastack.pop("restoreReturnPtr", V, !Stack, !SP),    
+      204 +        ( if V = intval(NewRP) then                           
+      205 +            !:RP = NewRP,                                     
+      206 +            run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !
+          +Stack, !SP, FP, GenStack, !IO)                                
+      207 +        else                                                  
+      208 +            throw(type_error("int", V))                       
+      209 +        )                                                     
+      210 +    else if Opcode = oc_saveContextPtr then                   
+      211 +        % saveContextPtr: push current context array onto data
+          + stack                                                        
+      212 +        datastack.push(arrayval(!.Context), !Stack, !SP),     
+      213 +        run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !Stac
+          +k, !SP, FP, GenStack, !IO)                                    
+      214 +    else if Opcode = oc_restoreContextPtr then                
+      215 +        % restoreContextPtr: pop context array from data stack
+      216 +        datastack.pop("restoreContextPtr", V, !Stack, !SP),   
+      217 +        ( if V = arrayval(NewContext) then                    
+      218 +            !:Context = NewContext,                           
+      219 +            run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !
+          +Stack, !SP, FP, GenStack, !IO)                                
+      220 +        else                                                  
+      221 +            throw(type_error("array", V))                     
+      222 +        )                                                     
+      223      else
+      224          throw(vm_error("unknown opcode"))
+      225      ).
+
+● Now update lib/bytecode.froth with the new opcodes:
+
+● Read(lib/bytecode.froth)
+  ⎿  Read 88 lines
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 22 lines, removed 12 lines                                    
+      16  9 /ocLeaveFrame
+      17  10 /ocStartArray
+      18  11 /ocEndArray
+      19 +12 /ocCall                                                     
+      20 +13 /ocSaveReturnPtr                                            
+      21 +14 /ocRestoreReturnPtr                                         
+      22 +15 /ocSaveContextPtr                                           
+      23 +16 /ocRestoreContextPtr                                        
+      24  
+      25  ; Emit helpers
+      21 -[] { 0 emit emit } def-fn! /emit-push-int      ; ( n -- )      
+      22 -[] { 1 emit emit } def-fn! /emit-op            ; ( opnum -- )  
+      23 -[] { 2 emit } def-fn! /emit-return             ; ( -- )        
+      24 -[] { 3 emit emit } def-fn! /emit-push-string   ; ( strid -- )  
+      25 -[] { 4 emit emit } def-fn! /emit-push-context  ; ( slot -- )   
+      26 -[] { 5 emit } def-fn! /emit-pop-unused         ; ( -- )        
+      27 -[] { 6 emit emit } def-fn! /emit-push-local    ; ( slot -- )   
+      28 -[] { 7 emit emit } def-fn! /emit-pop-local     ; ( slot -- )   
+      29 -[] { 8 emit emit } def-fn! /emit-enter-frame   ; ( n -- )      
+      30 -[] { 9 emit emit } def-fn! /emit-leave-frame   ; ( n -- )      
+      31 -[] { 10 emit } def-fn! /emit-start-array       ; ( -- )        
+      32 -[] { 11 emit } def-fn! /emit-end-array         ; ( -- )        
+      26 +[] { 0 emit emit } def-fn! /emit-push-int          ; ( n -- )  
+      27 +[] { 1 emit emit } def-fn! /emit-op                ; ( opnum --
+         + )                                                             
+      28 +[] { 2 emit } def-fn! /emit-return                 ; ( -- )    
+      29 +[] { 3 emit emit } def-fn! /emit-push-string       ; ( strid --
+         + )                                                             
+      30 +[] { 4 emit emit } def-fn! /emit-push-context      ; ( slot -- 
+         +)                                                              
+      31 +[] { 5 emit } def-fn! /emit-pop-unused             ; ( -- )    
+      32 +[] { 6 emit emit } def-fn! /emit-push-local        ; ( slot -- 
+         +)                                                              
+      33 +[] { 7 emit emit } def-fn! /emit-pop-local         ; ( slot -- 
+         +)                                                              
+      34 +[] { 8 emit emit } def-fn! /emit-enter-frame       ; ( n -- )  
+      35 +[] { 9 emit emit } def-fn! /emit-leave-frame       ; ( n -- )  
+      36 +[] { 10 emit } def-fn! /emit-start-array           ; ( -- )    
+      37 +[] { 11 emit } def-fn! /emit-end-array             ; ( -- )    
+      38 +[] { 12 emit } def-fn! /emit-call                  ; ( -- ) clo
+         +sure on stack                                                  
+      39 +[] { 13 emit } def-fn! /emit-save-return-ptr       ; ( -- )    
+      40 +[] { 14 emit } def-fn! /emit-restore-return-ptr    ; ( -- )    
+      41 +[] { 15 emit } def-fn! /emit-save-context-ptr      ; ( -- )    
+      42 +[] { 16 emit } def-fn! /emit-restore-context-ptr   ; ( -- )    
+      43  
+      44  ; Operator numbers (must match operator_to_int in operators.m)
+      45  0 /opPrint
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth   
+     Making Mercury/int3s/vm.int3
+     Making Mercury/ints/vm.int
+     … +6 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● Now let me add a test for the call instruction. I'll add it to vm.froth:
+
+● Read(tests/vm.froth)
+  ⎿  Read 91 lines
+
+● Update(tests/vm.froth)
+  ⎿  Added 20 lines                                                      
+       88  emit-end-array!
+       89  emit-return!
+       90  [] 64 close ! # println!  ; outer array length = 2
+       91 +                                                              
+       92 +; Test 11: bytecode-to-bytecode call                          
+       93 +; Callee at address 77, size 5: adds 10 to value on stack     
+       94 +10 emit-push-int!                                             
+       95 +opAdd emit-op!                                                
+       96 +emit-return!                                                  
+       97 +                                                              
+       98 +; Caller at address 82, size 10: pushes 5, calls callee from c
+          +ontext[0]                                                     
+       99 +5 emit-push-int!                                              
+      100 +emit-save-return-ptr!                                         
+      101 +emit-save-context-ptr!                                        
+      102 +0 emit-push-context!       ; get callee from context slot 0   
+      103 +emit-call!                                                    
+      104 +emit-restore-context-ptr!                                     
+      105 +emit-restore-return-ptr!                                      
+      106 +emit-return!                                                  
+      107 +                                                              
+      108 +; Create callee closure, put in caller's context, call caller 
+      109 +[] 77 close /callee                                           
+      110 +[ callee ] 82 close ! println!  ; should print 15 (5 + 10)    
+
+● Update(tests/vm.expected)
+  ⎿  Added 1 line                                                        
+       8  49
+       9  3
+      10  2
+      11 +15                                                             
+
+● Bash(./bin/froth tests/vm.froth 2>&1)
+  ⎿  Error: Exit code 1
+     3
+     7
+     42
+     20
+     42
+     99
+     1
+     49
+     3
+     … +2 lines (ctrl+o to see all)
+
+● The issue is that the saved RP and Context are on the data stack between the argument and the callee. I need to save them to local variables in a frame instead. Let me fix the test:
+
+● Update(tests/vm.froth)
+  ⎿  Added 15 lines, removed 8 lines                                     
+       95  opAdd emit-op!
+       96  emit-return!
+       97  
+       98 -; Caller at address 82, size 10: pushes 5, calls callee from c
+          -ontext[0]                                                     
+       99 -5 emit-push-int!                                              
+      100 -emit-save-return-ptr!                                         
+      101 -emit-save-context-ptr!                                        
+      102 -0 emit-push-context!       ; get callee from context slot 0   
+      103 -emit-call!                                                    
+      104 -emit-restore-context-ptr!                                     
+      105 -emit-restore-return-ptr!                                      
+       98 +; Caller at address 82, size 22: pushes 5, calls callee from c
+          +ontext[0]                                                     
+       99 +; Uses frame to save RP and Context so they don't interfere wi
+          +th arguments                                                  
+      100 +2 emit-enter-frame!          ; frame slots: 0=RP, 1=Context   
+      101 +emit-save-return-ptr!        ; push RP to stack               
+      102 +0 emit-pop-local!            ; save RP to slot 0              
+      103 +emit-save-context-ptr!       ; push Context to stack          
+      104 +1 emit-pop-local!            ; save Context to slot 1         
+      105 +5 emit-push-int!             ; argument for callee            
+      106 +0 emit-push-context!         ; get callee from context[0]     
+      107 +emit-call!                   ; call callee, returns with 15 on
+          + stack                                                        
+      108 +1 emit-push-local!           ; push saved Context             
+      109 +emit-restore-context-ptr!    ; restore Context                
+      110 +0 emit-push-local!           ; push saved RP                  
+      111 +emit-restore-return-ptr!     ; restore RP                     
+      112 +2 emit-leave-frame!          ; deallocate frame               
+      113  emit-return!
+      114  
+      115  ; Create callee closure, put in caller's context, call caller
+
+● Bash(./bin/froth tests/vm.froth 2>&1)
+  ⎿  3                            
+     7
+     42
+     … +8 lines (ctrl+o to expand)
+
+● Let me run the full test suite:
+
+● Bash(./run_tests.sh 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● All tests pass. Let me add one more test for nested calls (A calls B calls C):
+
+● Update(tests/vm.froth)
+  ⎿  Added 44 lines                                                      
+      115  ; Create callee closure, put in caller's context, call caller
+      116  [] 77 close /callee
+      117  [ callee ] 82 close ! println!  ; should print 15 (5 + 10)
+      118 +                                                              
+      119 +; Test 12: nested bytecode calls (A calls B calls C)          
+      120 +; C at address 104, size 5: adds 1 to value on stack          
+      121 +1 emit-push-int!                                              
+      122 +opAdd emit-op!                                                
+      123 +emit-return!                                                  
+      124 +                                                              
+      125 +; B at address 109, size 22: adds 10, then calls C from contex
+          +t[0]                                                          
+      126 +2 emit-enter-frame!                                           
+      127 +emit-save-return-ptr!                                         
+      128 +0 emit-pop-local!                                             
+      129 +emit-save-context-ptr!                                        
+      130 +1 emit-pop-local!                                             
+      131 +10 emit-push-int!            ; add 10 first                   
+      132 +opAdd emit-op!                                                
+      133 +0 emit-push-context!         ; get C from context[0]          
+      134 +emit-call!                   ; call C (adds 1)                
+      135 +1 emit-push-local!                                            
+      136 +emit-restore-context-ptr!                                     
+      137 +0 emit-push-local!                                            
+      138 +emit-restore-return-ptr!                                      
+      139 +2 emit-leave-frame!                                           
+      140 +emit-return!                                                  
+      141 +                                                              
+      142 +; A at address 131, size 22: pushes 100, calls B from context[
+          +0]                                                            
+      143 +2 emit-enter-frame!                                           
+      144 +emit-save-return-ptr!                                         
+      145 +0 emit-pop-local!                                             
+      146 +emit-save-context-ptr!                                        
+      147 +1 emit-pop-local!                                             
+      148 +100 emit-push-int!           ; start with 100                 
+      149 +0 emit-push-context!         ; get B from context[0]          
+      150 +emit-call!                   ; call B (adds 10, then calls C w
+          +hich adds 1)                                                  
+      151 +1 emit-push-local!                                            
+      152 +emit-restore-context-ptr!                                     
+      153 +0 emit-push-local!                                            
+      154 +emit-restore-return-ptr!                                      
+      155 +2 emit-leave-frame!                                           
+      156 +emit-return!                                                  
+      157 +                                                              
+      158 +; Create closures and call A                                  
+      159 +[] 104 close /funcC                                           
+      160 +[ funcC ] 109 close /funcB                                    
+      161 +[ funcB ] 131 close ! println!  ; should print 111 (100 + 10 +
+          + 1)                                                           
+
+● Let me run to check the addresses:
+
+● Bash(./bin/froth tests/vm.froth 2>&1)
+  ⎿  Error: Exit code 1
+     3
+     7
+     42
+     20
+     42
+     99
+     1
+     49
+     3
+     … +3 lines (ctrl+o to see all)
+
+● The address for A is wrong. B is 24 bytes (has the add operation), not 22. Let me fix:
+
+● Update(tests/vm.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      122  opAdd emit-op!
+      123  emit-return!
+      124  
+      125 -; B at address 109, size 22: adds 10, then calls C from contex
+          -t[0]                                                          
+      125 +; B at address 109, size 24: adds 10, then calls C from contex
+          +t[0]                                                          
+      126  2 emit-enter-frame!
+      127  emit-save-return-ptr!
+      128  0 emit-pop-local!
+
+● Update(tests/vm.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      139  2 emit-leave-frame!
+      140  emit-return!
+      141  
+      142 -; A at address 131, size 22: pushes 100, calls B from context[
+          -0]                                                            
+      142 +; A at address 133, size 22: pushes 100, calls B from context[
+          +0]                                                            
+      143  2 emit-enter-frame!
+      144  emit-save-return-ptr!
+      145  0 emit-pop-local!
+
+● Update(tests/vm.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      158  ; Create closures and call A
+      159  [] 104 close /funcC
+      160  [ funcC ] 109 close /funcB
+      161 -[ funcB ] 131 close ! println!  ; should print 111 (100 + 10 +
+          - 1)                                                           
+      161 +[ funcB ] 133 close ! println!  ; should print 111 (100 + 10 +
+          + 1)                                                           
+
+● Bash(./bin/froth tests/vm.froth 2>&1)
+  ⎿  3                            
+     7
+     42
+     … +9 lines (ctrl+o to expand)
+
+● Update(tests/vm.expected)
+  ⎿  Added 1 line                                                        
+       9  3
+      10  2
+      11  15
+      12 +111                                                            
+
+● Bash(./run_tests.sh 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● All 54 tests pass. Here's a summary of what was implemented:
+
+  New opcodes (12-16):
+  - call (12): pop bytecodeval, set RP = IP+1, switch to callee's context, jump
+  - saveReturnPtr (13): push current RP onto data stack
+  - restoreReturnPtr (14): pop into RP
+  - saveContextPtr (15): push current Context as arrayval
+  - restoreContextPtr (16): pop arrayval into Context
+
+  Calling convention:
+  The caller must save RP and Context to frame locals before a call:
+  2 emit-enter-frame!          ; allocate frame for saved state
+  emit-save-return-ptr!        ; push RP
+  0 emit-pop-local!            ; save to frame slot 0
+  emit-save-context-ptr!       ; push Context
+  1 emit-pop-local!            ; save to frame slot 1
+  <push arguments>
+  <push closure>
+  emit-call!
+  <restore saved state>
+  2 emit-leave-frame!
+  emit-return!
+
+  Tests added:
+  - Test 11: Simple call (A calls B, returns 15)
+  - Test 12: Nested calls (A calls B calls C, returns 111)
+
+> commit this 
+
+● Bash(git status && git diff --staged && git diff)
+  ⎿  On branch master                                   
+     Changes to be committed:
+       (use "git restore --staged <file>..." to unstage)
+     … +416 lines (ctrl+o to expand)
+
+● Bash(git log --oneline -5)
+  ⎿  787a2b3 add transcripts 25 and 26                        
+     e7bc7c3 Add bytecode VM with core instruction set
+     ad5681c Add bytecode infrastructure for compiled closures
+     … +2 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Add call instruction and caller-saves for bytecode VM…)
+  ⎿  [master d23e46d] Add call instruction and caller-saves for bytecode VM
+      5 files changed, 173 insertions(+), 33 deletions(-)
+
+● Bash(git status)
+  ⎿  On branch master                     
+     nothing to commit, working tree clean
+
+● Committed as d23e46d: Add call instruction and caller-saves for bytecode VM
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀   claude-opus-4-5-20251101 · 145k/200k tokens (72%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 74 tokens (0.0%)
+     ⛁ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Messages: 82.0k tokens (41.0%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 55k (27.5%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 19 tokens
+     └ MERCURY.md: 55 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> Let's try to simplify the code in tests/vm.froth for emitting bytecode. 
+The best way to do this might be to generate the bytecodes in an array then 
+use foldl to emit the contents of the array. Since we have constants for 
+each bytecode in the environment (from `lib/bytecode.froth`) can we generate
+ code as follows: `[ ocPushInt 1 ocPushLocal 3 ...] {emit} foldl!`? 
+
+● Yes, that's a good idea! The opcode constants are plain integers, so they can go directly in an array. The question is what iteration primitive we have.
+
+  Let me check what's available:
+
+● Bash(grep -n "foldl\|each\|map"
+      /home/mark/Documents/projects/froth/lib/stdlib.froth 2>/dev/null | head
+      -20)
+  ⎿  10:"map.froth" import
+
+● Bash(cat /home/mark/Documents/projects/froth/lib/map.froth)
+  ⎿  ; lib/map.froth               
+     ; Map utilities
+     … +27 lines (ctrl+o to expand)
+
+● Bash(grep -rn "def.*reduce\|def.*each\|def.*foldl"
+      /home/mark/Documents/projects/froth/lib/)
+  ⎿ /home/mark/Documents/projects/froth/lib/array.froth:21:} def-fn! /foldl
+    -impl
+    /home/mark/Documents/projects/froth/lib/array.froth:26:} def-fn! /foldl
+    … +5 lines (ctrl+o to expand)
+
+
+
+● Bash(cat /home/mark/Documents/projects/froth/lib/array.froth | head -40)
+  ⎿ ; array.froth - Array utilities                                        
+
+    ; foldl: Apply a function to each element left-to-right, leaving result
+    … +39 lines (ctrl+o to expand)
+
+
+● foldl has signature (arr fn -- ...results...) and calls the function with each element on the stack. So your idea should work:
+
+  [ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] { emit } foldl!
+
+  Let me test this:
+
+● Bash(./bin/froth -e '
+      ; Test: emit an array of bytecodes using foldl…)
+  ⎿  3
+
+● It works. We could add a helper to bytecode.froth:
+
+  [] { { emit } foldl! } def-fn! /emit-all!
+
+  Then the tests could be rewritten as:
+
+  ; Test 1: 1 + 2 = 3
+  [ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] emit-all!
+  [] 0 close ! println!
+
+  This is much cleaner than the current:
+  1 emit-push-int!
+  2 emit-push-int!
+  opAdd emit-op!
+  emit-return!
+
+  Want me to add emit-all! to bytecode.froth and update the vm tests to use this pattern?
+
+> yes 
+
+● Read(lib/bytecode.froth)
+  ⎿  Read 98 lines
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 4 lines                                                       
+      41  [] { 15 emit } def-fn! /emit-save-context-ptr      ; ( -- )
+      42  [] { 16 emit } def-fn! /emit-restore-context-ptr   ; ( -- )
+      43  
+      44 +; emit-all: emit an array of bytecode values                   
+      45 +; Example: [ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] emit
+         +-all!                                                          
+      46 +[] { { emit } foldl! } def-fn! /emit-all!                      
+      47 +                                                               
+      48  ; Operator numbers (must match operator_to_int in operators.m)
+      49  0 /opPrint
+      50  1 /opEnv
+
+● Now let me rewrite vm.froth:
+
+● Read(tests/vm.froth)
+  ⎿  Read 162 lines
+
+● Write(tests/vm.froth)
+  ⎿  Added 41 lines, removed 99 lines                                    
+        2  
+        3  ; Test 1: 1 + 2 = 3
+        4  ; Address 0, size 7
+        5 -1 emit-push-int!                                              
+        6 -2 emit-push-int!                                              
+        7 -opAdd emit-op!                                                
+        8 -emit-return!                                                  
+        5 +[ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] emit-all!     
+        6  [] 0 close ! println!
+        7  
+        8  ; Test 2: 10 - 3 = 7
+        9  ; Address 7, size 7
+       13 -10 emit-push-int!                                             
+       14 -3 emit-push-int!                                              
+       15 -opSub emit-op!                                                
+       16 -emit-return!                                                  
+       10 +[ ocPushInt 10 ocPushInt 3 ocOp opSub ocReturn ] emit-all!    
+       11  [] 7 close ! println!
+       12  
+       13  ; Test 3: 6 * 7 = 42
+       14  ; Address 14, size 7
+       21 -6 emit-push-int!                                              
+       22 -7 emit-push-int!                                              
+       23 -opMul emit-op!                                                
+       24 -emit-return!                                                  
+       15 +[ ocPushInt 6 ocPushInt 7 ocOp opMul ocReturn ] emit-all!     
+       16  [] 14 close ! println!
+       17  
+       18  ; Test 4: (2 + 3) * 4 = 20
+       19  ; Address 21, size 11
+       29 -2 emit-push-int!                                              
+       30 -3 emit-push-int!                                              
+       31 -opAdd emit-op!                                                
+       32 -4 emit-push-int!                                              
+       33 -opMul emit-op!                                                
+       34 -emit-return!                                                  
+       20 +[ ocPushInt 2 ocPushInt 3 ocOp opAdd ocPushInt 4 ocOp opMul oc
+          +Return ] emit-all!                                            
+       21  [] 21 close ! println!
+       22  
+       23  ; Test 5: Just return (identity on stack)
+       24  ; Address 32, size 1
+       39 -emit-return!                                                  
+       25 +[ ocReturn ] emit-all!                                        
+       26  42 [] 32 close ! println!
+       27  
+       28  ; Test 6: pushContext - closure with captured value
+       43 -; Address 33, size 3 (push-context:2 + return:1)              
+       44 -0 emit-push-context!  ; push context slot 0                   
+       45 -emit-return!                                                  
+       29 +; Address 33, size 3                                          
+       30 +[ ocPushContext 0 ocReturn ] emit-all!                        
+       31  [ 99 ] 33 close ! println!  ; context has 99 in slot 0
+       32  
+       33  ; Test 7: popUnused - discard top of stack
+       49 -; Address 36, size 6 (push:2 + push:2 + pop-unused:1 + return:
+          -1)                                                            
+       50 -1 emit-push-int!                                              
+       51 -2 emit-push-int!                                              
+       52 -emit-pop-unused!     ; discard the 2                          
+       53 -emit-return!         ; leaves 1 on stack                      
+       34 +; Address 36, size 6                                          
+       35 +[ ocPushInt 1 ocPushInt 2 ocPopUnused ocReturn ] emit-all!    
+       36  [] 36 close ! println!
+       37  
+       38  ; Test 8: local variables with frame
+       39  ; Address 42, size 13
+       40  ; { x -> x x * } compiles to: enter 1, pop-local 0, push-local
+            0, push-local 0, mul, leave 1, return
+       59 -1 emit-enter-frame!                                           
+       60 -0 emit-pop-local!                                             
+       61 -0 emit-push-local!                                            
+       62 -0 emit-push-local!                                            
+       63 -opMul emit-op!                                                
+       64 -1 emit-leave-frame!                                           
+       65 -emit-return!                                                  
+       41 +[ ocEnterFrame 1 ocPopLocal 0 ocPushLocal 0 ocPushLocal 0 ocOp
+          + opMul ocLeaveFrame 1 ocReturn ] emit-all!                    
+       42  7 [] 42 close ! println!  ; 7 * 7 = 49
+       43  
+       44  ; Test 9: array generator [ 1 2 3 ]
+       45  ; Address 55, size 9
+       70 -emit-start-array!                                             
+       71 -1 emit-push-int!                                              
+       72 -2 emit-push-int!                                              
+       73 -3 emit-push-int!                                              
+       74 -emit-end-array!                                               
+       75 -emit-return!                                                  
+       46 +[ ocStartArray ocPushInt 1 ocPushInt 2 ocPushInt 3 ocEndArray 
+          +ocReturn ] emit-all!                                          
+       47  [] 55 close ! # println!  ; array length = 3
+       48  
+       49  ; Test 10: nested generators [ [ 1 ] [ 2 3 ] ]
+       50  ; Address 64, size 13
+       80 -emit-start-array!                                             
+       81 -  emit-start-array!                                           
+       82 -  1 emit-push-int!                                            
+       83 -  emit-end-array!                                             
+       84 -  emit-start-array!                                           
+       85 -  2 emit-push-int!                                            
+       86 -  3 emit-push-int!                                            
+       87 -  emit-end-array!                                             
+       88 -emit-end-array!                                               
+       89 -emit-return!                                                  
+       51 +[ ocStartArray                                                
+       52 +    ocStartArray ocPushInt 1 ocEndArray                       
+       53 +    ocStartArray ocPushInt 2 ocPushInt 3 ocEndArray           
+       54 +  ocEndArray ocReturn ] emit-all!                             
+       55  [] 64 close ! # println!  ; outer array length = 2
+       56  
+       57  ; Test 11: bytecode-to-bytecode call
+       58  ; Callee at address 77, size 5: adds 10 to value on stack
+       94 -10 emit-push-int!                                             
+       95 -opAdd emit-op!                                                
+       96 -emit-return!                                                  
+       59 +[ ocPushInt 10 ocOp opAdd ocReturn ] emit-all!                
+       60  
+       61  ; Caller at address 82, size 22: pushes 5, calls callee from c
+           ontext[0]
+       62  ; Uses frame to save RP and Context so they don't interfere wi
+           th arguments
+      100 -2 emit-enter-frame!          ; frame slots: 0=RP, 1=Context   
+      101 -emit-save-return-ptr!        ; push RP to stack               
+      102 -0 emit-pop-local!            ; save RP to slot 0              
+      103 -emit-save-context-ptr!       ; push Context to stack          
+      104 -1 emit-pop-local!            ; save Context to slot 1         
+      105 -5 emit-push-int!             ; argument for callee            
+      106 -0 emit-push-context!         ; get callee from context[0]     
+      107 -emit-call!                   ; call callee, returns with 15 on
+          - stack                                                        
+      108 -1 emit-push-local!           ; push saved Context             
+      109 -emit-restore-context-ptr!    ; restore Context                
+      110 -0 emit-push-local!           ; push saved RP                  
+      111 -emit-restore-return-ptr!     ; restore RP                     
+      112 -2 emit-leave-frame!          ; deallocate frame               
+      113 -emit-return!                                                  
+       63 +[ ocEnterFrame 2                                              
+       64 +  ocSaveReturnPtr ocPopLocal 0    ; save RP to slot 0         
+       65 +  ocSaveContextPtr ocPopLocal 1   ; save Context to slot 1    
+       66 +  ocPushInt 5                     ; argument for callee       
+       67 +  ocPushContext 0 ocCall          ; get callee from context[0]
+          + and call                                                     
+       68 +  ocPushLocal 1 ocRestoreContextPtr  ; restore Context        
+       69 +  ocPushLocal 0 ocRestoreReturnPtr   ; restore RP             
+       70 +  ocLeaveFrame 2 ocReturn ] emit-all!                         
+       71  
+       72  ; Create callee closure, put in caller's context, call caller
+       73  [] 77 close /callee
+     ...
+       75  
+       76  ; Test 12: nested bytecode calls (A calls B calls C)
+       77  ; C at address 104, size 5: adds 1 to value on stack
+      121 -1 emit-push-int!                                              
+      122 -opAdd emit-op!                                                
+      123 -emit-return!                                                  
+       78 +[ ocPushInt 1 ocOp opAdd ocReturn ] emit-all!                 
+       79  
+       80  ; B at address 109, size 24: adds 10, then calls C from contex
+           t[0]
+      126 -2 emit-enter-frame!                                           
+      127 -emit-save-return-ptr!                                         
+      128 -0 emit-pop-local!                                             
+      129 -emit-save-context-ptr!                                        
+      130 -1 emit-pop-local!                                             
+      131 -10 emit-push-int!            ; add 10 first                   
+      132 -opAdd emit-op!                                                
+      133 -0 emit-push-context!         ; get C from context[0]          
+      134 -emit-call!                   ; call C (adds 1)                
+      135 -1 emit-push-local!                                            
+      136 -emit-restore-context-ptr!                                     
+      137 -0 emit-push-local!                                            
+      138 -emit-restore-return-ptr!                                      
+      139 -2 emit-leave-frame!                                           
+      140 -emit-return!                                                  
+       81 +[ ocEnterFrame 2                                              
+       82 +  ocSaveReturnPtr ocPopLocal 0                                
+       83 +  ocSaveContextPtr ocPopLocal 1                               
+       84 +  ocPushInt 10 ocOp opAdd         ; add 10 first              
+       85 +  ocPushContext 0 ocCall          ; call C (adds 1)           
+       86 +  ocPushLocal 1 ocRestoreContextPtr                           
+       87 +  ocPushLocal 0 ocRestoreReturnPtr                            
+       88 +  ocLeaveFrame 2 ocReturn ] emit-all!                         
+       89  
+       90  ; A at address 133, size 22: pushes 100, calls B from context[
+           0]
+      143 -2 emit-enter-frame!                                           
+      144 -emit-save-return-ptr!                                         
+      145 -0 emit-pop-local!                                             
+      146 -emit-save-context-ptr!                                        
+      147 -1 emit-pop-local!                                             
+      148 -100 emit-push-int!           ; start with 100                 
+      149 -0 emit-push-context!         ; get B from context[0]          
+      150 -emit-call!                   ; call B (adds 10, then calls C w
+          -hich adds 1)                                                  
+      151 -1 emit-push-local!                                            
+      152 -emit-restore-context-ptr!                                     
+      153 -0 emit-push-local!                                            
+      154 -emit-restore-return-ptr!                                      
+      155 -2 emit-leave-frame!                                           
+      156 -emit-return!                                                  
+       91 +[ ocEnterFrame 2                                              
+       92 +  ocSaveReturnPtr ocPopLocal 0                                
+       93 +  ocSaveContextPtr ocPopLocal 1                               
+       94 +  ocPushInt 100                   ; start with 100            
+       95 +  ocPushContext 0 ocCall          ; call B (adds 10, then call
+          +s C which adds 1)                                             
+       96 +  ocPushLocal 1 ocRestoreContextPtr                           
+       97 +  ocPushLocal 0 ocRestoreReturnPtr                            
+       98 +  ocLeaveFrame 2 ocReturn ] emit-all!                         
+       99  
+      100  ; Create closures and call A
+      101  [] 104 close /funcC
+
+● Bash(./bin/froth tests/vm.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Runtime error in stdlib: stack underflow in '!'
+
+● Let me debug this:
+
+● Bash(./bin/froth -e '[ 1 2 3 ] { emit } foldl!')
+  ⎿  Error: Exit code 1
+     Runtime error in stdlib: stack underflow in '!'
+
+● Bash(./bin/froth -e '[ 1 2 3 ] { println } foldl!')
+  ⎿  Error: Exit code 1
+     Runtime error in stdlib: stack underflow in '!'
+
+● Bash(./bin/froth -e '1 println')
+  ⎿  Error: Exit code 1
+     Runtime error in stdlib: stack underflow in '!'
+
+● Bash(./bin/froth -e '1 print')
+  ⎿  Error: Exit code 1
+     Runtime error in stdlib: stack underflow in '!'
+
+● Bash(cat /home/mark/Documents/projects/froth/lib/bytecode.froth | head -50)
+  ⎿  ; bytecode.froth - Helper functions for bytecode generation
+     ;
+     ; NOTE: Opcode values must be kept in sync with vm.m
+     … +48 lines (ctrl+o to expand)
+
+● Bash(cat /home/mark/Documents/projects/froth/lib/stdlib.froth)
+  ⎿  ; Froth Standard Library      
+
+     "defs.froth" import
+     … +12 lines (ctrl+o to expand)
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      43  
+      44  ; emit-all: emit an array of bytecode values
+      45  ; Example: [ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] emit
+          -all!
+      46 -[] { { emit } foldl! } def-fn! /emit-all!                      
+      46 +; [] { { emit } foldl! } def-fn! /emit-all!                    
+      47  
+      48  ; Operator numbers (must match operator_to_int in operators.m)
+      49  0 /opPrint
+
+● Bash(./bin/froth -e '1 println')
+  ⎿  (No content)
+
+● The issue is something about how the nested closure is being handled. Let me try a different approach:
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      43  
+      44  ; emit-all: emit an array of bytecode values
+      45  ; Example: [ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] emit
+          -all!
+      46 -; [] { { emit } foldl! } def-fn! /emit-all!                    
+      46 +['foldl] { /arr arr { emit } foldl! } def-fn! /emit-all!       
+      47  
+      48  ; Operator numbers (must match operator_to_int in operators.m)
+      49  0 /opPrint
+
+● Bash(./bin/froth -e '1 println')
+  ⎿  Error: Exit code 1
+     Runtime error in stdlib: stack underflow in '!'
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 2 lines, removed 1 line                                       
+      43  
+      44  ; emit-all: emit an array of bytecode values
+      45  ; Example: [ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] emit
+          -all!
+      46 -['foldl] { /arr arr { emit } foldl! } def-fn! /emit-all!       
+      46 +; Defined using reduce (which uses foldl internally)           
+      47 +['reduce] { /arr nil arr { /x /acc x emit nil } reduce! pop } d
+         +ef-fn! /emit-all!                                              
+      48  
+      49  ; Operator numbers (must match operator_to_int in operators.m)
+      50  0 /opPrint
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 2 lines, removed 4 lines                                      
+      41  [] { 15 emit } def-fn! /emit-save-context-ptr      ; ( -- )
+      42  [] { 16 emit } def-fn! /emit-restore-context-ptr   ; ( -- )
+      43  
+      44 -; emit-all: emit an array of bytecode values                   
+      45 -; Example: [ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] emit
+         --all!                                                          
+      46 -; Defined using reduce (which uses foldl internally)           
+      47 -['reduce] { /arr nil arr { /x /acc x emit nil } reduce! pop } d
+         -ef-fn! /emit-all!                                              
+      44 +; emit-all: defined in tests that need it                      
+      45 +; Requires foldl from array.froth                              
+      46  
+      47  ; Operator numbers (must match operator_to_int in operators.m)
+      48  0 /opPrint
+
+● Bash(./bin/froth -e '1 println')
+  ⎿  (No content)
+
+● The stdlib loads now. Let me define emit-all! directly in the test file:
+
+● Update(tests/vm.froth)
+  ⎿  Added 3 lines                                                       
+      1  ; Test bytecode VM execution
+      2  
+      3 +; Helper to emit an array of bytecode values                    
+      4 +['foldl] { /arr arr { emit } foldl! } def-fn! /emit-all!        
+      5 +                                                                
+      6  ; Test 1: 1 + 2 = 3
+      7  ; Address 0, size 7
+      8  [ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] emit-all!
+
+● Bash(./bin/froth tests/vm.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Runtime error: stack underflow in '!'
+
+● Bash(./bin/froth -e "['foldl] { /arr arr { emit } foldl! } def-fn! /emit-all!
+      [ 0 1 0 2 1 2 2 ] emit-all!…)
+  ⎿  Error: Exit code 1
+     Runtime error: stack underflow in '!'
+  ⎿  Interrupted · What should Claude do instead?
+
+> What is going wrong? Do you want me to restore the changed files so we can
+ start again? Taking smaller steps might help. 
+
+● Yes, let's restore and take smaller steps. The issue seems to be with how foldl interacts with emit. Let me first restore the files:
+
+● Bash(git checkout -- lib/bytecode.froth tests/vm.froth)
+  ⎿ Tool use rejected with user message: I have restored the files. Please try 
+    again with a smaller change.
+
+● Let me first verify everything works:
+
+● Bash(./run_tests.sh 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● Good. Now let me debug the foldl issue step by step:
+
+● Bash(./bin/froth -e '[ 1 2 3 ] { println } foldl!')
+  ⎿  Error: Exit code 1
+     1:28: invalid token: '\'
+
+● Bash(echo '[ 1 2 3 ] { println } foldl!' | ./bin/froth /dev/stdin)
+  ⎿  Error: Exit code 1
+     1:28: invalid token: '\'
+
+● Bash(printf '%s\n' '[ 1 2 3 ] { println } foldl!' > /tmp/test.froth &&
+      ./bin/froth /tmp/test.froth)
+  ⎿  Error: Exit code 1
+     1:28: invalid token: '\'
+  ⎿  Interrupted · What should Claude do instead?
+
+> use a HERE document 
+
+● Bash(./bin/froth /dev/stdin <<'EOF'
+      [ 1 2 3 ] { println } foldl!…)
+  ⎿  (No content)
+
+● Bash(./bin/froth /dev/stdin <<'EOF'
+      [ 1 2 3 ] { emit } foldl!…)
+  ⎿  (No content)
+
+● Bash(./bin/froth /dev/stdin <<'EOF'
+      [ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] { emit } foldl!…)
+  ⎿  3
+
+● It works! The issue earlier was shell escaping, not foldl. Now let me add emit-all! to bytecode.froth:
+
+● Read(lib/bytecode.froth)
+  ⎿  Read 50 lines
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 4 lines                                                       
+      41  [] { 15 emit } def-fn! /emit-save-context-ptr      ; ( -- )
+      42  [] { 16 emit } def-fn! /emit-restore-context-ptr   ; ( -- )
+      43  
+      44 +; emit-all!: emit an array of bytecode values  ( arr -- )      
+      45 +; Example: [ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] emit
+         +-all!                                                          
+      46 +['foldl] { /arr arr { emit } foldl! } def-fn! /emit-all!       
+      47 +                                                               
+      48  ; Operator numbers (must match operator_to_int in operators.m)
+      49  0 /opPrint
+      50  1 /opEnv
+
+● Bash(./bin/froth /dev/stdin <<'EOF'
+      1 println…)
+  ⎿  Error: Exit code 1
+     Runtime error in stdlib: stack underflow in '!'
+
+● Same issue. Let me try without the nested closure:
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 2 lines, removed 1 line                                       
+      43  
+      44  ; emit-all!: emit an array of bytecode values  ( arr -- )
+      45  ; Example: [ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] emit
+          -all!
+      46 -['foldl] { /arr arr { emit } foldl! } def-fn! /emit-all!       
+      46 +{ emit } /emit-fn                                              
+      47 +['foldl 'emit-fn] { /arr arr emit-fn foldl! } def-fn! /emit-all
+         +!                                                              
+      48  
+      49  ; Operator numbers (must match operator_to_int in operators.m)
+      50  0 /opPrint
+
+● Bash(./bin/froth /dev/stdin <<'EOF'
+      1 println…)
+  ⎿  Error: Exit code 1
+     Runtime error in stdlib: stack underflow in '!'
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 8 lines, removed 2 lines                                      
+      43  
+      44  ; emit-all!: emit an array of bytecode values  ( arr -- )
+      45  ; Example: [ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] emit
+          -all!
+      46 -{ emit } /emit-fn                                              
+      47 -['foldl 'emit-fn] { /arr arr emit-fn foldl! } def-fn! /emit-all
+         -!                                                              
+      46 +[] {                                                           
+      47 +  /arr /i                                                      
+      48 +  i arr # < {                                                  
+      49 +    arr i @ emit                                               
+      50 +    arr i 1 + emit-all-impl!                                   
+      51 +  } {} ?!                                                      
+      52 +} def-fn! /emit-all-impl!                                      
+      53 +[] { 0 emit-all-impl! } def-fn! /emit-all!                     
+      54  
+      55  ; Operator numbers (must match operator_to_int in operators.m)
+      56  0 /opPrint
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      44  ; emit-all!: emit an array of bytecode values  ( arr -- )
+      45  ; Example: [ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] emit
+          -all!
+      46  [] {
+      47 -  /arr /i                                                      
+      47 +  /i /arr                                                      
+      48    i arr # < {
+      49      arr i @ emit
+      50      arr i 1 + emit-all-impl!
+      51    } {} ?!
+      52  } def-fn! /emit-all-impl!
+      53 -[] { 0 emit-all-impl! } def-fn! /emit-all!                     
+      53 +[] { /arr arr 0 emit-all-impl! } def-fn! /emit-all!            
+      54  
+      55  ; Operator numbers (must match operator_to_int in operators.m)
+      56  0 /opPrint
+
+● Bash(./bin/froth /dev/stdin <<'EOF'
+      1 println…)
+  ⎿  Error: Exit code 1
+     Runtime error in stdlib: stack underflow in '!'
+  ⎿  Interrupted · What should Claude do instead?
+
+> I think the first version ought to have worked. There must be a deeper 
+problem. Let's review our code for clarity and consistency, and see if any 
+problems become apparent. 
+
+● You're right. Let me restore bytecode.froth and examine it carefully:
+
+● Bash(git checkout -- lib/bytecode.froth)
+  ⎿ Tool use rejected with user message: I have restored the code. Please 
+    continue.
+
+● Bash(./bin/froth /dev/stdin <<'EOF'
+      1 println…)
+  ⎿  (No content)
+
+● Good. Let me examine how def-fn! and foldl work:
+
+● Bash(cat /home/mark/Documents/projects/froth/lib/defs.froth)
+  ⎿  ; lib/defs.froth                                                      
+     ; Definition utilities for creating closures with minimal environments
+     … +42 lines (ctrl+o to expand)
+
+● Bash(head -30 /home/mark/Documents/projects/froth/lib/array.froth)
+  ⎿ ; array.froth - Array utilities                                        
+
+    ; foldl: Apply a function to each element left-to-right, leaving result
+    … +29 lines (ctrl+o to expand)
+
+
+● Let me look at the actual error more carefully. Let me try adding a simpler version and see what happens:
+
+● Read(lib/bytecode.froth)
+  ⎿  Read 50 lines
+
+● Let me try a very simple test to isolate the issue:
+
+● Bash(./bin/froth /dev/stdin <<'EOF'
+      ; Test 1: Can we define a function that uses foldl?…)
+  ⎿  (No content)
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      ; Test 1: Can we define a function that uses foldl?…)
+  ⎿  Error: Exit code 1
+     Runtime error: type error: expected closure or operator, got array
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      ['foldl] { /arr arr { 1 + } foldl! } def-fn! /test1…)
+  ⎿  432
+
+● Good, that works. Now test with emit:
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      ['foldl] { /arr arr { emit } foldl! } def-fn! /emit-all…)
+  ⎿  (No content)
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      ['foldl] { /arr arr { emit } foldl! } def-fn! /emit-all…)
+  ⎿  (No content)
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      ['foldl] { /arr arr { emit } foldl! } def-fn! /emit-all…)
+  ⎿  42
+
+● This works at runtime! The issue must be specific to defining it in bytecode.froth during stdlib loading. Let me check the stdlib loading order:
+
+● Bash(cat /home/mark/Documents/projects/froth/lib/stdlib.froth)
+  ⎿  ; Froth Standard Library      
+
+     "defs.froth" import
+     … +12 lines (ctrl+o to expand)
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 8 lines                                                       
+      41  [] { 15 emit } def-fn! /emit-save-context-ptr      ; ( -- )
+      42  [] { 16 emit } def-fn! /emit-restore-context-ptr   ; ( -- )
+      43  
+      44 +; Debug: test if we get here                                   
+      45 +"bytecode.froth: before emit-all" println                      
+      46 +                                                               
+      47 +; emit-all!: emit an array of bytecode values  ( arr -- )      
+      48 +['foldl] { /arr arr { emit } foldl! } def-fn! /emit-all!       
+      49 +                                                               
+      50 +"bytecode.froth: after emit-all" println                       
+      51 +                                                               
+      52  ; Operator numbers (must match operator_to_int in operators.m)
+      53  0 /opPrint
+      54  1 /opEnv
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      "test" println…)
+  ⎿  bytecode.froth: before emit-all
+
+● So the error occurs at the emit-all! definition line. Let me check if the problem is with def-fn! or something else:
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 14 lines, removed 2 lines                                     
+      45  "bytecode.froth: before emit-all" println
+      46  
+      47  ; emit-all!: emit an array of bytecode values  ( arr -- )
+      48 -['foldl] { /arr arr { emit } foldl! } def-fn! /emit-all!       
+      48 +; Step 1: push deps                                            
+      49 +['foldl]                                                       
+      50 +"step1: deps pushed" println                                   
+      51  
+      50 -"bytecode.froth: after emit-all" println                       
+      52 +; Step 2: create closure                                       
+      53 +{ /arr arr { emit } foldl! }                                   
+      54 +"step2: closure created" println                               
+      55  
+      56 +; Step 3: call def-fn!                                         
+      57 +def-fn!                                                        
+      58 +"step3: def-fn called" println                                 
+      59 +                                                               
+      60 +; Step 4: bind                                                 
+      61 +/emit-all!                                                     
+      62 +"step4: bound" println                                         
+      63 +                                                               
+      64  ; Operator numbers (must match operator_to_int in operators.m)
+      65  0 /opPrint
+      66  1 /opEnv
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      "test" println…)
+  ⎿  Error: Exit code 1
+     Runtime error in stdlib: type error: expected array, map, or quoted 
+     function/generator, got string
+
+● The debug approach is messing up the stack. Let me try differently:
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 2 lines, removed 18 lines                                     
+      41  [] { 15 emit } def-fn! /emit-save-context-ptr      ; ( -- )
+      42  [] { 16 emit } def-fn! /emit-restore-context-ptr   ; ( -- )
+      43  
+      44 -; Debug: test if we get here                                   
+      45 -"bytecode.froth: before emit-all" println                      
+      46 -                                                               
+      44  ; emit-all!: emit an array of bytecode values  ( arr -- )
+      48 -; Step 1: push deps                                            
+      49 -['foldl]                                                       
+      50 -"step1: deps pushed" println                                   
+      45 +; Test simpler version first                                   
+      46 +[] { /arr arr { emit } foldl! } def-fn! /emit-all!             
+      47  
+      52 -; Step 2: create closure                                       
+      53 -{ /arr arr { emit } foldl! }                                   
+      54 -"step2: closure created" println                               
+      55 -                                                               
+      56 -; Step 3: call def-fn!                                         
+      57 -def-fn!                                                        
+      58 -"step3: def-fn called" println                                 
+      59 -                                                               
+      60 -; Step 4: bind                                                 
+      61 -/emit-all!                                                     
+      62 -"step4: bound" println                                         
+      63 -                                                               
+      48  ; Operator numbers (must match operator_to_int in operators.m)
+      49  0 /opPrint
+      50  1 /opEnv
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      "test" println…)
+  ⎿  Error: Exit code 1
+     Runtime error in stdlib: stack underflow in '!'
+
+● Same error with empty deps. Let me try without the nested closure:
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      42  [] { 16 emit } def-fn! /emit-restore-context-ptr   ; ( -- )
+      43  
+      44  ; emit-all!: emit an array of bytecode values  ( arr -- )
+      45 -; Test simpler version first                                   
+      46 -[] { /arr arr { emit } foldl! } def-fn! /emit-all!             
+      45 +; Test without nested closure                                  
+      46 +[] { /arr arr 0 @ emit } def-fn! /emit-all!                    
+      47  
+      48  ; Operator numbers (must match operator_to_int in operators.m)
+      49  0 /opPrint
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      "test" println…)
+  ⎿  Error: Exit code 1
+     Runtime error in stdlib: stack underflow in '!'
+
+● Still failing. Even simpler:
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      42  [] { 16 emit } def-fn! /emit-restore-context-ptr   ; ( -- )
+      43  
+      44  ; emit-all!: emit an array of bytecode values  ( arr -- )
+      45 -; Test without nested closure                                  
+      46 -[] { /arr arr 0 @ emit } def-fn! /emit-all!                    
+      45 +; Test simplest possible                                       
+      46 +[] { 42 } def-fn! /emit-all!                                   
+      47  
+      48  ; Operator numbers (must match operator_to_int in operators.m)
+      49  0 /opPrint
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      "test" println…)
+  ⎿  Error: Exit code 1
+     Runtime error in stdlib: stack underflow in '!'
+
+● Even the simplest case fails! Let me try a different name:
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      43  
+      44  ; emit-all!: emit an array of bytecode values  ( arr -- )
+      45  ; Test simplest possible
+      46 -[] { 42 } def-fn! /emit-all!                                   
+      46 +[] { 42 } def-fn! /test-fn                                     
+      47  
+      48  ; Operator numbers (must match operator_to_int in operators.m)
+      49  0 /opPrint
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      "test" println…)
+  ⎿  (No content)
+
+● The issue is the ! in the name! In Froth, emit-all! is parsed as emit-all followed by !. So /emit-all! is /emit-all then !, which tries to apply an empty stack.
+
+  Let me verify:
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      41  [] { 15 emit } def-fn! /emit-save-context-ptr      ; ( -- )
+      42  [] { 16 emit } def-fn! /emit-restore-context-ptr   ; ( -- )
+      43  
+      44 -; emit-all!: emit an array of bytecode values  ( arr -- )      
+      45 -; Test simplest possible                                       
+      46 -[] { 42 } def-fn! /test-fn                                     
+      44 +; emit-all: emit an array of bytecode values  ( arr -- )       
+      45 +; Note: call as "arr emit-all!" not "arr emit-all !"           
+      46 +['foldl] { /arr arr { emit } foldl! } def-fn! /emit-all        
+      47  
+      48  ; Operator numbers (must match operator_to_int in operators.m)
+      49  0 /opPrint
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      [ ocPushInt 42 ocReturn ] emit-all!…)
+  ⎿  (No content)
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      [ ocPushInt 42 ocReturn ] emit-all!…)
+  ⎿  42
+
+● It works. The issue was that /emit-all! was parsed as /emit-all followed by ! (the apply operator). The name should be emit-all (without !), and users call it as emit-all!.
+
+● Bash(./run_tests.sh 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● All tests pass. Now let me update vm.froth to use the new emit-all!:
+
+● Write(tests/vm.froth)
+  ⎿  Added 53 lines, removed 113 lines                                   
+        2  
+        3  ; Test 1: 1 + 2 = 3
+        4  ; Address 0, size 7
+        5 -1 emit-push-int!                                              
+        6 -2 emit-push-int!                                              
+        7 -opAdd emit-op!                                                
+        8 -emit-return!                                                  
+        9 -[] 0 close ! println!                                         
+        5 +[ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] emit-all!     
+        6 +[] 0 close ! println                                          
+        7  
+        8  ; Test 2: 10 - 3 = 7
+        9  ; Address 7, size 7
+       13 -10 emit-push-int!                                             
+       14 -3 emit-push-int!                                              
+       15 -opSub emit-op!                                                
+       16 -emit-return!                                                  
+       17 -[] 7 close ! println!                                         
+       10 +[ ocPushInt 10 ocPushInt 3 ocOp opSub ocReturn ] emit-all!    
+       11 +[] 7 close ! println                                          
+       12  
+       13  ; Test 3: 6 * 7 = 42
+       14  ; Address 14, size 7
+       21 -6 emit-push-int!                                              
+       22 -7 emit-push-int!                                              
+       23 -opMul emit-op!                                                
+       24 -emit-return!                                                  
+       25 -[] 14 close ! println!                                        
+       15 +[ ocPushInt 6 ocPushInt 7 ocOp opMul ocReturn ] emit-all!     
+       16 +[] 14 close ! println                                         
+       17  
+       18  ; Test 4: (2 + 3) * 4 = 20
+       19  ; Address 21, size 11
+       29 -2 emit-push-int!                                              
+       30 -3 emit-push-int!                                              
+       31 -opAdd emit-op!                                                
+       32 -4 emit-push-int!                                              
+       33 -opMul emit-op!                                                
+       34 -emit-return!                                                  
+       35 -[] 21 close ! println!                                        
+       20 +[ ocPushInt 2 ocPushInt 3 ocOp opAdd ocPushInt 4 ocOp opMul oc
+          +Return ] emit-all!                                            
+       21 +[] 21 close ! println                                         
+       22  
+       23  ; Test 5: Just return (identity on stack)
+       24  ; Address 32, size 1
+       39 -emit-return!                                                  
+       40 -42 [] 32 close ! println!                                     
+       25 +[ ocReturn ] emit-all!                                        
+       26 +42 [] 32 close ! println                                      
+       27  
+       28  ; Test 6: pushContext - closure with captured value
+       43 -; Address 33, size 3 (push-context:2 + return:1)              
+       44 -0 emit-push-context!  ; push context slot 0                   
+       45 -emit-return!                                                  
+       46 -[ 99 ] 33 close ! println!  ; context has 99 in slot 0        
+       29 +; Address 33, size 3                                          
+       30 +[ ocPushContext 0 ocReturn ] emit-all!                        
+       31 +[ 99 ] 33 close ! println                                     
+       32  
+       33  ; Test 7: popUnused - discard top of stack
+       49 -; Address 36, size 6 (push:2 + push:2 + pop-unused:1 + return:
+          -1)                                                            
+       50 -1 emit-push-int!                                              
+       51 -2 emit-push-int!                                              
+       52 -emit-pop-unused!     ; discard the 2                          
+       53 -emit-return!         ; leaves 1 on stack                      
+       54 -[] 36 close ! println!                                        
+       34 +; Address 36, size 6                                          
+       35 +[ ocPushInt 1 ocPushInt 2 ocPopUnused ocReturn ] emit-all!    
+       36 +[] 36 close ! println                                         
+       37  
+       38  ; Test 8: local variables with frame
+       39  ; Address 42, size 13
+       40  ; { x -> x x * } compiles to: enter 1, pop-local 0, push-local
+            0, push-local 0, mul, leave 1, return
+       59 -1 emit-enter-frame!                                           
+       60 -0 emit-pop-local!                                             
+       61 -0 emit-push-local!                                            
+       62 -0 emit-push-local!                                            
+       63 -opMul emit-op!                                                
+       64 -1 emit-leave-frame!                                           
+       65 -emit-return!                                                  
+       66 -7 [] 42 close ! println!  ; 7 * 7 = 49                        
+       41 +[ ocEnterFrame 1 ocPopLocal 0 ocPushLocal 0 ocPushLocal 0 ocOp
+          + opMul ocLeaveFrame 1 ocReturn ] emit-all!                    
+       42 +7 [] 42 close ! println                                       
+       43  
+       44  ; Test 9: array generator [ 1 2 3 ]
+       45  ; Address 55, size 9
+       70 -emit-start-array!                                             
+       71 -1 emit-push-int!                                              
+       72 -2 emit-push-int!                                              
+       73 -3 emit-push-int!                                              
+       74 -emit-end-array!                                               
+       75 -emit-return!                                                  
+       76 -[] 55 close ! # println!  ; array length = 3                  
+       46 +[ ocStartArray ocPushInt 1 ocPushInt 2 ocPushInt 3 ocEndArray 
+          +ocReturn ] emit-all!                                          
+       47 +[] 55 close ! # println                                       
+       48  
+       49  ; Test 10: nested generators [ [ 1 ] [ 2 3 ] ]
+       50  ; Address 64, size 13
+       80 -emit-start-array!                                             
+       81 -  emit-start-array!                                           
+       82 -  1 emit-push-int!                                            
+       83 -  emit-end-array!                                             
+       84 -  emit-start-array!                                           
+       85 -  2 emit-push-int!                                            
+       86 -  3 emit-push-int!                                            
+       87 -  emit-end-array!                                             
+       88 -emit-end-array!                                               
+       89 -emit-return!                                                  
+       90 -[] 64 close ! # println!  ; outer array length = 2            
+       51 +[ ocStartArray                                                
+       52 +    ocStartArray ocPushInt 1 ocEndArray                       
+       53 +    ocStartArray ocPushInt 2 ocPushInt 3 ocEndArray           
+       54 +  ocEndArray ocReturn ] emit-all!                             
+       55 +[] 64 close ! # println                                       
+       56  
+       57  ; Test 11: bytecode-to-bytecode call
+       58  ; Callee at address 77, size 5: adds 10 to value on stack
+       94 -10 emit-push-int!                                             
+       95 -opAdd emit-op!                                                
+       96 -emit-return!                                                  
+       59 +[ ocPushInt 10 ocOp opAdd ocReturn ] emit-all!                
+       60  
+       61  ; Caller at address 82, size 22: pushes 5, calls callee from c
+           ontext[0]
+       62  ; Uses frame to save RP and Context so they don't interfere wi
+           th arguments
+      100 -2 emit-enter-frame!          ; frame slots: 0=RP, 1=Context   
+      101 -emit-save-return-ptr!        ; push RP to stack               
+      102 -0 emit-pop-local!            ; save RP to slot 0              
+      103 -emit-save-context-ptr!       ; push Context to stack          
+      104 -1 emit-pop-local!            ; save Context to slot 1         
+      105 -5 emit-push-int!             ; argument for callee            
+      106 -0 emit-push-context!         ; get callee from context[0]     
+      107 -emit-call!                   ; call callee, returns with 15 on
+          - stack                                                        
+      108 -1 emit-push-local!           ; push saved Context             
+      109 -emit-restore-context-ptr!    ; restore Context                
+      110 -0 emit-push-local!           ; push saved RP                  
+      111 -emit-restore-return-ptr!     ; restore RP                     
+      112 -2 emit-leave-frame!          ; deallocate frame               
+      113 -emit-return!                                                  
+       63 +[ ocEnterFrame 2                                              
+       64 +  ocSaveReturnPtr ocPopLocal 0                                
+       65 +  ocSaveContextPtr ocPopLocal 1                               
+       66 +  ocPushInt 5                                                 
+       67 +  ocPushContext 0 ocCall                                      
+       68 +  ocPushLocal 1 ocRestoreContextPtr                           
+       69 +  ocPushLocal 0 ocRestoreReturnPtr                            
+       70 +  ocLeaveFrame 2 ocReturn ] emit-all!                         
+       71  
+      115 -; Create callee closure, put in caller's context, call caller 
+       72  [] 77 close /callee
+      117 -[ callee ] 82 close ! println!  ; should print 15 (5 + 10)    
+       73 +[ callee ] 82 close ! println                                 
+       74  
+       75  ; Test 12: nested bytecode calls (A calls B calls C)
+       76  ; C at address 104, size 5: adds 1 to value on stack
+      121 -1 emit-push-int!                                              
+      122 -opAdd emit-op!                                                
+      123 -emit-return!                                                  
+       77 +[ ocPushInt 1 ocOp opAdd ocReturn ] emit-all!                 
+       78  
+       79  ; B at address 109, size 24: adds 10, then calls C from contex
+           t[0]
+      126 -2 emit-enter-frame!                                           
+      127 -emit-save-return-ptr!                                         
+      128 -0 emit-pop-local!                                             
+      129 -emit-save-context-ptr!                                        
+      130 -1 emit-pop-local!                                             
+      131 -10 emit-push-int!            ; add 10 first                   
+      132 -opAdd emit-op!                                                
+      133 -0 emit-push-context!         ; get C from context[0]          
+      134 -emit-call!                   ; call C (adds 1)                
+      135 -1 emit-push-local!                                            
+      136 -emit-restore-context-ptr!                                     
+      137 -0 emit-push-local!                                            
+      138 -emit-restore-return-ptr!                                      
+      139 -2 emit-leave-frame!                                           
+      140 -emit-return!                                                  
+       80 +[ ocEnterFrame 2                                              
+       81 +  ocSaveReturnPtr ocPopLocal 0                                
+       82 +  ocSaveContextPtr ocPopLocal 1                               
+       83 +  ocPushInt 10 ocOp opAdd                                     
+       84 +  ocPushContext 0 ocCall                                      
+       85 +  ocPushLocal 1 ocRestoreContextPtr                           
+       86 +  ocPushLocal 0 ocRestoreReturnPtr                            
+       87 +  ocLeaveFrame 2 ocReturn ] emit-all!                         
+       88  
+       89  ; A at address 133, size 22: pushes 100, calls B from context[
+           0]
+      143 -2 emit-enter-frame!                                           
+      144 -emit-save-return-ptr!                                         
+      145 -0 emit-pop-local!                                             
+      146 -emit-save-context-ptr!                                        
+      147 -1 emit-pop-local!                                             
+      148 -100 emit-push-int!           ; start with 100                 
+      149 -0 emit-push-context!         ; get B from context[0]          
+      150 -emit-call!                   ; call B (adds 10, then calls C w
+          -hich adds 1)                                                  
+      151 -1 emit-push-local!                                            
+      152 -emit-restore-context-ptr!                                     
+      153 -0 emit-push-local!                                            
+      154 -emit-restore-return-ptr!                                      
+      155 -2 emit-leave-frame!                                           
+      156 -emit-return!                                                  
+       90 +[ ocEnterFrame 2                                              
+       91 +  ocSaveReturnPtr ocPopLocal 0                                
+       92 +  ocSaveContextPtr ocPopLocal 1                               
+       93 +  ocPushInt 100                                               
+       94 +  ocPushContext 0 ocCall                                      
+       95 +  ocPushLocal 1 ocRestoreContextPtr                           
+       96 +  ocPushLocal 0 ocRestoreReturnPtr                            
+       97 +  ocLeaveFrame 2 ocReturn ] emit-all!                         
+       98  
+      158 -; Create closures and call A                                  
+       99  [] 104 close /funcC
+      100  [ funcC ] 109 close /funcB
+      161 -[ funcB ] 133 close ! println!  ; should print 111 (100 + 10 +
+          - 1)                                                           
+      101 +[ funcB ] 133 close ! println                                 
+
+● Bash(./bin/froth tests/vm.froth 2>&1)
+  ⎿  (No content)
+
+● Bash(./run_tests.sh 2>&1 | grep -A5 "vm")
+  ⎿  FAIL: vm                     
+     PASS: write
+     … +8 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/vm.froth 2>&1; echo "---end---")
+  ⎿  ---end---
+
+● Bash(./bin/froth /dev/stdin 2>&1 <<'EOF'
+      "start" println…)
+  ⎿  (No content)
+
+● Bash(echo '"hello" println' | ./bin/froth /dev/stdin)
+  ⎿  (No content)
+
+● Bash(./bin/froth -e "42 print")
+  ⎿  42
+
+● Bash(cat > /tmp/test.froth << 'EOF'
+      "hello" println…)
+  ⎿  Interrupted · What should Claude do instead?
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀   claude-opus-4-5-20251101 · 193k/200k tokens (97%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 74 tokens (0.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 130.4k tokens (65.2%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 7k (3.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 19 tokens
+     └ MERCURY.md: 55 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
