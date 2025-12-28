@@ -69,7 +69,8 @@
     ;       op_close        % close       ( env body -- closure )
     ;       op_closure_env  % closureEnv  ( closure -- env )
     ;       op_closure_body % closureBody ( closure -- body )
-    ;       op_is_closure.  % isClosure   ( a -- int )
+    ;       op_is_closure   % isClosure   ( a -- int )
+    ;       op_emit.        % emit        ( int -- )
 
 :- type operator_info
     --->    operator_info(
@@ -117,7 +118,8 @@
     ;       termval(term)
     ;       nilval
     ;       consval(value, value)   % cons(head, tail)
-    ;       closureval(env, list(term)).  % closure(env, body)
+    ;       closureval(env, list(term))   % closure(env, body)
+    ;       bytecodeval(array(value), int).  % bytecode closure(context, code_addr)
 
 :- type term
     --->    identifier(string_id)
@@ -235,6 +237,7 @@ value_type_name(termval(_)) = "term".
 value_type_name(nilval) = "nil".
 value_type_name(consval(_, _)) = "cons".
 value_type_name(closureval(_, _)) = "closure".
+value_type_name(bytecodeval(_, _)) = "bytecode".
 
 %-----------------------------------------------------------------------%
 :- end_module types.

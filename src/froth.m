@@ -16,6 +16,7 @@
 
 :- import_module array.
 :- import_module bool.
+:- import_module bytecode.
 :- import_module datastack.
 :- import_module dir.
 :- import_module eval.
@@ -129,7 +130,7 @@ get_stdlib_path(StdlibPath, !IO) :-
                      dir.make_path_name("lib", "stdlib.froth")).
 
 :- type init_result
-    --->    init_ok(operator_table, string_table, env)
+    --->    init_ok(operator_table, string_table, array(int), int, env)
     ;       init_error.
 
 :- pred init_with_stdlib(init_result::out, io::di, io::uo) is cc_multi.
@@ -141,8 +142,8 @@ init_with_stdlib(Result, !IO) :-
         AccessResult = ok,
         eval_stdlib(StdlibPath, EvalResult, !IO),
         (
-            EvalResult = stdlib_ok(OpTable, ST, Env),
-            Result = init_ok(OpTable, ST, Env)
+            EvalResult = stdlib_ok(OpTable, ST, BC, BCSz, Env),
+            Result = init_ok(OpTable, ST, BC, BCSz, Env)
         ;
             EvalResult = stdlib_error,
             Result = init_error
@@ -151,18 +152,20 @@ init_with_stdlib(Result, !IO) :-
         AccessResult = error(_),
         % Stdlib not found, initialize without it
         init_tables(ST, OpTable),
-        Result = init_ok(OpTable, ST, map.init)
+        bytecode.init(BC, BCSz),
+        Result = init_ok(OpTable, ST, BC, BCSz, map.init)
     ).
 
 :- pred init_without_stdlib(operator_table::out, string_table::out,
-    env::out) is det.
+    array(int)::array_uo, int::out, env::out) is det.
 
-init_without_stdlib(OpTable, ST, Env) :-
+init_without_stdlib(OpTable, ST, BC, BCSz, Env) :-
     init_tables(ST, OpTable),
+    bytecode.init(BC, BCSz),
     Env = map.init.
 
 :- type stdlib_result
-    --->    stdlib_ok(operator_table, string_table, env)
+    --->    stdlib_ok(operator_table, string_table, array(int), int, env)
     ;       stdlib_error.
 
 :- pred eval_stdlib(string::in, stdlib_result::out, io::di, io::uo) is cc_multi.
@@ -173,6 +176,7 @@ eval_stdlib(StdlibPath, Result, !IO) :-
     (
         ReadResult = ok(Content),
         init_tables(ST0, OpTable),
+        bytecode.init(BC0, BCSz0),
         lexer.tokenize(Content, ST0, LexResult),
         (
             LexResult = ok(Tokens, ST1),
@@ -180,11 +184,11 @@ eval_stdlib(StdlibPath, Result, !IO) :-
             (
                 ParseResult = ok(Terms),
                 datastack.init(Array0, Ptr0),
-                try_io(eval_terms_wrapper(OpTable, LibDir, ST1, Terms,
-                    map.init, Array0, Ptr0), EvalResult, !IO),
+                try_io(eval_terms_wrapper(OpTable, LibDir, ST1, BC0, BCSz0,
+                    Terms, map.init, Array0, Ptr0), EvalResult, !IO),
                 (
-                    EvalResult = succeeded({ST, Env, _Array, _Ptr}),
-                    Result = stdlib_ok(OpTable, ST, Env)
+                    EvalResult = succeeded({ST, BC, BCSz, Env, _Array, _Ptr}),
+                    Result = stdlib_ok(OpTable, ST, BC, BCSz, Env)
                 ;
                     EvalResult = exception(Exn),
                     ( if univ_to_type(Exn, EvalError) then
@@ -239,15 +243,15 @@ main(!IO) :-
 run_with_options(Opts, !IO) :-
     % Initialize state
     ( if Opts ^ opt_no_stdlib = yes then
-        init_without_stdlib(OpTable, ST0, Env0),
+        init_without_stdlib(OpTable, ST0, BC0, BCSz0, Env0),
         datastack.init(Array0, Ptr0),
-        run_actions(Opts, OpTable, ST0, Env0, Array0, Ptr0, !IO)
+        run_actions(Opts, OpTable, ST0, BC0, BCSz0, Env0, Array0, Ptr0, !IO)
     else
         init_with_stdlib(InitResult, !IO),
         (
-            InitResult = init_ok(OpTable, ST0, Env0),
+            InitResult = init_ok(OpTable, ST0, BC0, BCSz0, Env0),
             datastack.init(Array0, Ptr0),
-            run_actions(Opts, OpTable, ST0, Env0, Array0, Ptr0, !IO)
+            run_actions(Opts, OpTable, ST0, BC0, BCSz0, Env0, Array0, Ptr0, !IO)
         ;
             InitResult = init_error,
             io.set_exit_status(1, !IO)
@@ -259,23 +263,23 @@ run_with_options(Opts, !IO) :-
 %-----------------------------------------------------------------------%
 
 :- pred run_actions(options::in, operator_table::in,
-    string_table::in, env::in,
+    string_table::in, array(int)::array_di, int::in, env::in,
     array(value)::array_di, int::in, io::di, io::uo) is cc_multi.
 
-run_actions(Opts, OpTable, ST0, Env0, Array0, Ptr0, !IO) :-
+run_actions(Opts, OpTable, ST0, BC0, BCSz0, Env0, Array0, Ptr0, !IO) :-
     Actions = Opts ^ opt_actions,
     (
         Actions = [],
         % No actions: start REPL
-        start_repl(Opts, OpTable, ST0, Env0, Array0, Ptr0, !IO)
+        start_repl(Opts, OpTable, ST0, BC0, BCSz0, Env0, Array0, Ptr0, !IO)
     ;
         Actions = [_ | _],
-        execute_actions(Actions, OpTable, ST0, ST, Env0, Env, Array0, Array,
-            Ptr0, Ptr, yes, Success, !IO),
+        execute_actions(Actions, OpTable, ST0, ST, BC0, BC, BCSz0, BCSz,
+            Env0, Env, Array0, Array, Ptr0, Ptr, yes, Success, !IO),
         (
             Success = yes,
             ( if Opts ^ opt_interactive = yes then
-                start_repl(Opts, OpTable, ST, Env, Array, Ptr, !IO)
+                start_repl(Opts, OpTable, ST, BC, BCSz, Env, Array, Ptr, !IO)
             else
                 true
             )
@@ -287,13 +291,15 @@ run_actions(Opts, OpTable, ST0, Env0, Array0, Ptr0, !IO) :-
 
 :- pred execute_actions(list(action)::in, operator_table::in,
     string_table::in, string_table::out,
+    array(int)::array_di, array(int)::array_uo,
+    int::in, int::out,
     env::in, env::out,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out,
     bool::in, bool::out, io::di, io::uo) is cc_multi.
 
-execute_actions([], _, !ST, !Env, !Array, !Ptr, !Success, !IO).
-execute_actions([Action | Rest], OpTable, !ST, !Env, !Array, !Ptr, !Success, !IO) :-
+execute_actions([], _, !ST, !BC, !BCSz, !Env, !Array, !Ptr, !Success, !IO).
+execute_actions([Action | Rest], OpTable, !ST, !BC, !BCSz, !Env, !Array, !Ptr, !Success, !IO) :-
     (
         !.Success = no
         % Skip remaining actions if we already failed
@@ -301,23 +307,25 @@ execute_actions([Action | Rest], OpTable, !ST, !Env, !Array, !Ptr, !Success, !IO
         !.Success = yes,
         (
             Action = exec_code(Code),
-            execute_code(OpTable, Code, !ST, !Env, !Array, !Ptr, !Success, !IO)
+            execute_code(OpTable, Code, !ST, !BC, !BCSz, !Env, !Array, !Ptr, !Success, !IO)
         ;
             Action = exec_file(File),
-            execute_file(OpTable, File, !ST, !Env, !Array, !Ptr, !Success, !IO)
+            execute_file(OpTable, File, !ST, !BC, !BCSz, !Env, !Array, !Ptr, !Success, !IO)
         ),
-        execute_actions(Rest, OpTable, !ST, !Env, !Array, !Ptr, !Success, !IO)
+        execute_actions(Rest, OpTable, !ST, !BC, !BCSz, !Env, !Array, !Ptr, !Success, !IO)
     ).
 
 :- pred execute_code(operator_table::in, string::in,
     string_table::in, string_table::out,
+    array(int)::array_di, array(int)::array_uo,
+    int::in, int::out,
     env::in, env::out,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out,
     bool::in, bool::out, io::di, io::uo) is cc_multi.
 
-execute_code(OpTable, Code, ST0, ST, Env0, Env, Array0, Array, Ptr0, Ptr,
-        _, Success, !IO) :-
+execute_code(OpTable, Code, ST0, ST, BC0, BC, BCSz0, BCSz, Env0, Env,
+        Array0, Array, Ptr0, Ptr, _, Success, !IO) :-
     lexer.tokenize(Code, ST0, LexResult),
     (
         LexResult = ok(Tokens, ST1),
@@ -325,10 +333,10 @@ execute_code(OpTable, Code, ST0, ST, Env0, Env, Array0, Array, Ptr0, Ptr,
         (
             ParseResult = ok(Terms),
             % Use "." as BaseDir for code strings (current directory)
-            try_io(eval_terms_wrapper(OpTable, ".", ST1, Terms, Env0,
-                Array0, Ptr0), EvalResult, !IO),
+            try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, BCSz0, Terms,
+                Env0, Array0, Ptr0), EvalResult, !IO),
             (
-                EvalResult = succeeded({ST, Env, Array, Ptr}),
+                EvalResult = succeeded({ST, BC, BCSz, Env, Array, Ptr}),
                 Success = yes
             ;
                 EvalResult = exception(Exn),
@@ -336,6 +344,7 @@ execute_code(OpTable, Code, ST0, ST, Env0, Env, Array0, Array, Ptr0, Ptr,
                     io.format("Runtime error: %s\n",
                         [s(types.format_error(ST1, EvalError))], !IO),
                     ST = ST1, Env = Env0,
+                    bytecode.init(BC, BCSz),
                     datastack.init(Array, Ptr),
                     Success = no
                 else
@@ -345,25 +354,29 @@ execute_code(OpTable, Code, ST0, ST, Env0, Env, Array0, Array, Ptr0, Ptr,
         ;
             ParseResult = error(ParseError),
             report_parse_error(ParseError, !IO),
-            ST = ST1, Env = Env0, Array = Array0, Ptr = Ptr0,
+            ST = ST1, Env = Env0,
+            BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = Ptr0,
             Success = no
         )
     ;
         LexResult = error(LexError),
         report_lex_error(LexError, !IO),
-        ST = ST0, Env = Env0, Array = Array0, Ptr = Ptr0,
+        ST = ST0, Env = Env0,
+        BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = Ptr0,
         Success = no
     ).
 
 :- pred execute_file(operator_table::in, string::in,
     string_table::in, string_table::out,
+    array(int)::array_di, array(int)::array_uo,
+    int::in, int::out,
     env::in, env::out,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out,
     bool::in, bool::out, io::di, io::uo) is cc_multi.
 
-execute_file(OpTable, Filename, ST0, ST, Env0, Env, Array0, Array, Ptr0, Ptr,
-        _, Success, !IO) :-
+execute_file(OpTable, Filename, ST0, ST, BC0, BC, BCSz0, BCSz, Env0, Env,
+        Array0, Array, Ptr0, Ptr, _, Success, !IO) :-
     io.read_named_file_as_string(Filename, ReadResult, !IO),
     (
         ReadResult = ok(Content),
@@ -374,10 +387,10 @@ execute_file(OpTable, Filename, ST0, ST, Env0, Env, Array0, Array, Ptr0, Ptr,
             parser.parse(Tokens, ParseResult),
             (
                 ParseResult = ok(Terms),
-                try_io(eval_terms_wrapper(OpTable, BaseDir, ST1, Terms, Env0,
-                    Array0, Ptr0), EvalResult, !IO),
+                try_io(eval_terms_wrapper(OpTable, BaseDir, ST1, BC0, BCSz0,
+                    Terms, Env0, Array0, Ptr0), EvalResult, !IO),
                 (
-                    EvalResult = succeeded({ST, Env, Array, Ptr}),
+                    EvalResult = succeeded({ST, BC, BCSz, Env, Array, Ptr}),
                     Success = yes
                 ;
                     EvalResult = exception(Exn),
@@ -385,6 +398,7 @@ execute_file(OpTable, Filename, ST0, ST, Env0, Env, Array0, Array, Ptr0, Ptr,
                         io.format("Runtime error: %s\n",
                             [s(types.format_error(ST1, EvalError))], !IO),
                         ST = ST1, Env = Env0,
+                        bytecode.init(BC, BCSz),
                         datastack.init(Array, Ptr),
                         Success = no
                     else
@@ -394,20 +408,23 @@ execute_file(OpTable, Filename, ST0, ST, Env0, Env, Array0, Array, Ptr0, Ptr,
             ;
                 ParseResult = error(ParseError),
                 report_parse_error(ParseError, !IO),
-                ST = ST1, Env = Env0, Array = Array0, Ptr = Ptr0,
+                ST = ST1, Env = Env0,
+                BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = Ptr0,
                 Success = no
             )
         ;
             LexResult = error(LexError),
             report_lex_error(LexError, !IO),
-            ST = ST0, Env = Env0, Array = Array0, Ptr = Ptr0,
+            ST = ST0, Env = Env0,
+            BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = Ptr0,
             Success = no
         )
     ;
         ReadResult = error(Error),
         io.format("Error reading '%s': %s\n",
             [s(Filename), s(io.error_message(Error))], !IO),
-        ST = ST0, Env = Env0, Array = Array0, Ptr = Ptr0,
+        ST = ST0, Env = Env0,
+        BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = Ptr0,
         Success = no
     ).
 
@@ -416,28 +433,30 @@ execute_file(OpTable, Filename, ST0, ST, Env0, Env, Array0, Array, Ptr0, Ptr,
 %-----------------------------------------------------------------------%
 
 :- pred start_repl(options::in, operator_table::in, string_table::in,
-    env::in, array(value)::array_di, int::in, io::di, io::uo) is cc_multi.
+    array(int)::array_di, int::in, env::in, array(value)::array_di, int::in,
+    io::di, io::uo) is cc_multi.
 
-start_repl(Opts, OpTable, ST, Env, Array, Ptr, !IO) :-
+start_repl(Opts, OpTable, ST, BC, BCSz, Env, Array, Ptr, !IO) :-
     ( if Opts ^ opt_quiet = no then
         io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO)
     else
         true
     ),
-    repl_loop(OpTable, ST, Env, Array, Ptr, !IO).
+    repl_loop(OpTable, ST, BC, BCSz, Env, Array, Ptr, !IO).
 
-:- pred repl_loop(operator_table::in, string_table::in, env::in,
+:- pred repl_loop(operator_table::in, string_table::in,
+    array(int)::array_di, int::in, env::in,
     array(value)::array_di, int::in, io::di, io::uo) is cc_multi.
 
-repl_loop(OpTable, ST0, Env0, Array0, Ptr0, !IO) :-
+repl_loop(OpTable, ST0, BC0, BCSz0, Env0, Array0, Ptr0, !IO) :-
     io.write_string("> ", !IO),
     io.flush_output(!IO),
     io.read_line_as_string(ReadResult, !IO),
     (
         ReadResult = ok(Line),
-        repl_eval(OpTable, Line, ST0, ST, Env0, Env, Array0, Array, Ptr0, Ptr,
-            !IO),
-        repl_loop(OpTable, ST, Env, Array, Ptr, !IO)
+        repl_eval(OpTable, Line, ST0, ST, BC0, BC, BCSz0, BCSz, Env0, Env,
+            Array0, Array, Ptr0, Ptr, !IO),
+        repl_loop(OpTable, ST, BC, BCSz, Env, Array, Ptr, !IO)
     ;
         ReadResult = eof,
         io.nl(!IO)
@@ -450,27 +469,31 @@ repl_loop(OpTable, ST0, Env0, Array0, Ptr0, !IO) :-
 
 :- pred repl_eval(operator_table::in, string::in,
     string_table::in, string_table::out,
+    array(int)::array_di, array(int)::array_uo,
+    int::in, int::out,
     env::in, env::out,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out, io::di, io::uo) is cc_multi.
 
-repl_eval(OpTable, Input, ST0, ST, Env0, Env, Array0, Array, Ptr0, Ptr, !IO) :-
+repl_eval(OpTable, Input, ST0, ST, BC0, BC, BCSz0, BCSz, Env0, Env,
+        Array0, Array, Ptr0, Ptr, !IO) :-
     lexer.tokenize(Input, ST0, LexResult),
     (
         LexResult = ok(Tokens, ST1),
         parser.parse(Tokens, ParseResult),
         (
             ParseResult = ok(Terms),
-            try_io(eval_terms_wrapper(OpTable, ".", ST1, Terms, Env0,
-                Array0, Ptr0), Result, !IO),
+            try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, BCSz0, Terms,
+                Env0, Array0, Ptr0), Result, !IO),
             (
-                Result = succeeded({ST, Env, Array, Ptr})
+                Result = succeeded({ST, BC, BCSz, Env, Array, Ptr})
             ;
                 Result = exception(Exn),
                 ( if univ_to_type(Exn, EvalError) then
                     io.format("Runtime error: %s\n",
                         [s(types.format_error(ST1, EvalError))], !IO),
                     ST = ST1, Env = Env0,
+                    bytecode.init(BC, BCSz),
                     datastack.init(Array, Ptr)
                 else
                     rethrow(Result)
@@ -479,12 +502,14 @@ repl_eval(OpTable, Input, ST0, ST, Env0, Env, Array0, Array, Ptr0, Ptr, !IO) :-
         ;
             ParseResult = error(ParseError),
             report_parse_error(ParseError, !IO),
-            ST = ST1, Env = Env0, Array = Array0, Ptr = Ptr0
+            ST = ST1, Env = Env0,
+            BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = Ptr0
         )
     ;
         LexResult = error(LexError),
         report_lex_error(LexError, !IO),
-        ST = ST0, Env = Env0, Array = Array0, Ptr = Ptr0
+        ST = ST0, Env = Env0,
+        BC = BC0, BCSz = BCSz0, Array = Array0, Ptr = Ptr0
     ).
 
 %-----------------------------------------------------------------------%
@@ -513,14 +538,15 @@ print_usage(!IO) :-
 %-----------------------------------------------------------------------%
 
 :- pred eval_terms_wrapper(operator_table::in, string::in, string_table::in,
-    list(term)::in, env::in, array(value)::array_di, int::in,
-    {string_table, env, array(value), int}::out,
+    array(int)::array_di, int::in, list(term)::in, env::in,
+    array(value)::array_di, int::in,
+    {string_table, array(int), int, env, array(value), int}::out,
     io::di, io::uo) is det.
 
-eval_terms_wrapper(OpTable, BaseDir, ST0, Terms, Env0, Array0, Ptr0,
-        {ST, Env, Array, Ptr}, !IO) :-
+eval_terms_wrapper(OpTable, BaseDir, ST0, BC0, BCSz0, Terms, Env0, Array0, Ptr0,
+        {ST, BC, BCSz, Env, Array, Ptr}, !IO) :-
     eval.eval_terms(OpTable, BaseDir, Terms, Env0, Env, Array0, Array,
-        Ptr0, Ptr, ST0, ST, !IO).
+        Ptr0, Ptr, ST0, ST, BC0, BC, BCSz0, BCSz, !IO).
 
 %-----------------------------------------------------------------------%
 % Error reporting

@@ -217,6 +217,7 @@ operator("close", op_close).
 operator("closureEnv", op_closure_env).
 operator("closureBody", op_closure_body).
 operator("isClosure", op_is_closure).
+operator("emit", op_emit).
 
 %-----------------------------------------------------------------------%
 % Operator arity (number of values popped from stack)
@@ -276,6 +277,7 @@ operator_arity(op_close) = 2.
 operator_arity(op_closure_env) = 1.
 operator_arity(op_closure_body) = 1.
 operator_arity(op_is_closure) = 1.
+operator_arity(op_emit) = 1.
 
 %-----------------------------------------------------------------------%
 % init_operators: intern all operator names and build the operator table
@@ -295,7 +297,8 @@ init_operators(!ST, OpTable) :-
         "isValue", "unwrap", "intern",
         "idToString", "idToIdent", "idToBinder", "isOperator", "arity",
         "stack", "import", "time", "restore",
-        "close", "closureEnv", "closureBody", "isClosure"
+        "close", "closureEnv", "closureBody", "isClosure",
+        "emit"
     ],
     list.foldl2(intern_operator, OpNames, map.init, OpTable, !ST).
 
@@ -474,6 +477,10 @@ eval_operator(OpTable, ST, Op, Env, !Array, !Ptr, !IO) :-
     ;
         Op = op_is_closure,
         operator_is_closure(!Array, !Ptr)
+    ;
+        Op = op_emit,
+        % emit is handled specially in eval.m, should not reach here
+        unexpected($pred, "emit should be handled in eval.m")
     ).
 
 %-----------------------------------------------------------------------%
@@ -501,6 +508,8 @@ value_to_string(ST, consval(H, T)) =
     "(" ++ value_to_string(ST, H) ++ "," ++ value_to_string(ST, T) ++ ")".
 value_to_string(ST, closureval(_, Body)) =
     "<closure:" ++ terms_to_string(ST, Body) ++ ">".
+value_to_string(_, bytecodeval(_, Addr)) =
+    "<bytecode:" ++ int_to_string(Addr) ++ ">".
 
 :- func term_to_string(string_table, term) = string.
 
@@ -872,6 +881,8 @@ value_to_write_string(ST, consval(H, T)) =
     value_to_write_string(ST, T) ++ " " ++ value_to_write_string(ST, H) ++ " ,".
 value_to_write_string(ST, closureval(_, Body)) =
     "<closure:{ " ++ terms_to_write_string(ST, Body) ++ "}>".
+value_to_write_string(_, bytecodeval(_, Addr)) =
+    "<bytecode:" ++ int_to_string(Addr) ++ ">".
 
 :- pred map_entry_to_string(string_table::in, string_id::in, value::in,
     string::in, string::out) is det.
@@ -1197,18 +1208,26 @@ operator_time(!Array, !Ptr, !IO) :-
     datastack.push(intval(Ticks), !Array, !Ptr).
 
 %-----------------------------------------------------------------------%
-% close: ( env body -- closure ) Create a closure from env and body
+% close: Create a closure
+%   ( env body -- closure )     map + function -> term closure
+%   ( context addr -- bytecode ) array + int -> bytecode closure
 %-----------------------------------------------------------------------%
 
 operator_close(!Array, !Ptr) :-
-    datastack.pop("close", BodyVal, !Array, !Ptr),
-    datastack.pop("close", EnvVal, !Array, !Ptr),
-    ( if EnvVal = mapval(Env), BodyVal = termval(function(Body)) then
+    datastack.pop("close", Second, !Array, !Ptr),
+    datastack.pop("close", First, !Array, !Ptr),
+    ( if First = mapval(Env), Second = termval(function(Body)) then
+        % Term closure: map + function -> closureval
         datastack.push(closureval(Env, Body), !Array, !Ptr)
-    else if EnvVal = mapval(_) then
-        throw(type_error("function", BodyVal))
+    else if First = arrayval(Context), Second = intval(CodeAddr) then
+        % Bytecode closure: array + int -> bytecodeval
+        datastack.push(bytecodeval(Context, CodeAddr), !Array, !Ptr)
+    else if First = mapval(_) then
+        throw(type_error("function", Second))
+    else if First = arrayval(_) then
+        throw(type_error("int", Second))
     else
-        throw(type_error("map", EnvVal))
+        throw(type_error("map or array", First))
     ).
 
 %-----------------------------------------------------------------------%
