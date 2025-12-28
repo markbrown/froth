@@ -205,10 +205,11 @@ eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
     else if V = bytecodeval(Context, CodeAddr) then
         % Execute bytecode closure via VM
         % Note: bytecode array is read-only during VM execution
+        % RP=-1 means return to eval_apply (sentinel value)
         % FP starts at top of stack array (frame grows downward)
         % GenStack starts empty (no active generators)
         FP = array.size(!.Array),
-        vm.run(!.BC, CodeAddr, Context, OpTable, !.ST, Env, !Array, !Ptr, FP, [], !IO)
+        vm.run(!.BC, CodeAddr, -1, _, Context, _, OpTable, !.ST, Env, !Array, !Ptr, FP, [], !IO)
     else if V = termval(identifier(Id)), map.search(OpTable, Id, Info) then
         ( if Info ^ oi_operator = op_import then
             % import is special: it can modify Env (but we discard here like closures)
