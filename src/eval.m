@@ -163,37 +163,10 @@ eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !IO) :-
     % Evaluate generator terms (they push values onto the stack)
     eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !IO),
     % Extract values pushed by the generator as an array
-    extract_range(!.Array, SavedPtr, !.Ptr, ResultArray),
+    datastack.extract_range(!.Array, SavedPtr, !.Ptr, ResultArray),
     % Restore stack pointer and push the result array
     !:Ptr = SavedPtr,
     datastack.push(arrayval(ResultArray), !Array, !Ptr).
-
-    % extract_range(Array, Start, End, Result):
-    % Extract values from Array[Start..End-1] into a new array.
-    %
-:- pred extract_range(array(value)::in, int::in, int::in,
-    array(value)::out) is det.
-
-extract_range(SrcArray, Start, End, Result) :-
-    Len = End - Start,
-    ( if Len =< 0 then
-        Result = array.init(0, nilval)
-    else
-        Result0 = array.init(Len, nilval),
-        extract_range_loop(SrcArray, Start, 0, Len, Result0, Result)
-    ).
-
-:- pred extract_range_loop(array(value)::in, int::in, int::in, int::in,
-    array(value)::array_di, array(value)::array_uo) is det.
-
-extract_range_loop(Src, SrcIdx, DstIdx, Len, !Dst) :-
-    ( if DstIdx >= Len then
-        true
-    else
-        array.lookup(Src, SrcIdx, Value),
-        array.set(DstIdx, Value, !Dst),
-        extract_range_loop(Src, SrcIdx + 1, DstIdx + 1, Len, !Dst)
-    ).
 
 %-----------------------------------------------------------------------%
 % apply (!)
