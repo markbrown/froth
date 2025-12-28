@@ -147,6 +147,21 @@
     %
 :- func value_to_string(string_table, value) = string.
 
+    % operator_to_int(Op) = Int:
+    % Convert an operator to its integer representation for bytecode.
+    %
+:- func operator_to_int(operator) = int.
+
+    % int_to_operator(Int) = Op:
+    % Convert an integer to an operator. Fails if out of range.
+    %
+:- pred int_to_operator(int::in, operator::out) is semidet.
+
+    % num_operators:
+    % The total number of operators.
+    %
+:- func num_operators = int.
+
 %-----------------------------------------------------------------------%
 
 :- implementation.
@@ -278,6 +293,121 @@ operator_arity(op_closure_env) = 1.
 operator_arity(op_closure_body) = 1.
 operator_arity(op_is_closure) = 1.
 operator_arity(op_emit) = 1.
+
+%-----------------------------------------------------------------------%
+% Operator to/from integer conversion for bytecode
+% NOTE: These numbers must be kept in sync with lib/bytecode.froth
+%-----------------------------------------------------------------------%
+
+num_operators = 53.
+
+operator_to_int(op_print) = 0.
+operator_to_int(op_env) = 1.
+operator_to_int(op_add) = 2.
+operator_to_int(op_sub) = 3.
+operator_to_int(op_mul) = 4.
+operator_to_int(op_gt) = 5.
+operator_to_int(op_lt) = 6.
+operator_to_int(op_gte) = 7.
+operator_to_int(op_lte) = 8.
+operator_to_int(op_get) = 9.
+operator_to_int(op_length) = 10.
+operator_to_int(op_eq) = 11.
+operator_to_int(op_ite) = 12.
+operator_to_int(op_nil) = 13.
+operator_to_int(op_cons) = 14.
+operator_to_int(op_fst) = 15.
+operator_to_int(op_snd) = 16.
+operator_to_int(op_write) = 17.
+operator_to_int(op_fwrite) = 18.
+operator_to_int(op_empty) = 19.
+operator_to_int(op_keys) = 20.
+operator_to_int(op_store) = 21.
+operator_to_int(op_in) = 22.
+operator_to_int(op_delete) = 23.
+operator_to_int(op_is_int) = 24.
+operator_to_int(op_is_string) = 25.
+operator_to_int(op_is_array) = 26.
+operator_to_int(op_is_map) = 27.
+operator_to_int(op_is_nil) = 28.
+operator_to_int(op_is_cons) = 29.
+operator_to_int(op_is_ident) = 30.
+operator_to_int(op_is_binder) = 31.
+operator_to_int(op_is_func) = 32.
+operator_to_int(op_is_gen) = 33.
+operator_to_int(op_is_quote) = 34.
+operator_to_int(op_is_apply) = 35.
+operator_to_int(op_is_value) = 36.
+operator_to_int(op_unwrap) = 37.
+operator_to_int(op_intern) = 38.
+operator_to_int(op_id_to_string) = 39.
+operator_to_int(op_id_to_ident) = 40.
+operator_to_int(op_id_to_binder) = 41.
+operator_to_int(op_is_operator) = 42.
+operator_to_int(op_arity) = 43.
+operator_to_int(op_stack) = 44.
+operator_to_int(op_import) = 45.
+operator_to_int(op_time) = 46.
+operator_to_int(op_restore) = 47.
+operator_to_int(op_close) = 48.
+operator_to_int(op_closure_env) = 49.
+operator_to_int(op_closure_body) = 50.
+operator_to_int(op_is_closure) = 51.
+operator_to_int(op_emit) = 52.
+
+int_to_operator(0, op_print).
+int_to_operator(1, op_env).
+int_to_operator(2, op_add).
+int_to_operator(3, op_sub).
+int_to_operator(4, op_mul).
+int_to_operator(5, op_gt).
+int_to_operator(6, op_lt).
+int_to_operator(7, op_gte).
+int_to_operator(8, op_lte).
+int_to_operator(9, op_get).
+int_to_operator(10, op_length).
+int_to_operator(11, op_eq).
+int_to_operator(12, op_ite).
+int_to_operator(13, op_nil).
+int_to_operator(14, op_cons).
+int_to_operator(15, op_fst).
+int_to_operator(16, op_snd).
+int_to_operator(17, op_write).
+int_to_operator(18, op_fwrite).
+int_to_operator(19, op_empty).
+int_to_operator(20, op_keys).
+int_to_operator(21, op_store).
+int_to_operator(22, op_in).
+int_to_operator(23, op_delete).
+int_to_operator(24, op_is_int).
+int_to_operator(25, op_is_string).
+int_to_operator(26, op_is_array).
+int_to_operator(27, op_is_map).
+int_to_operator(28, op_is_nil).
+int_to_operator(29, op_is_cons).
+int_to_operator(30, op_is_ident).
+int_to_operator(31, op_is_binder).
+int_to_operator(32, op_is_func).
+int_to_operator(33, op_is_gen).
+int_to_operator(34, op_is_quote).
+int_to_operator(35, op_is_apply).
+int_to_operator(36, op_is_value).
+int_to_operator(37, op_unwrap).
+int_to_operator(38, op_intern).
+int_to_operator(39, op_id_to_string).
+int_to_operator(40, op_id_to_ident).
+int_to_operator(41, op_id_to_binder).
+int_to_operator(42, op_is_operator).
+int_to_operator(43, op_arity).
+int_to_operator(44, op_stack).
+int_to_operator(45, op_import).
+int_to_operator(46, op_time).
+int_to_operator(47, op_restore).
+int_to_operator(48, op_close).
+int_to_operator(49, op_closure_env).
+int_to_operator(50, op_closure_body).
+int_to_operator(51, op_is_closure).
+int_to_operator(52, op_emit).
 
 %-----------------------------------------------------------------------%
 % init_operators: intern all operator names and build the operator table

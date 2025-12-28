@@ -51,6 +51,7 @@
 :- import_module operators.
 :- import_module parser.
 :- import_module string.
+:- import_module vm.
 
 %-----------------------------------------------------------------------%
 % Environment operations
@@ -201,6 +202,13 @@ eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
     ( if V = closureval(ClosureEnv, Terms) then
         % Evaluate with closure's env, then discard env changes (lexical scoping)
         eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Array, !Ptr, !ST, !BC, !BCSz, !IO)
+    else if V = bytecodeval(Context, CodeAddr) then
+        % Execute bytecode closure via VM
+        % Note: bytecode array is read-only during VM execution
+        % FP starts at top of stack array (frame grows downward)
+        % GenStack starts empty (no active generators)
+        FP = array.size(!.Array),
+        vm.run(!.BC, CodeAddr, Context, OpTable, !.ST, Env, !Array, !Ptr, FP, [], !IO)
     else if V = termval(identifier(Id)), map.search(OpTable, Id, Info) then
         ( if Info ^ oi_operator = op_import then
             % import is special: it can modify Env (but we discard here like closures)

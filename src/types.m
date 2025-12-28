@@ -141,7 +141,8 @@
     ;       type_error(string, value)       % Expected type, actual value
     ;       undefined_name(string_id)
     ;       index_out_of_bounds(int, int)   % Index, array size
-    ;       io_error(string, string, string).  % Operation, filename, message
+    ;       io_error(string, string, string)  % Operation, filename, message
+    ;       vm_error(string).               % VM execution error
 
     % format_error(StringTable, Error) = Message:
     % Convert an eval_error to a human-readable message.
@@ -226,6 +227,8 @@ format_error(_, index_out_of_bounds(Index, Size)) =
     string.format("index out of bounds: %d (array size: %d)", [i(Index), i(Size)]).
 format_error(_, io_error(Op, Filename, Msg)) =
     string.format("%s: %s: %s", [s(Op), s(Filename), s(Msg)]).
+format_error(_, vm_error(Msg)) =
+    string.format("vm error: %s", [s(Msg)]).
 
 :- func value_type_name(value) = string.
 
