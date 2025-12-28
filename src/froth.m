@@ -25,6 +25,7 @@
 :- import_module lexer.
 :- import_module list.
 :- import_module map.
+:- import_module operator_table.
 :- import_module operators.
 :- import_module parser.
 :- import_module string.
@@ -114,7 +115,7 @@ parse_args_loop([Arg | Rest], Opts0, Result) :-
 :- pred init_tables(string_table::out, operator_table::out) is det.
 
 init_tables(ST, OpTable) :-
-    operators.init_operators(empty_string_table, ST, OpTable).
+    operator_table.init_operators(empty_string_table, ST, OpTable).
 
 %-----------------------------------------------------------------------%
 % Standard library loading

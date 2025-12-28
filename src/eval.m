@@ -51,6 +51,7 @@
 :- import_module operators.
 :- import_module parser.
 :- import_module string.
+:- import_module value_format.
 :- import_module vm.
 
 %-----------------------------------------------------------------------%
@@ -240,7 +241,7 @@ eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
 
 eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
     datastack.pop("import", V, !Array, !Ptr),
-    RelFilename = operators.value_to_string(!.ST, V),
+    RelFilename = value_format.value_to_string(!.ST, V),
     % Resolve relative paths using BaseDir
     ( if dir.path_name_is_absolute(RelFilename) then
         Filename = RelFilename

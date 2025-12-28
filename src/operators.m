@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % operators.m
-% Operator definitions for the Froth programming language.
+% Operator implementations for the Froth programming language.
 %-----------------------------------------------------------------------%
 
 :- module operators.
@@ -11,18 +11,6 @@
 :- import_module types.
 
 %-----------------------------------------------------------------------%
-
-    % init_operators(!ST, OpTable):
-    % Initialize the operator table by interning all operator names.
-    % Returns the operator table and updated string table.
-    %
-:- pred init_operators(string_table::in, string_table::out,
-    operator_table::out) is det.
-
-    % operator(Name, Op):
-    % Map a name to an operator.
-    %
-:- pred operator(string::in, operator::out) is semidet.
 
     % eval_operator(OpTable, ST, Op, Env, !StackArray, !StackPtr, !IO):
     % Execute an operator. OpTable and ST are read-only.
@@ -142,311 +130,23 @@
 :- pred operator_is_closure(array(value)::array_di, array(value)::array_uo,
     int::in, int::out) is det.
 
-    % value_to_string(ST, Value) = String:
-    % Convert a value to its string representation (for print/import).
-    %
-:- func value_to_string(string_table, value) = string.
-
-    % operator_to_int(Op) = Int:
-    % Convert an operator to its integer representation for bytecode.
-    %
-:- func operator_to_int(operator) = int.
-
-    % int_to_operator(Int) = Op:
-    % Convert an integer to an operator. Fails if out of range.
-    %
-:- pred int_to_operator(int::in, operator::out) is semidet.
-
-    % num_operators:
-    % The total number of operators.
-    %
-:- func num_operators = int.
-
 %-----------------------------------------------------------------------%
 
 :- implementation.
 
 :- import_module assoc_list.
-:- import_module datastack.
 :- import_module bool.
+:- import_module datastack.
 :- import_module exception.
 :- import_module int.
 :- import_module list.
 :- import_module map.
+:- import_module operator_table.
 :- import_module pair.
 :- import_module require.
 :- import_module string.
 :- import_module time.
-
-%-----------------------------------------------------------------------%
-
-operator("print", op_print).
-operator("env", op_env).
-operator("+", op_add).
-operator("-", op_sub).
-operator("*", op_mul).
-operator(">", op_gt).
-operator("<", op_lt).
-operator(">=", op_gte).
-operator("<=", op_lte).
-operator("@", op_get).
-operator("#", op_length).
-operator("=", op_eq).
-operator("?", op_ite).
-operator(".", op_nil).
-operator(",", op_cons).
-operator("fst", op_fst).
-operator("snd", op_snd).
-operator("write", op_write).
-operator("fwrite", op_fwrite).
-operator("$", op_empty).
-operator("keys", op_keys).
-operator(":", op_store).
-operator("in", op_in).
-operator("delete", op_delete).
-operator("isInt", op_is_int).
-operator("isString", op_is_string).
-operator("isArray", op_is_array).
-operator("isMap", op_is_map).
-operator("isNil", op_is_nil).
-operator("isCons", op_is_cons).
-operator("isIdent", op_is_ident).
-operator("isBinder", op_is_binder).
-operator("isFunc", op_is_func).
-operator("isGen", op_is_gen).
-operator("isQuote", op_is_quote).
-operator("isApply", op_is_apply).
-operator("isValue", op_is_value).
-operator("unwrap", op_unwrap).
-operator("intern", op_intern).
-operator("idToString", op_id_to_string).
-operator("idToIdent", op_id_to_ident).
-operator("idToBinder", op_id_to_binder).
-operator("isOperator", op_is_operator).
-operator("arity", op_arity).
-operator("stack", op_stack).
-operator("import", op_import).
-operator("time", op_time).
-operator("restore", op_restore).
-operator("close", op_close).
-operator("closureEnv", op_closure_env).
-operator("closureBody", op_closure_body).
-operator("isClosure", op_is_closure).
-operator("emit", op_emit).
-operator("here", op_here).
-
-%-----------------------------------------------------------------------%
-% Operator arity (number of values popped from stack)
-%-----------------------------------------------------------------------%
-
-:- func operator_arity(operator) = int.
-
-operator_arity(op_print) = 1.
-operator_arity(op_env) = 0.
-operator_arity(op_add) = 2.
-operator_arity(op_sub) = 2.
-operator_arity(op_mul) = 2.
-operator_arity(op_gt) = 2.
-operator_arity(op_lt) = 2.
-operator_arity(op_gte) = 2.
-operator_arity(op_lte) = 2.
-operator_arity(op_get) = 2.
-operator_arity(op_length) = 1.
-operator_arity(op_eq) = 2.
-operator_arity(op_ite) = 3.
-operator_arity(op_nil) = 0.
-operator_arity(op_cons) = 2.
-operator_arity(op_fst) = 1.
-operator_arity(op_snd) = 1.
-operator_arity(op_write) = 1.
-operator_arity(op_fwrite) = 2.
-operator_arity(op_empty) = 0.
-operator_arity(op_keys) = 1.
-operator_arity(op_store) = 3.
-operator_arity(op_in) = 2.
-operator_arity(op_delete) = 2.
-operator_arity(op_is_int) = 1.
-operator_arity(op_is_string) = 1.
-operator_arity(op_is_array) = 1.
-operator_arity(op_is_map) = 1.
-operator_arity(op_is_nil) = 1.
-operator_arity(op_is_cons) = 1.
-operator_arity(op_is_ident) = 1.
-operator_arity(op_is_binder) = 1.
-operator_arity(op_is_func) = 1.
-operator_arity(op_is_gen) = 1.
-operator_arity(op_is_quote) = 1.
-operator_arity(op_is_apply) = 1.
-operator_arity(op_is_value) = 1.
-operator_arity(op_unwrap) = 1.
-operator_arity(op_intern) = 1.
-operator_arity(op_id_to_string) = 1.
-operator_arity(op_id_to_ident) = 1.
-operator_arity(op_id_to_binder) = 1.
-operator_arity(op_is_operator) = 1.
-operator_arity(op_arity) = 1.
-operator_arity(op_stack) = 0.
-operator_arity(op_import) = 1.
-operator_arity(op_time) = 0.
-operator_arity(op_restore) = 1.
-operator_arity(op_close) = 2.
-operator_arity(op_closure_env) = 1.
-operator_arity(op_closure_body) = 1.
-operator_arity(op_is_closure) = 1.
-operator_arity(op_emit) = 1.
-operator_arity(op_here) = 0.
-
-%-----------------------------------------------------------------------%
-% Operator to/from integer conversion for bytecode
-% NOTE: These numbers must be kept in sync with lib/bytecode.froth
-%-----------------------------------------------------------------------%
-
-num_operators = 54.
-
-operator_to_int(op_print) = 0.
-operator_to_int(op_env) = 1.
-operator_to_int(op_add) = 2.
-operator_to_int(op_sub) = 3.
-operator_to_int(op_mul) = 4.
-operator_to_int(op_gt) = 5.
-operator_to_int(op_lt) = 6.
-operator_to_int(op_gte) = 7.
-operator_to_int(op_lte) = 8.
-operator_to_int(op_get) = 9.
-operator_to_int(op_length) = 10.
-operator_to_int(op_eq) = 11.
-operator_to_int(op_ite) = 12.
-operator_to_int(op_nil) = 13.
-operator_to_int(op_cons) = 14.
-operator_to_int(op_fst) = 15.
-operator_to_int(op_snd) = 16.
-operator_to_int(op_write) = 17.
-operator_to_int(op_fwrite) = 18.
-operator_to_int(op_empty) = 19.
-operator_to_int(op_keys) = 20.
-operator_to_int(op_store) = 21.
-operator_to_int(op_in) = 22.
-operator_to_int(op_delete) = 23.
-operator_to_int(op_is_int) = 24.
-operator_to_int(op_is_string) = 25.
-operator_to_int(op_is_array) = 26.
-operator_to_int(op_is_map) = 27.
-operator_to_int(op_is_nil) = 28.
-operator_to_int(op_is_cons) = 29.
-operator_to_int(op_is_ident) = 30.
-operator_to_int(op_is_binder) = 31.
-operator_to_int(op_is_func) = 32.
-operator_to_int(op_is_gen) = 33.
-operator_to_int(op_is_quote) = 34.
-operator_to_int(op_is_apply) = 35.
-operator_to_int(op_is_value) = 36.
-operator_to_int(op_unwrap) = 37.
-operator_to_int(op_intern) = 38.
-operator_to_int(op_id_to_string) = 39.
-operator_to_int(op_id_to_ident) = 40.
-operator_to_int(op_id_to_binder) = 41.
-operator_to_int(op_is_operator) = 42.
-operator_to_int(op_arity) = 43.
-operator_to_int(op_stack) = 44.
-operator_to_int(op_import) = 45.
-operator_to_int(op_time) = 46.
-operator_to_int(op_restore) = 47.
-operator_to_int(op_close) = 48.
-operator_to_int(op_closure_env) = 49.
-operator_to_int(op_closure_body) = 50.
-operator_to_int(op_is_closure) = 51.
-operator_to_int(op_emit) = 52.
-operator_to_int(op_here) = 53.
-
-int_to_operator(0, op_print).
-int_to_operator(1, op_env).
-int_to_operator(2, op_add).
-int_to_operator(3, op_sub).
-int_to_operator(4, op_mul).
-int_to_operator(5, op_gt).
-int_to_operator(6, op_lt).
-int_to_operator(7, op_gte).
-int_to_operator(8, op_lte).
-int_to_operator(9, op_get).
-int_to_operator(10, op_length).
-int_to_operator(11, op_eq).
-int_to_operator(12, op_ite).
-int_to_operator(13, op_nil).
-int_to_operator(14, op_cons).
-int_to_operator(15, op_fst).
-int_to_operator(16, op_snd).
-int_to_operator(17, op_write).
-int_to_operator(18, op_fwrite).
-int_to_operator(19, op_empty).
-int_to_operator(20, op_keys).
-int_to_operator(21, op_store).
-int_to_operator(22, op_in).
-int_to_operator(23, op_delete).
-int_to_operator(24, op_is_int).
-int_to_operator(25, op_is_string).
-int_to_operator(26, op_is_array).
-int_to_operator(27, op_is_map).
-int_to_operator(28, op_is_nil).
-int_to_operator(29, op_is_cons).
-int_to_operator(30, op_is_ident).
-int_to_operator(31, op_is_binder).
-int_to_operator(32, op_is_func).
-int_to_operator(33, op_is_gen).
-int_to_operator(34, op_is_quote).
-int_to_operator(35, op_is_apply).
-int_to_operator(36, op_is_value).
-int_to_operator(37, op_unwrap).
-int_to_operator(38, op_intern).
-int_to_operator(39, op_id_to_string).
-int_to_operator(40, op_id_to_ident).
-int_to_operator(41, op_id_to_binder).
-int_to_operator(42, op_is_operator).
-int_to_operator(43, op_arity).
-int_to_operator(44, op_stack).
-int_to_operator(45, op_import).
-int_to_operator(46, op_time).
-int_to_operator(47, op_restore).
-int_to_operator(48, op_close).
-int_to_operator(49, op_closure_env).
-int_to_operator(50, op_closure_body).
-int_to_operator(51, op_is_closure).
-int_to_operator(52, op_emit).
-int_to_operator(53, op_here).
-
-%-----------------------------------------------------------------------%
-% init_operators: intern all operator names and build the operator table
-%-----------------------------------------------------------------------%
-
-init_operators(!ST, OpTable) :-
-    OpNames = [
-        "print", "env",
-        "+", "-", "*",
-        ">", "<", ">=", "<=",
-        "@", "#", "=", "?",
-        ".", ",", "fst", "snd",
-        "write", "fwrite",
-        "$", "keys", ":", "in", "delete",
-        "isInt", "isString", "isArray", "isMap", "isNil", "isCons",
-        "isIdent", "isBinder", "isFunc", "isGen", "isQuote", "isApply",
-        "isValue", "unwrap", "intern",
-        "idToString", "idToIdent", "idToBinder", "isOperator", "arity",
-        "stack", "import", "time", "restore",
-        "close", "closureEnv", "closureBody", "isClosure",
-        "emit", "here"
-    ],
-    list.foldl2(intern_operator, OpNames, map.init, OpTable, !ST).
-
-:- pred intern_operator(string::in, operator_table::in, operator_table::out,
-    string_table::in, string_table::out) is det.
-
-intern_operator(Name, !OpTable, !ST) :-
-    ( if operator(Name, Op) then
-        intern_string(Name, Id, !ST),
-        Arity = operator_arity(Op),
-        map.det_insert(Id, operator_info(Op, Arity), !OpTable)
-    else
-        unexpected($pred, "unknown operator: " ++ Name)
-    ).
+:- import_module value_format.
 
 %-----------------------------------------------------------------------%
 % eval_operator: dispatch to operator implementation
@@ -627,43 +327,7 @@ eval_operator(OpTable, ST, Op, Env, !Array, !Ptr, !IO) :-
 
 operator_print(ST, !Array, !Ptr, !IO) :-
     datastack.pop("print", V, !Array, !Ptr),
-    io.write_string(value_to_string(ST, V), !IO).
-
-%-----------------------------------------------------------------------%
-% value_to_string: convert a value to its string representation
-%-----------------------------------------------------------------------%
-
-value_to_string(_, intval(I)) = int_to_string(I).
-value_to_string(ST, stringval(StrId)) = lookup_string(ST, StrId).
-value_to_string(ST, arrayval(A)) = String :-
-    array.to_list(A, List),
-    Strings = list.map(value_to_string(ST), List),
-    String = string.append_list(Strings).
-value_to_string(_, mapval(M)) = string.format("<map:%d>", [i(map.count(M))]).
-value_to_string(ST, termval(T)) = term_to_string(ST, T).
-value_to_string(_, nilval) = ".".
-value_to_string(ST, consval(H, T)) =
-    "(" ++ value_to_string(ST, H) ++ "," ++ value_to_string(ST, T) ++ ")".
-value_to_string(ST, closureval(_, Body)) =
-    "<closure:" ++ terms_to_string(ST, Body) ++ ">".
-value_to_string(_, bytecodeval(_, Addr)) =
-    "<bytecode:" ++ int_to_string(Addr) ++ ">".
-
-:- func term_to_string(string_table, term) = string.
-
-term_to_string(ST, identifier(NameId)) = lookup_string(ST, NameId).
-term_to_string(ST, binder(NameId)) = "/" ++ lookup_string(ST, NameId).
-term_to_string(ST, function(Terms)) = "{ " ++ terms_to_string(ST, Terms) ++ "}".
-term_to_string(ST, generator(Terms)) = "[ " ++ terms_to_string(ST, Terms) ++ "]".
-term_to_string(ST, quoted(T)) = "'" ++ term_to_string(ST, T).
-term_to_string(ST, value(V)) = value_to_string(ST, V).
-term_to_string(_, apply_term) = "!".
-
-:- func terms_to_string(string_table, list(term)) = string.
-
-terms_to_string(_, []) = "".
-terms_to_string(ST, [T | Ts]) =
-    term_to_string(ST, T) ++ " " ++ terms_to_string(ST, Ts).
+    io.write_string(value_format.value_to_string(ST, V), !IO).
 
 %-----------------------------------------------------------------------%
 % env: ( -- map ) Push the current environment as a map
@@ -994,56 +658,7 @@ operator_snd(!Array, !Ptr) :-
 
 operator_write(ST, !Array, !Ptr, !IO) :-
     datastack.pop("write", V, !Array, !Ptr),
-    io.write_string(value_to_write_string(ST, V), !IO).
-
-%-----------------------------------------------------------------------%
-% value_to_write_string: convert a value to executable string form
-%-----------------------------------------------------------------------%
-
-:- func value_to_write_string(string_table, value) = string.
-
-value_to_write_string(_, intval(I)) = int_to_string(I).
-value_to_write_string(ST, stringval(StrId)) =
-    "\"" ++ escape_string(lookup_string(ST, StrId)) ++ "\"".
-value_to_write_string(ST, arrayval(A)) = "[ " ++ ArrayElems ++ "]" :-
-    array.to_list(A, List),
-    ElemStrings = list.map(
-        (func(V) = value_to_write_string(ST, V) ++ " "),
-        List),
-    ArrayElems = string.append_list(ElemStrings).
-value_to_write_string(ST, mapval(M)) = Result :-
-    map.foldl(map_entry_to_string(ST), M, "$", Result).
-value_to_write_string(ST, termval(T)) = "'" ++ term_to_write_string(ST, T).
-value_to_write_string(_, nilval) = ".".
-value_to_write_string(ST, consval(H, T)) =
-    value_to_write_string(ST, T) ++ " " ++ value_to_write_string(ST, H) ++ " ,".
-value_to_write_string(ST, closureval(_, Body)) =
-    "<closure:{ " ++ terms_to_write_string(ST, Body) ++ "}>".
-value_to_write_string(_, bytecodeval(_, Addr)) =
-    "<bytecode:" ++ int_to_string(Addr) ++ ">".
-
-:- pred map_entry_to_string(string_table::in, string_id::in, value::in,
-    string::in, string::out) is det.
-
-map_entry_to_string(ST, NameId, V, !Acc) :-
-    !:Acc = !.Acc ++ " " ++ value_to_write_string(ST, V) ++ " '" ++
-        lookup_string(ST, NameId) ++ " :".
-
-:- func term_to_write_string(string_table, term) = string.
-
-term_to_write_string(ST, identifier(NameId)) = lookup_string(ST, NameId).
-term_to_write_string(ST, binder(NameId)) = "/" ++ lookup_string(ST, NameId).
-term_to_write_string(ST, function(Terms)) = "{ " ++ terms_to_write_string(ST, Terms) ++ "}".
-term_to_write_string(ST, generator(Terms)) = "[ " ++ terms_to_write_string(ST, Terms) ++ "]".
-term_to_write_string(ST, quoted(T)) = "'" ++ term_to_write_string(ST, T).
-term_to_write_string(ST, value(V)) = value_to_write_string(ST, V).
-term_to_write_string(_, apply_term) = "!".
-
-:- func terms_to_write_string(string_table, list(term)) = string.
-
-terms_to_write_string(_, []) = "".
-terms_to_write_string(ST, [T | Ts]) =
-    term_to_write_string(ST, T) ++ " " ++ terms_to_write_string(ST, Ts).
+    io.write_string(value_format.value_to_write_string(ST, V), !IO).
 
 %-----------------------------------------------------------------------%
 % fwrite: ( value file -- ) Write value to file in executable form
@@ -1052,8 +667,8 @@ terms_to_write_string(ST, [T | Ts]) =
 operator_fwrite(ST, !Array, !Ptr, !IO) :-
     datastack.pop("fwrite", FileVal, !Array, !Ptr),
     datastack.pop("fwrite", V, !Array, !Ptr),
-    Filename = value_to_string(ST, FileVal),
-    Content = value_to_write_string(ST, V),
+    Filename = value_format.value_to_string(ST, FileVal),
+    Content = value_format.value_to_write_string(ST, V),
     io.open_output(Filename, Result, !IO),
     (
         Result = ok(Stream),

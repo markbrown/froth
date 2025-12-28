@@ -10,22 +10,38 @@ Froth is implemented in Mercury, a pure logic/functional programming language. T
 froth/
 ├── bin/                  # Compiled binary
 ├── lib/                  # Standard library
-│   ├── stdlib.froth      # Standard library (auto-loaded)
+│   ├── stdlib.froth      # Standard library loader (auto-loaded)
+│   ├── defs.froth        # Definition utilities (def-fn)
 │   ├── io.froth          # I/O utilities (nl, println, writeln)
-│   ├── array.froth       # Array utilities (fold, map, filter)
-│   └── eval.froth        # Meta-interpreter
+│   ├── array.froth       # Array utilities (foldl, map, filter)
+│   ├── list.froth        # Cons list utilities (lfoldl, lreverse)
+│   ├── map.froth         # Map utilities (restrict, transform-values)
+│   ├── data.froth        # Generic data utilities (transform)
+│   ├── bool.froth        # Boolean operations (not, and, or)
+│   ├── math.froth        # Math utilities (fib)
+│   ├── bench.froth       # Benchmarking (bench)
+│   ├── eval.froth        # Meta-interpreter
+│   ├── analysis.froth    # Static analysis (free-vars)
+│   ├── optimize.froth    # Closure optimization
+│   └── bytecode.froth    # Bytecode constants and utilities
 ├── src/                  # Mercury source
 │   ├── froth.m           # Main entry point, REPL
 │   ├── lexer.m           # Tokenizer
 │   ├── parser.m          # Parser
 │   ├── eval.m            # Evaluator
-│   ├── operators.m       # Operator definitions
+│   ├── operators.m       # Operator implementations
+│   ├── operator_table.m  # Operator metadata (arity, bytecode encoding)
+│   ├── value_format.m    # Value-to-string conversion
+│   ├── vm.m              # Bytecode virtual machine
+│   ├── datastack.m       # Stack implementation
+│   ├── bytecode.m        # Bytecode storage
 │   └── types.m           # Type definitions
 ├── tests/                # Regression tests
 │   ├── *.froth           # Test programs
 │   ├── *.expected        # Expected outputs
 │   └── lib/              # Test library files
 ├── FROTH.md              # Language reference
+├── FROTHLIB.md           # Standard library reference
 ├── Makefile              # Build: make, make test, make clean
 └── run_tests.sh          # Test runner script
 ```
@@ -119,12 +135,12 @@ f ! print              ; prints 2 (1+1), not 4
 
 ### Inspecting Closures
 
-Closures are represented as cons pairs of `(environment-map, quoted-function)`:
+Use `closureEnv` and `closureBody` to inspect closures:
 
 ```
 { 1 2 + } /f
-f fst # print          ; prints number of bindings in closure's environment
-f snd print            ; prints: { 1 2 + }
+f closureEnv # print   ; prints number of bindings in closure's environment
+f closureBody print    ; prints: { 1 2 + }
 ```
 
 ### Shell Escaping

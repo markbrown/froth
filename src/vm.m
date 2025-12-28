@@ -66,6 +66,7 @@
 :- import_module datastack.
 :- import_module exception.
 :- import_module int.
+:- import_module operator_table.
 :- import_module operators.
 
 %-----------------------------------------------------------------------%
@@ -114,7 +115,7 @@ execute(Opcode, BC, IP, !RP, !Context, OpTable, ST, Env, !Stack, !SP, FP, GenSta
     else if Opcode = oc_op then
         % op n: execute operator n
         array.lookup(BC, IP + 1, OpNum),
-        ( if operators.int_to_operator(OpNum, Op) then
+        ( if operator_table.int_to_operator(OpNum, Op) then
             operators.eval_operator(OpTable, ST, Op, Env, !Stack, !SP, !IO),
             run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !Stack, !SP, FP, GenStack, !IO)
         else
