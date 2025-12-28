@@ -233,6 +233,7 @@ operator("closureEnv", op_closure_env).
 operator("closureBody", op_closure_body).
 operator("isClosure", op_is_closure).
 operator("emit", op_emit).
+operator("here", op_here).
 
 %-----------------------------------------------------------------------%
 % Operator arity (number of values popped from stack)
@@ -293,13 +294,14 @@ operator_arity(op_closure_env) = 1.
 operator_arity(op_closure_body) = 1.
 operator_arity(op_is_closure) = 1.
 operator_arity(op_emit) = 1.
+operator_arity(op_here) = 0.
 
 %-----------------------------------------------------------------------%
 % Operator to/from integer conversion for bytecode
 % NOTE: These numbers must be kept in sync with lib/bytecode.froth
 %-----------------------------------------------------------------------%
 
-num_operators = 53.
+num_operators = 54.
 
 operator_to_int(op_print) = 0.
 operator_to_int(op_env) = 1.
@@ -354,6 +356,7 @@ operator_to_int(op_closure_env) = 49.
 operator_to_int(op_closure_body) = 50.
 operator_to_int(op_is_closure) = 51.
 operator_to_int(op_emit) = 52.
+operator_to_int(op_here) = 53.
 
 int_to_operator(0, op_print).
 int_to_operator(1, op_env).
@@ -408,6 +411,7 @@ int_to_operator(49, op_closure_env).
 int_to_operator(50, op_closure_body).
 int_to_operator(51, op_is_closure).
 int_to_operator(52, op_emit).
+int_to_operator(53, op_here).
 
 %-----------------------------------------------------------------------%
 % init_operators: intern all operator names and build the operator table
@@ -428,7 +432,7 @@ init_operators(!ST, OpTable) :-
         "idToString", "idToIdent", "idToBinder", "isOperator", "arity",
         "stack", "import", "time", "restore",
         "close", "closureEnv", "closureBody", "isClosure",
-        "emit"
+        "emit", "here"
     ],
     list.foldl2(intern_operator, OpNames, map.init, OpTable, !ST).
 
@@ -611,6 +615,10 @@ eval_operator(OpTable, ST, Op, Env, !Array, !Ptr, !IO) :-
         Op = op_emit,
         % emit is handled specially in eval.m, should not reach here
         unexpected($pred, "emit should be handled in eval.m")
+    ;
+        Op = op_here,
+        % here is handled specially in eval.m, should not reach here
+        unexpected($pred, "here should be handled in eval.m")
     ).
 
 %-----------------------------------------------------------------------%

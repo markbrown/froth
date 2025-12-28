@@ -211,6 +211,8 @@ The `import` operator loads a file relative to the current file's directory. Def
 | `isOperator` | `( 'ident -- int )` | 0 if identifier is an operator, else 1 |
 | `arity` | `( 'ident -- int )` | Get arity (input count) of an operator |
 | `stack` | `( ... -- array )` | Convert entire stack to an array |
+| `emit` | `( int -- )` | Append an integer to the bytecode store |
+| `here` | `( -- int )` | Push current bytecode store address |
 
 The `restore` operator replaces the entire environment. Use with `env` to save and restore state:
 

@@ -70,7 +70,8 @@
     ;       op_closure_env  % closureEnv  ( closure -- env )
     ;       op_closure_body % closureBody ( closure -- body )
     ;       op_is_closure   % isClosure   ( a -- int )
-    ;       op_emit.        % emit        ( int -- )
+    ;       op_emit         % emit        ( int -- )
+    ;       op_here.        % here        ( -- int )
 
 :- type operator_info
     --->    operator_info(

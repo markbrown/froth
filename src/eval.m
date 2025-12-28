@@ -129,6 +129,9 @@ eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !
         else if Info ^ oi_operator = op_emit then
             % emit is special: it modifies the bytecode store
             eval_emit(!Array, !Ptr, !BC, !BCSz)
+        else if Info ^ oi_operator = op_here then
+            % here is special: it reads the bytecode store size
+            eval_here(!Array, !Ptr, !.BCSz)
         else
             operators.eval_operator(OpTable, !.ST, Info ^ oi_operator, !.Env,
                 !Array, !Ptr, !IO)
@@ -347,6 +350,18 @@ eval_emit(!Array, !Ptr, !BC, !BCSz) :-
     else
         throw(type_error("int", V))
     ).
+
+%-----------------------------------------------------------------------%
+% here: ( -- int ) Push current bytecode store address
+%-----------------------------------------------------------------------%
+
+:- pred eval_here(
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out,
+    int::in) is det.
+
+eval_here(!Array, !Ptr, BCSz) :-
+    datastack.push(intval(BCSz), !Array, !Ptr).
 
 %-----------------------------------------------------------------------%
 :- end_module eval.
