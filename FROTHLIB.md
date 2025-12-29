@@ -31,7 +31,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `fib` | math | Generate Fibonacci sequence |
 | `bench` | bench | Benchmark closure execution |
 | `preflight` | preflight | Check for env/import/applyOperator usage |
-| `boundness` | boundness | Analyze variable binding |
+| `boundness` | boundness | Analyze variable binding (returns sets) |
 | `restrict-closure-env` | optimize | Restrict closure to free variables |
 | `optimize` | optimize | Recursively optimize closures |
 | `count-bindings` | optimize | Count bindings in environments |
@@ -266,27 +266,32 @@ Boundness analysis for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `boundness` | `( func -- free-vars bound-vars boundness-array )` | Analyze variable binding in a function |
+| `boundness` | `( func -- free-set bound-set boundness-array )` | Analyze variable binding in a function |
 
 Analyzes a quoted function and returns three values:
-- `free-vars`: array of identifiers that occur before their binder (or have no binder)
-- `bound-vars`: array of identifiers that have binders in this scope
+- `free-set`: map (set) of identifiers that occur before their binder (or have no binder)
+- `bound-set`: map (set) of identifiers that have binders in this scope
 - `boundness-array`: parallel array indicating each term's binding status
+
+Use `keys` to convert sets to arrays when needed. Sets ensure each variable appears only once.
 
 The boundness-array contains:
 - `0` for bound identifiers
 - `1` for free identifiers
 - `.` for non-identifiers (binders, apply, literals, quoted)
-- `[free bound boundness]` for nested closures/generators
+- `[free-set bound-set boundness]` for nested closures/generators
 
 ```
 '{x /x x} boundness!
-; Returns: ['x] ['x] [1 . 0]
+; Returns: ($ 0 'x :) ($ 0 'x :) [1 . 0]
 ; x is free at pos 0, bound at pos 2
 
 '{/x {x} x} boundness!
-; Returns: [] ['x] [. [['x] [] [1]] 0]
+; Returns: $ ($ 0 'x :) [. [($ 0 'x :) $ [1]] 0]
 ; Nested closure shows x is free inside (captures from outer)
+
+'{x x} boundness! /b /bnd /fvs
+fvs keys   ; ['x] - each variable appears once
 ```
 
 ## Optimize (optimize.froth)
