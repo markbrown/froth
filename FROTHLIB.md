@@ -337,16 +337,17 @@ Liveness analysis for the compiler.
 |------|--------------|-------------|
 | `liveness` | `( func free-set bound-set boundness-array -- liveness-array )` | Analyze last references in function |
 
-Takes a quoted function and the outputs from `boundness`, and returns a liveness array parallel to the function body. Each element indicates whether that identifier reference is the last use of the variable:
+Takes a quoted function and the outputs from `boundness`, and returns a liveness array parallel to the function body. Each element indicates:
 
-- `0` = still live (not the last reference)
-- `1` = last reference (can drop/move value after this use)
-- `.` = not an identifier reference (binder, apply, literal, quoted, operator)
+- `0` = identifier still live (not the last reference), or binder is used
+- `1` = identifier is last reference, or binder is unused (dead)
+- `.` = not a variable (apply, literal, quoted, operator)
 - `[liveness]` = nested liveness array for closures/generators
 
 The analysis traverses right-to-left to determine which references are "last" in each scope. Key behaviors:
 - Closures create new scopes; outer variables are live if captured
 - Generators share outer scope; binders inside create local scope within generator only
+- Binders report whether the variable is actually used (0) or dead (1)
 
 ```
 '{x} boundness! liveness!
@@ -355,20 +356,26 @@ The analysis traverses right-to-left to determine which references are "last" in
 '{x x} boundness! liveness!
 ; [0 1] - first x still live, second x last-ref
 
+'{/x x} boundness! liveness!
+; [0 1] - binder used (0), x is last-ref
+
+'{/x} boundness! liveness!
+; [1] - binder unused (dead)
+
 '{x /x x} boundness! liveness!
-; [1 . 1] - both x's are last-ref (different vars due to shadowing)
+; [1 0 1] - both x's are last-ref (different vars), binder used
 
 '{x {x} x} boundness! liveness!
 ; [0 [1] 1] - outer x captured by closure, still live at pos 0
 
 '{x {/x x}} boundness! liveness!
-; [1 [. 1]] - outer x not captured (shadowed in closure)
+; [1 [0 1]] - outer x not captured (shadowed), inner binder used
 
 '{x [x] x} boundness! liveness!
 ; [0 [0] 1] - generator shares scope, x still live through generator
 
 '{x [/x x] x} boundness! liveness!
-; [0 [. 1] 1] - generator binder is local, outer x unaffected
+; [0 [0 1] 1] - generator binder is local and used
 ```
 
 ## Optimize (optimize.froth)
