@@ -8,7 +8,7 @@
     stack fst /b  stack snd /s1
     s1 isNil { "stack underflow" 1 } {
       s1 fst /a  s1 snd /s2
-      s2 [ a b op! ] {,} foldl! sim-env 0
+      s2 [ a b op applyOperator ] {,} foldl! sim-env 0
     } ?!
   } ?!
 } def-fn! /eval-binary-op
@@ -18,14 +18,14 @@
 ['foldl] { /op /sim-env /stack
   stack isNil { "stack underflow" 1 } {
     stack fst /a  stack snd /s1
-    s1 [ a op! ] {,} foldl! sim-env 0
+    s1 [ a op applyOperator ] {,} foldl! sim-env 0
   } ?!
 } def-fn! /eval-unary-op
 
 ; eval-nullary-op: (stack sim-env op -- new-stack new-env 0 | error-message 1)
 ; Handles nullary operators (0 args)
 ['foldl] { /op /sim-env /stack
-  stack [ op! ] {,} foldl! sim-env 0
+  stack [ op applyOperator ] {,} foldl! sim-env 0
 } def-fn! /eval-nullary-op
 
 ; eval-ternary-op: (stack sim-env op -- new-stack new-env 0 | error-message 1)
@@ -37,7 +37,7 @@
       s1 fst /b  s1 snd /s2
       s2 isNil { "stack underflow" 1 } {
         s2 fst /a  s2 snd /s3
-        s3 [ a b c op! ] {,} foldl! sim-env 0
+        s3 [ a b c op applyOperator ] {,} foldl! sim-env 0
       } ?!
     } ?!
   } ?!
@@ -68,7 +68,8 @@
 } def-fn! /eval-binder
 
 ; eval-apply: (stack sim-env op-table recurse -- new-stack new-env 0 | error-message 1)
-['eval-operator] { /recurse /op-table /sim-env /stack
+; Note: ! only applies closures. Use applyOperator for quoted operators.
+[] { /recurse /op-table /sim-env /stack
   stack isNil {
     "stack underflow in !" 1
   } {
@@ -92,34 +93,7 @@
         "type error: expected closure" 1
       } ?!
     } {
-      ; Not a closure - check if it's a quoted operator
-      val isIdent {
-        op-table val in {
-          ; Custom operator from op-table - apply closure inline
-          op-table val @ /op-closure
-          op-closure closureEnv /cenv
-          op-closure closureBody /cbody
-          cbody isFunc {
-            new-stack cenv op-table cbody 0 recurse recurse!
-            /status
-            status {
-              sim-env 0
-            } {
-              1
-            } ?!
-          } {
-            "type error: expected closure in op-table" 1
-          } ?!
-        } {
-          val isOperator {
-            new-stack sim-env val eval-operator!
-          } {
-            "undefined operator" 1
-          } ?!
-        } ?!
-      } {
-        "type error: expected closure or operator" 1
-      } ?!
+      "type error: expected closure" 1
     } ?!
   } ?!
 } def-fn! /eval-apply
@@ -168,11 +142,32 @@
         } ?!
       } ?!
     } {
+    term 'applyOperator = {
+      ; Special case: applyOperator applies a quoted operator
+      stack isNil { "stack underflow in applyOperator" 1 } {
+        stack fst /op-term  stack snd /s1
+        op-term isIdent {
+          op-table op-term in {
+            ; Custom operator from op-table - apply the closure
+            op-table op-term @ /op-closure
+            s1 op-closure , sim-env op-table recurse eval-apply!
+          } {
+            op-term isOperator {
+              s1 sim-env op-term eval-operator!
+            } {
+              "undefined operator" 1
+            } ?!
+          } ?!
+        } {
+          "type error: expected quoted operator" 1
+        } ?!
+      } ?!
+    } {
     term isOperator {
       stack sim-env term eval-operator!
     } {
       "undefined name" 1
-    } ?! } ?! } ?! } ?! } ?! } ?!
+    } ?! } ?! } ?! } ?! } ?! } ?! } ?!
   } ?!
 } def-fn! /eval-ident
 

@@ -185,3 +185,4 @@ Evaluation maintains three pieces of state:
 | `stack` | `( ... -- array )` | Convert entire stack to an array |
 | `emit` | `( int -- )` | Append an integer to the bytecode store |
 | `here` | `( -- int )` | Push current bytecode store address |
+| `applyOperator` | `( 'op -- ... )` | Apply a quoted operator |

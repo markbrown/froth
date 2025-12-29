@@ -214,17 +214,8 @@ eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
         % GenStack starts empty (no active generators)
         FP = array.size(!.Array),
         vm.run(!.BC, CodeAddr, -1, _, Context, _, OpTable, !.ST, Env, !Array, !Ptr, FP, [], !IO)
-    else if V = termval(identifier(Id)), map.search(OpTable, Id, Info) then
-        ( if Info ^ oi_operator = op_import then
-            % import is special: it can modify Env (but we discard here like closures)
-            eval_import(OpTable, BaseDir, Env, _, !Array, !Ptr, !ST, !BC, !BCSz, !IO)
-        else
-            % Apply a quoted operator
-            operators.eval_operator(OpTable, !.ST, Info ^ oi_operator, Env,
-                !Array, !Ptr, !IO)
-        )
     else
-        throw(type_error("closure or operator", V))
+        throw(type_error("closure", V))
     ).
 
 %-----------------------------------------------------------------------%

@@ -71,7 +71,8 @@
     ;       op_closure_body % closureBody ( closure -- body )
     ;       op_is_closure   % isClosure   ( a -- int )
     ;       op_emit         % emit        ( int -- )
-    ;       op_here.        % here        ( -- int )
+    ;       op_here         % here        ( -- int )
+    ;       op_apply_operator. % applyOperator ( 'op -- ... )
 
 :- type operator_info
     --->    operator_info(

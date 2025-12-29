@@ -30,7 +30,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `or` | bool | Logical or |
 | `fib` | math | Generate Fibonacci sequence |
 | `bench` | bench | Benchmark closure execution |
-| `preflight` | preflight | Check for env/import usage |
+| `preflight` | preflight | Check for env/import/applyOperator usage |
 | `boundness` | boundness | Analyze variable binding |
 | `restrict-closure-env` | optimize | Restrict closure to free variables |
 | `optimize` | optimize | Recursively optimize closures |
@@ -247,13 +247,14 @@ Pre-flight checks for static analysis and compilation.
 |------|--------------|-------------|
 | `preflight` | `( func -- 0 \| 1 )` | Check if function is safe for static analysis |
 
-Returns `0` if the function is safe, `1` if it contains `env` or `import` operators which have dynamic semantics that prevent static analysis.
+Returns `0` if the function is safe, `1` if it contains `env`, `import`, or `applyOperator` operators which have dynamic semantics that prevent static analysis.
 
 ```
 '{ x } preflight!              ; 0 (safe)
 '{ /x x } preflight!           ; 0 (safe)
 '{ env } preflight!            ; 1 (uses env)
 '{ "foo" import } preflight!   ; 1 (uses import)
+'{ '+ applyOperator } preflight! ; 1 (uses applyOperator)
 '{ /x { env } } preflight!     ; 1 (nested env)
 ```
 

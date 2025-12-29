@@ -129,6 +129,9 @@
     int::in, int::out) is det.
 :- pred operator_is_closure(array(value)::array_di, array(value)::array_uo,
     int::in, int::out) is det.
+:- pred operator_apply_operator(operator_table::in, string_table::in, env::in,
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out, io::di, io::uo) is det.
 
 %-----------------------------------------------------------------------%
 
@@ -319,6 +322,9 @@ eval_operator(OpTable, ST, Op, Env, !Array, !Ptr, !IO) :-
         Op = op_here,
         % here is handled specially in eval.m, should not reach here
         unexpected($pred, "here should be handled in eval.m")
+    ;
+        Op = op_apply_operator,
+        operator_apply_operator(OpTable, ST, Env, !Array, !Ptr, !IO)
     ).
 
 %-----------------------------------------------------------------------%
@@ -1015,6 +1021,23 @@ operator_is_closure(!Array, !Ptr) :-
     datastack.pop("isClosure", V, !Array, !Ptr),
     ( if V = closureval(_, _) then datastack.push(intval(0), !Array, !Ptr)
     else datastack.push(intval(1), !Array, !Ptr)
+    ).
+
+%-----------------------------------------------------------------------%
+% applyOperator: ( 'op -- ... ) Apply a quoted operator
+%-----------------------------------------------------------------------%
+
+operator_apply_operator(OpTable, ST, Env, !Array, !Ptr, !IO) :-
+    datastack.pop("applyOperator", V, !Array, !Ptr),
+    ( if V = termval(identifier(Id)) then
+        ( if map.search(OpTable, Id, Info) then
+            eval_operator(OpTable, ST, Info ^ oi_operator, Env,
+                !Array, !Ptr, !IO)
+        else
+            throw(type_error("operator", V))
+        )
+    else
+        throw(type_error("quoted operator", V))
     ).
 
 %-----------------------------------------------------------------------%
