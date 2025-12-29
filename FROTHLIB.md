@@ -18,12 +18,18 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `concat` | array | Concatenate two arrays |
 | `flatten` | array | Flatten nested arrays |
 | `reverse` | array | Reverse an array |
+| `scanl` | array | Iterate left-to-right until predicate returns 0 |
+| `scanr` | array | Iterate right-to-left until predicate returns 0 |
+| `contains` | array | Check if array contains element |
 | `lfoldl` | list | Apply fn head-to-tail |
 | `lfoldr` | list | Apply fn tail-to-head |
 | `lreverse` | list | Reverse a cons list |
+| `lconcat` | list | Concatenate two lists |
+| `lmap` | list | Apply fn to each element |
 | `eval` | eval | Evaluate closure with stack and op-table |
 | `restrict` | map | Restrict map to specified keys |
 | `transform-values` | map | Transform each value in map |
+| `merge` | map | Merge two maps (map2 takes precedence) |
 | `transform` | data | Recursively transform data structure |
 | `not` | bool | Logical not (0→1, else→0) |
 | `and` | bool | Logical and |
@@ -87,6 +93,9 @@ This is definition-time optimization: later definitions that capture `c-lean` wi
 | `concat` | `( arr1 arr2 -- arr )` | Concatenate two arrays |
 | `flatten` | `( arr-of-arrs -- arr )` | Flatten nested arrays |
 | `reverse` | `( arr -- arr )` | Reverse an array |
+| `scanl` | `( arr fn -- 0 \| 1 )` | Iterate left-to-right until fn returns 0 |
+| `scanr` | `( arr fn -- 0 \| 1 )` | Iterate right-to-left until fn returns 0 |
+| `contains` | `( arr x -- 0 \| 1 )` | Check if array contains element |
 
 The function may leave zero or more values on the stack per element. Use a generator to collect results into an array.
 
@@ -94,6 +103,14 @@ The function may leave zero or more values on the stack per element. Use a gener
 [1 2 3] {1 +} foldl!           ; leaves 2 3 4 on stack
 [ [1 2 3] {1 +} foldl! ]       ; produces [2 3 4]
 [1 2 3] {print} foldr!         ; prints 3, 2, 1
+```
+
+The `scanl` and `scanr` functions iterate until the predicate returns 0 (found):
+
+```
+[1 2 3] {3 =} scanl!           ; 0 (found 3)
+[1 2 3] {5 =} scanl!           ; 1 (not found)
+[1 2 3] 2 contains!            ; 0 (found)
 ```
 
 ## List (list.froth)
@@ -110,12 +127,16 @@ Utilities for cons lists. Lists are built with `.` (nil) and `,` (cons):
 | `lfoldl` | `( list fn -- ... )` | Apply fn to each element head-to-tail |
 | `lfoldr` | `( list fn -- ... )` | Apply fn to each element tail-to-head |
 | `lreverse` | `( list -- list )` | Reverse a list |
+| `lconcat` | `( list1 list2 -- list )` | Concatenate two lists |
+| `lmap` | `( list fn -- list )` | Apply fn to each element, return new list |
 
 ```
 . 3 , 2 , 1 , {print} lfoldl!   ; prints 1, 2, 3
 . 3 , 2 , 1 , {print} lfoldr!   ; prints 3, 2, 1
 . 3 , 2 , 1 , lreverse!         ; produces [3, 2, 1]
 0 . 3 , 2 , 1 , {+} lfoldl!     ; sums to 6
+. 2 , 1 , . 4 , 3 , lconcat!    ; produces [1, 2, 3, 4]
+. 3 , 2 , 1 , {1 +} lmap!       ; produces [2, 3, 4]
 ```
 
 ## Eval (eval.froth)
@@ -161,11 +182,13 @@ Map utilities.
 |------|--------------|-------------|
 | `restrict` | `( map keys -- map )` | Restrict map to only keys in array |
 | `transform-values` | `( map fn -- map )` | Transform each value in map using fn |
+| `merge` | `( map1 map2 -- map )` | Merge maps, map2 values take precedence |
 
 ```
 $ 1 'a : 2 'b : 3 'c : /m
 m ['a 'c] restrict!            ; $ 1 'a : 3 'c :
 m { 2 * } transform-values!    ; $ 2 'a : 4 'b : 6 'c :
+$ 1 'a : 2 'b : $ 3 'b : 4 'c : merge!  ; $ 1 'a : 3 'b : 4 'c :
 ```
 
 ## Data (data.froth)
