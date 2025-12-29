@@ -6,44 +6,44 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 
 | Name | Module | Description |
 |------|--------|-------------|
+| `add-keys` | map | Add array of keys with nil values |
+| `and` | bool | Logical and |
+| `bench` | bench | Benchmark closure execution |
+| `boundness` | boundness | Analyze variable binding (returns sets) |
+| `concat` | array | Concatenate two arrays |
+| `contains` | array | Check if array contains element |
+| `count-bindings` | optimize | Count bindings in environments |
 | `def-fn` | defs | Create closure with minimal environment |
-| `nl` | io | Print newline |
-| `println` | io | Print value with newline |
-| `writeln` | io | Write in executable form with newline |
+| `delete-keys` | map | Delete array of keys from map |
+| `eval` | eval | Evaluate closure with stack and op-table |
+| `fib` | math | Generate Fibonacci sequence |
+| `filter` | array | Keep elements matching predicate |
+| `flatten` | array | Flatten nested arrays |
 | `foldl` | array | Apply fn to elements left-to-right |
 | `foldr` | array | Apply fn to elements right-to-left |
+| `lconcat` | list | Concatenate two lists |
+| `lfoldl` | list | Apply fn head-to-tail |
+| `lfoldr` | list | Apply fn tail-to-head |
+| `liveness` | liveness | Analyze last references in function |
+| `lmap` | list | Apply fn to each element |
+| `lreverse` | list | Reverse a cons list |
 | `map` | array | Transform each element |
-| `filter` | array | Keep elements matching predicate |
+| `merge` | map | Merge two maps (map2 takes precedence) |
+| `nl` | io | Print newline |
+| `not` | bool | Logical not (0→1, else→0) |
+| `optimize` | optimize | Recursively optimize closures |
+| `or` | bool | Logical or |
+| `preflight` | preflight | Check for env/import/applyOperator usage |
+| `println` | io | Print value with newline |
 | `reduce` | array | Reduce with binary function |
-| `concat` | array | Concatenate two arrays |
-| `flatten` | array | Flatten nested arrays |
+| `restrict` | map | Restrict map to specified keys |
+| `restrict-closure-env` | optimize | Restrict closure to free variables |
 | `reverse` | array | Reverse an array |
 | `scanl` | array | Iterate left-to-right until predicate returns 0 |
 | `scanr` | array | Iterate right-to-left until predicate returns 0 |
-| `contains` | array | Check if array contains element |
-| `lfoldl` | list | Apply fn head-to-tail |
-| `lfoldr` | list | Apply fn tail-to-head |
-| `lreverse` | list | Reverse a cons list |
-| `lconcat` | list | Concatenate two lists |
-| `lmap` | list | Apply fn to each element |
-| `eval` | eval | Evaluate closure with stack and op-table |
-| `restrict` | map | Restrict map to specified keys |
-| `transform-values` | map | Transform each value in map |
-| `merge` | map | Merge two maps (map2 takes precedence) |
-| `delete-keys` | map | Delete array of keys from map |
-| `add-keys` | map | Add array of keys with nil values |
 | `transform` | data | Recursively transform data structure |
-| `not` | bool | Logical not (0→1, else→0) |
-| `and` | bool | Logical and |
-| `or` | bool | Logical or |
-| `fib` | math | Generate Fibonacci sequence |
-| `bench` | bench | Benchmark closure execution |
-| `preflight` | preflight | Check for env/import/applyOperator usage |
-| `boundness` | boundness | Analyze variable binding (returns sets) |
-| `liveness` | liveness | Analyze last references in function |
-| `restrict-closure-env` | optimize | Restrict closure to free variables |
-| `optimize` | optimize | Recursively optimize closures |
-| `count-bindings` | optimize | Count bindings in environments |
+| `transform-values` | map | Transform each value in map |
+| `writeln` | io | Write in executable form with newline |
 
 Unlike operators, functions must be followed by `!` to be applied (e.g., `println!`, `foldl!`).
 
