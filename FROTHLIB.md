@@ -203,29 +203,54 @@ Values produced by the closure are discarded after all iterations.
 { 0 1 20 fib! } 1000 bench! println!
 ```
 
-## Analysis (analysis.froth)
+## Preflight (preflight.froth)
 
-Static analysis utilities for Froth code.
+Pre-flight checks for static analysis and compilation.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `free-vars` | `( term -- array 0 \| 1 )` | Get free variables in a term |
+| `preflight` | `( func -- 0 \| 1 )` | Check if function is safe for static analysis |
 
-Returns `(array 0)` on success with array of free identifiers, or `1` if the term uses `env` or `import` (which prevent closure optimization).
+Returns `0` if the function is safe, `1` if it contains `env` or `import` operators which have dynamic semantics that prevent static analysis.
 
 ```
-'{ x } free-vars!              ; returns ['x] 0
-'{ /x x } free-vars!           ; returns [] 0 (x is bound)
-'{ /x y } free-vars!           ; returns ['y] 0
-'{ env } free-vars!            ; returns 1 (uses env)
-'{ "foo" import } free-vars!   ; returns 1 (uses import)
+'{ x } preflight!              ; 0 (safe)
+'{ /x x } preflight!           ; 0 (safe)
+'{ env } preflight!            ; 1 (uses env)
+'{ "foo" import } preflight!   ; 1 (uses import)
+'{ /x { env } } preflight!     ; 1 (nested env)
 ```
 
-Free variable analysis:
-- Identifiers are free if not bound by a binder and not operators
-- Quoted terms (`'x`) are data, not references, so not counted
-- Nested functions inherit outer bindings
-- `env` and `import` prevent optimization (return 1)
+Use preflight before boundness analysis or compilation to ensure the function can be statically analyzed.
+
+## Boundness (boundness.froth)
+
+Boundness analysis for the compiler.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `boundness` | `( func -- free-vars bound-vars boundness-array )` | Analyze variable binding in a function |
+
+Analyzes a quoted function and returns three values:
+- `free-vars`: array of identifiers that occur before their binder (or have no binder)
+- `bound-vars`: array of identifiers that have binders in this scope
+- `boundness-array`: parallel array indicating each term's binding status
+
+The boundness-array contains:
+- `0` for bound identifiers
+- `1` for free identifiers
+- `.` for non-identifiers (binders, apply, literals, quoted)
+- `[free bound boundness]` for nested closures/generators
+
+```
+'{x /x x} boundness!
+; Returns: ['x] ['x] [1 . 0]
+; x is free at pos 0, bound at pos 2
+
+'{/x {x} x} boundness!
+; Returns: [] ['x] [. [['x] [] [1]] 0]
+; Nested closure shows x is free inside (captures from outer)
+```
 
 ## Optimize (optimize.froth)
 
@@ -235,8 +260,9 @@ Closure optimization utilities.
 |------|--------------|-------------|
 | `restrict-closure-env` | `( closure -- closure 0 \| 1 )` | Restrict closure environment to free variables |
 | `optimize` | `( data -- data )` | Recursively optimize all closures in a data structure |
+| `count-bindings` | `( data -- count )` | Count total bindings in closure environments |
 
-Restricts a closure's captured environment to only the variables that are actually used (free) in the function body. Returns `(optimized-closure 0)` on success, or `1` if free variable analysis failed (due to `env` or `import` usage).
+Restricts a closure's captured environment to only the variables that are actually used (free) in the function body. Uses `preflight` to check for safety, then `boundness` to find free variables. Returns `(optimized-closure 0)` on success, or `1` if preflight failed (due to `env` or `import` usage).
 
 ```
 1 /a 2 /b { a } /f        ; f captures both a and b
@@ -263,4 +289,12 @@ To optimize all closures in the current environment, use inline (not in a closur
 
 ```
 env optimize! restore      ; optimize and replace current environment
+```
+
+The `count-bindings` function counts the total number of bindings across all closure environments in a data structure. Useful for measuring optimization effectiveness:
+
+```
+1 /a 2 /b { a } /f
+f count-bindings!          ; count before optimization
+f optimize! count-bindings! ; count after (should be less)
 ```

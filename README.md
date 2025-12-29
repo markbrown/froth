@@ -21,8 +21,9 @@ froth/
 │   ├── math.froth        # Math utilities (fib)
 │   ├── bench.froth       # Benchmarking (bench)
 │   ├── eval.froth        # Meta-interpreter
-│   ├── analysis.froth    # Static analysis (free-vars)
-│   ├── optimize.froth    # Closure optimization
+│   ├── preflight.froth   # Pre-flight checks (env/import detection)
+│   ├── boundness.froth   # Boundness analysis for compiler
+│   ├── optimize.froth    # Closure optimization (restrict-closure-env, count-bindings)
 │   └── bytecode.froth    # Bytecode constants and utilities
 ├── src/                  # Mercury source
 │   ├── froth.m           # Main entry point, REPL

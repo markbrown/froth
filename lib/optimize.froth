@@ -3,15 +3,19 @@
 
 ; restrict-closure-env: (closure -- closure 0 | 1)
 ; Restrict a closure's environment to only the free variables in its body.
-; Returns (optimized-closure 0) on success, or 1 if free-vars failed.
-['free-vars 'restrict] { /closure
+; Returns (optimized-closure 0) on success, or 1 if preflight failed.
+['preflight 'boundness 'restrict] { /closure
   closure closureBody /body      ; get the function term
-  body free-vars!                 ; get free variables
-  { /fvs
+  body preflight! {
+    ; Safe - get free variables from boundness
+    body boundness! /boundness-arr /bound-vars /fvs
     closure closureEnv /env      ; get the environment
     env fvs restrict! body close  ; rebuild closure with close
     0                             ; success
-  } { 1 } ?!
+  } {
+    ; Preflight failed (env or import found)
+    1
+  } ?!
 } def-fn! /restrict-closure-env
 
 ; optimize-impl: (self data -- optimized-data)
@@ -48,3 +52,40 @@
 ; Remove optimize-impl from the environment
 env 'optimize-impl delete restore
 
+; count-bindings-impl: (self data -- count)
+; Implementation helper for counting bindings in closure environments.
+; Only counts immediate environment sizes, not recursing into nested closures.
+['foldl] { /self /data
+  data isClosure {
+    ; Just count this closure's env size (shallow)
+    data closureEnv #
+  } {
+  data isMap {
+    ; Sum counts for all values in map
+    0 data keys { /key
+      data key @ self self! +
+    } foldl!
+  } {
+  data isArray {
+    ; Sum counts for all elements
+    0 data { self self! + } foldl!
+  } {
+  data isCons {
+    ; Sum counts for head and tail
+    data fst self self!
+    data snd self self! +
+  } {
+    ; Leaf value - no bindings
+    0
+  } ?! } ?! } ?! } ?!
+} def-fn! /count-bindings-impl
+
+; count-bindings: (data -- count)
+; Count total bindings in closure environments within a data structure.
+; For each closure found, counts the size of its environment (shallow).
+['count-bindings-impl] { /data
+  data count-bindings-impl count-bindings-impl!
+} def-fn! /count-bindings
+
+; Remove count-bindings-impl from the environment
+env 'count-bindings-impl delete restore

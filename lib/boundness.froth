@@ -1,0 +1,87 @@
+; lib/boundness.froth
+; Boundness analysis for Froth compiler
+
+; boundness-term-impl: (term bound seq-fn term-fn -- result term-free-vars term-bound-vars updated-bound)
+; Analyze a single term for boundness.
+; result: 0 (bound ident), 1 (free ident), . (non-ident), or [free bound boundness] array
+; term-free-vars: array of free identifiers found in this term
+; term-bound-vars: array of bound identifiers (binders) found in this term
+; For closures: recurse with fresh bound set (new scope)
+; For generators: recurse with current bound set (bindings don't escape)
+['filter 'not] { /term-fn /seq-fn /bound /term
+  term isIdent {
+    ; Identifier: check if bound
+    bound term in {
+      0 [] [] bound           ; bound: result=0, no free/bound vars
+    } {
+      1 [term] [] bound       ; free: result=1, add to free vars
+    } ?!
+  } {
+  term isBinder {
+    ; Binder: add to bound set, record as bound var
+    term intern idToIdent /ident
+    bound 0 ident : /new-bound
+    . [] [ident] new-bound
+  } {
+  term isFunc {
+    ; Closure: new scope (fresh bound set)
+    term $ 0 seq-fn term-fn seq-fn! /inner-boundness /inner-bound-vars /inner-free-vars
+    ; Create array for result: [free-vars bound-vars boundness]
+    [inner-free-vars inner-bound-vars inner-boundness] /arr
+    ; Filter inner-free-vars: only those not in outer bound are free for outer
+    inner-free-vars { /v bound v in not! } filter! /outer-free-vars
+    arr outer-free-vars [] bound
+  } {
+  term isGen {
+    ; Generator: same scope (inherit bound set, but bindings don't escape)
+    term bound 0 seq-fn term-fn seq-fn! /inner-boundness /inner-bound-vars /inner-free-vars
+    ; Create array for result: [free-vars bound-vars boundness]
+    [inner-free-vars inner-bound-vars inner-boundness] /arr
+    ; Generator free-vars contribute to outer, but bound-vars don't (local to generator)
+    arr inner-free-vars [] bound
+  } {
+  term isQuote {
+    ; Quoted term: not an identifier
+    . [] [] bound
+  } {
+    ; Literal, apply, value: not an identifier
+    . [] [] bound
+  } ?! } ?! } ?! } ?! } ?!
+} def-fn! /boundness-term-impl
+
+; boundness-seq-impl: (body bound idx seq-fn term-fn -- free-vars bound-vars boundness-array)
+; Analyze a sequence of terms for boundness.
+; Returns free-vars array, bound-vars array, and boundness array.
+['concat] { /term-fn /seq-fn /idx /bound /body
+  idx body # = {
+    ; Done: no free vars, no bound vars, empty boundness
+    [] [] []
+  } {
+    ; Process current term
+    body idx @ /term
+    term bound seq-fn term-fn term-fn! /new-bound /term-bound-vars /term-free-vars /term-result
+    ; Recurse for rest of sequence (with updated bound for generators/binders)
+    body new-bound idx 1 + seq-fn term-fn seq-fn! /rest-boundness /rest-bound-vars /rest-free-vars
+    ; Combine results
+    term-free-vars rest-free-vars concat!
+    term-bound-vars rest-bound-vars concat!
+    [term-result] rest-boundness concat!
+  } ?!
+} def-fn! /boundness-seq-impl
+
+; boundness: (func -- free-vars bound-vars boundness-array)
+; Analyze a function for boundness of each term.
+; Returns three values:
+;   free-vars: array of free identifiers (quoted)
+;   bound-vars: array of bound identifiers (quoted)
+;   boundness-array: array parallel to function body with:
+;     0 = bound identifier
+;     1 = free identifier
+;     . = not an identifier (binder, apply, literal, quoted)
+;     [free bound boundness] = nested array for closures/generators
+['boundness-seq-impl 'boundness-term-impl] { /func
+  func $ 0 boundness-seq-impl boundness-term-impl boundness-seq-impl!
+} def-fn! /boundness
+
+; Remove impl functions from the environment
+env 'boundness-term-impl delete 'boundness-seq-impl delete restore

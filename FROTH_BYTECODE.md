@@ -117,10 +117,10 @@ return             ; jump to return pointer
 - `bytecodeval(context, addr)`: New value type for compiled closures
 - `close` operator overloaded: `array + int → bytecodeval` (in addition to `map + function → closureval`)
 
-## Open Questions
+## Resolved Decisions
 
-1. **Error handling**: How to produce meaningful stack traces from bytecode execution?
+1. **Stack traces**: Deferred for later consideration.
 
-2. **Tail call detection**: How to identify when `!` is in tail position for TAILCALL optimization.
+2. **Tail call detection**: A call is a tail call if `!` is the last term in the function body. This is a simple syntactic check during compilation.
 
-3. **Quoted terms**: Currently not supported in compiled code. May need a constant pool later.
+3. **Quoted terms**: Not supported in compiled code. Compilation fails if there are any quoted terms. A constant pool may be added later.
