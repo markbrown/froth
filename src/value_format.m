@@ -47,9 +47,9 @@ value_to_string(ST, arrayval(A)) = String :-
     String = string.append_list(Strings).
 value_to_string(_, mapval(M)) = string.format("<map:%d>", [i(map.count(M))]).
 value_to_string(ST, termval(T)) = term_to_string(ST, T).
-value_to_string(_, nilval) = ".".
+value_to_string(_, nilval) = "".
 value_to_string(ST, consval(H, T)) =
-    "(" ++ value_to_string(ST, H) ++ "," ++ value_to_string(ST, T) ++ ")".
+    value_to_string(ST, H) ++ value_to_string(ST, T).
 value_to_string(ST, closureval(_, Body)) =
     "<closure:" ++ terms_to_string(ST, Body) ++ ">".
 value_to_string(_, bytecodeval(_, Addr)) =

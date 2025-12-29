@@ -160,7 +160,7 @@ Evaluation maintains three pieces of state:
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `print` | `( a -- )` | Pop and print a value |
+| `print` | `( a -- )` | Pop and print a value (nil prints nothing, cons/arrays concatenate elements) |
 | `write` | `( a -- )` | Print in executable (round-trippable) form |
 | `fwrite` | `( value file -- )` | Write value to file in executable form |
 | `import` | `( path -- )` | Load and evaluate a Froth file (path relative to current file) |
