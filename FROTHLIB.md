@@ -30,6 +30,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `restrict` | map | Restrict map to specified keys |
 | `transform-values` | map | Transform each value in map |
 | `merge` | map | Merge two maps (map2 takes precedence) |
+| `delete-keys` | map | Delete array of keys from map |
 | `transform` | data | Recursively transform data structure |
 | `not` | bool | Logical not (0→1, else→0) |
 | `and` | bool | Logical and |
@@ -38,6 +39,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `bench` | bench | Benchmark closure execution |
 | `preflight` | preflight | Check for env/import/applyOperator usage |
 | `boundness` | boundness | Analyze variable binding (returns sets) |
+| `liveness` | liveness | Analyze last references in function |
 | `restrict-closure-env` | optimize | Restrict closure to free variables |
 | `optimize` | optimize | Recursively optimize closures |
 | `count-bindings` | optimize | Count bindings in environments |
@@ -183,12 +185,14 @@ Map utilities.
 | `restrict` | `( map keys -- map )` | Restrict map to only keys in array |
 | `transform-values` | `( map fn -- map )` | Transform each value in map using fn |
 | `merge` | `( map1 map2 -- map )` | Merge maps, map2 values take precedence |
+| `delete-keys` | `( map keys -- map )` | Delete array of keys from map |
 
 ```
 $ 1 'a : 2 'b : 3 'c : /m
 m ['a 'c] restrict!            ; $ 1 'a : 3 'c :
 m { 2 * } transform-values!    ; $ 2 'a : 4 'b : 6 'c :
 $ 1 'a : 2 'b : $ 3 'b : 4 'c : merge!  ; $ 1 'a : 3 'b : 4 'c :
+m ['a 'c] delete-keys!         ; $ 2 'b :
 ```
 
 ## Data (data.froth)
@@ -320,6 +324,48 @@ The boundness-array contains:
 '{x x} boundness! /b /bnd /fvs
 fvs keys   ; ['x] - each variable appears once
 fvs 'x @   ; 0 - slot number for x
+```
+
+## Liveness (liveness.froth)
+
+Liveness analysis for the compiler.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `liveness` | `( func free-set bound-set boundness-array -- liveness-array )` | Analyze last references in function |
+
+Takes a quoted function and the outputs from `boundness`, and returns a liveness array parallel to the function body. Each element indicates whether that identifier reference is the last use of the variable:
+
+- `0` = still live (not the last reference)
+- `1` = last reference (can drop/move value after this use)
+- `.` = not an identifier reference (binder, apply, literal, quoted, operator)
+- `[liveness]` = nested liveness array for closures/generators
+
+The analysis traverses right-to-left to determine which references are "last" in each scope. Key behaviors:
+- Closures create new scopes; outer variables are live if captured
+- Generators share outer scope; binders inside create local scope within generator only
+
+```
+'{x} boundness! liveness!
+; [1] - single free var is last-ref
+
+'{x x} boundness! liveness!
+; [0 1] - first x still live, second x last-ref
+
+'{x /x x} boundness! liveness!
+; [1 . 1] - both x's are last-ref (different vars due to shadowing)
+
+'{x {x} x} boundness! liveness!
+; [0 [1] 1] - outer x captured by closure, still live at pos 0
+
+'{x {/x x}} boundness! liveness!
+; [1 [. 1]] - outer x not captured (shadowed in closure)
+
+'{x [x] x} boundness! liveness!
+; [0 [0] 1] - generator shares scope, x still live through generator
+
+'{x [/x x] x} boundness! liveness!
+; [0 [. 1] 1] - generator binder is local, outer x unaffected
 ```
 
 ## Optimize (optimize.froth)
