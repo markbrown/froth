@@ -269,11 +269,11 @@ Boundness analysis for the compiler.
 | `boundness` | `( func -- free-set bound-set boundness-array )` | Analyze variable binding in a function |
 
 Analyzes a quoted function and returns three values:
-- `free-set`: map (set) of identifiers that occur before their binder (or have no binder)
-- `bound-set`: map (set) of identifiers that have binders in this scope
+- `free-set`: map from identifiers to slot numbers (for closure context allocation)
+- `bound-set`: map from identifiers to nil (marking presence)
 - `boundness-array`: parallel array indicating each term's binding status
 
-Use `keys` to convert sets to arrays when needed. Sets ensure each variable appears only once.
+Slot numbers are assigned in order of first occurrence (0, 1, 2, ...). Use `keys` to get the array of free variable identifiers.
 
 The boundness-array contains:
 - `0` for bound identifiers
@@ -283,15 +283,20 @@ The boundness-array contains:
 
 ```
 '{x /x x} boundness!
-; Returns: ($ 0 'x :) ($ 0 'x :) [1 . 0]
-; x is free at pos 0, bound at pos 2
+; Returns: ($ 0 'x :) ($ . 'x :) [1 . 0]
+; x is free with slot 0 at pos 0, bound at pos 2
+
+'{x y} boundness!
+; Returns: ($ 0 'x : 1 'y :) $ [1 1]
+; x gets slot 0, y gets slot 1
 
 '{/x {x} x} boundness!
-; Returns: $ ($ 0 'x :) [. [($ 0 'x :) $ [1]] 0]
-; Nested closure shows x is free inside (captures from outer)
+; Returns: $ ($ . 'x :) [. [($ 0 'x :) $ [1]] 0]
+; Outer free-set empty (x is bound), nested closure has x free with slot 0
 
 '{x x} boundness! /b /bnd /fvs
 fvs keys   ; ['x] - each variable appears once
+fvs 'x @   ; 0 - slot number for x
 ```
 
 ## Optimize (optimize.froth)
