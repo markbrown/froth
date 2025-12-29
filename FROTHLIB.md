@@ -2,6 +2,42 @@
 
 The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is given. It imports the following modules:
 
+## Quick Reference
+
+| Name | Module | Description |
+|------|--------|-------------|
+| `def-fn` | defs | Create closure with minimal environment |
+| `nl` | io | Print newline |
+| `println` | io | Print value with newline |
+| `writeln` | io | Write in executable form with newline |
+| `foldl` | array | Apply fn to elements left-to-right |
+| `foldr` | array | Apply fn to elements right-to-left |
+| `map` | array | Transform each element |
+| `filter` | array | Keep elements matching predicate |
+| `reduce` | array | Reduce with binary function |
+| `concat` | array | Concatenate two arrays |
+| `flatten` | array | Flatten nested arrays |
+| `reverse` | array | Reverse an array |
+| `lfoldl` | list | Apply fn head-to-tail |
+| `lfoldr` | list | Apply fn tail-to-head |
+| `lreverse` | list | Reverse a cons list |
+| `eval` | eval | Evaluate closure with stack and op-table |
+| `restrict` | map | Restrict map to specified keys |
+| `transform-values` | map | Transform each value in map |
+| `transform` | data | Recursively transform data structure |
+| `not` | bool | Logical not (0→1, else→0) |
+| `and` | bool | Logical and |
+| `or` | bool | Logical or |
+| `fib` | math | Generate Fibonacci sequence |
+| `bench` | bench | Benchmark closure execution |
+| `preflight` | preflight | Check for env/import usage |
+| `boundness` | boundness | Analyze variable binding |
+| `restrict-closure-env` | optimize | Restrict closure to free variables |
+| `optimize` | optimize | Recursively optimize closures |
+| `count-bindings` | optimize | Count bindings in environments |
+
+Unlike operators, functions must be followed by `!` to be applied (e.g., `println!`, `foldl!`).
+
 ## Definitions (defs.froth)
 
 Utilities for creating closures with minimal environments. This module is imported first and has no dependencies on other stdlib modules.
