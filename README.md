@@ -146,15 +146,25 @@ f closureBody print    ; prints: { 1 2 + }
 
 ### Shell Escaping
 
-When piping Froth code through bash, characters like `!`, `$`, `*`, and `?` may be interpreted by the shell. Use a heredoc with a quoted delimiter to avoid this:
+When using `-e` with double quotes, bash interprets `!` for history expansion. You can escape it with `\!` and Froth will unescape it automatically:
+
+```bash
+froth -e "1 2 + println\!"    # \! becomes !
+```
+
+Alternatively, use single quotes (which don't expand `!`):
+
+```bash
+froth -e '5 3 > { "yes" } { "no" } ?!'
+```
+
+For complex code with many special characters, use a heredoc or a file:
 
 ```bash
 cat <<'EOF' | froth
 5 3 > { "yes" } { "no" } ?!
 EOF
 ```
-
-Or use files or the REPL, which don't have this issue.
 
 ## Examples
 

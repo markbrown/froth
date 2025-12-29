@@ -57,6 +57,10 @@
 
 default_options = options(no, no, no, []).
 
+% Unescape \! to ! for -e arguments (shell escaping workaround)
+:- func unescape_bang(string) = string.
+unescape_bang(S) = string.replace_all(S, "\\!", "!").
+
 %-----------------------------------------------------------------------%
 % Argument parsing
 %-----------------------------------------------------------------------%
@@ -85,7 +89,7 @@ parse_args_loop([Arg | Rest], Opts0, Result) :-
         parse_args_loop(Rest, Opts, Result)
     else if Arg = "-e" ; Arg = "--exec" then
         ( if Rest = [Code | Rest2] then
-            Actions = [exec_code(Code) | Opts0 ^ opt_actions],
+            Actions = [exec_code(unescape_bang(Code)) | Opts0 ^ opt_actions],
             Opts = Opts0 ^ opt_actions := Actions,
             parse_args_loop(Rest2, Opts, Result)
         else
