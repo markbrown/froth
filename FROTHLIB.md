@@ -31,6 +31,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `transform-values` | map | Transform each value in map |
 | `merge` | map | Merge two maps (map2 takes precedence) |
 | `delete-keys` | map | Delete array of keys from map |
+| `add-keys` | map | Add array of keys with nil values |
 | `transform` | data | Recursively transform data structure |
 | `not` | bool | Logical not (0→1, else→0) |
 | `and` | bool | Logical and |
@@ -186,6 +187,7 @@ Map utilities.
 | `transform-values` | `( map fn -- map )` | Transform each value in map using fn |
 | `merge` | `( map1 map2 -- map )` | Merge maps, map2 values take precedence |
 | `delete-keys` | `( map keys -- map )` | Delete array of keys from map |
+| `add-keys` | `( map keys -- map )` | Add keys with nil values (set union) |
 
 ```
 $ 1 'a : 2 'b : 3 'c : /m
@@ -193,6 +195,7 @@ m ['a 'c] restrict!            ; $ 1 'a : 3 'c :
 m { 2 * } transform-values!    ; $ 2 'a : 4 'b : 6 'c :
 $ 1 'a : 2 'b : $ 3 'b : 4 'c : merge!  ; $ 1 'a : 3 'b : 4 'c :
 m ['a 'c] delete-keys!         ; $ 2 'b :
+$ ['x 'y] add-keys!            ; $ . 'x : . 'y :
 ```
 
 ## Data (data.froth)
