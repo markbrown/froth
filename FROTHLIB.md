@@ -9,7 +9,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `add-keys` | map | Add array of keys with nil values |
 | `and` | bool | Logical and |
 | `bench` | bench | Benchmark closure execution |
-| `boundness` | boundness | Analyze variable binding (returns sets) |
+| `boundness` | boundness | Analyze variable binding (returns map) |
 | `concat` | array | Concatenate two arrays |
 | `contains` | array | Check if array contains element |
 | `count-bindings` | optimize | Count bindings in environments |
@@ -307,38 +307,35 @@ Boundness analysis for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `boundness` | `( func -- free-set bound-set boundness-array )` | Analyze variable binding in a function |
+| `boundness` | `( func -- func boundness-map )` | Analyze variable binding in a function |
 
-Analyzes a quoted function and returns three values:
-- `free-set`: map from identifiers to slot numbers (for closure context allocation)
-- `bound-set`: map from identifiers to nil (marking presence)
-- `boundness-array`: parallel array indicating each term's binding status
+Analyzes a quoted function and returns the function plus a boundness-map. The map contains:
+- `'children`: array of maps, one per term in the function body
+- `'free-vars`: map from identifiers to context slot numbers
+- `'bound-set`: map from identifiers to nil (marking presence)
 
-Slot numbers are assigned in order of first occurrence (0, 1, 2, ...). Use `keys` to get the array of free variable identifiers.
+Each child map contains:
+- `'is-bound`: `0` for bound identifiers, `1` for free identifiers
+- `'children`, `'free-vars`, `'bound-set`: for nested closures/generators
+- `$` (empty): for binders, operators, literals, quotes
 
-The boundness-array contains:
-- `0` for bound identifiers
-- `1` for free identifiers
-- `.` for non-identifiers (binders, apply, literals, quoted)
-- `[free-set bound-set boundness]` for nested closures/generators
+Context slot numbers are assigned in order of first occurrence (0, 1, 2, ...).
 
 ```
-'{x /x x} boundness!
-; Returns: ($ 0 'x :) ($ . 'x :) [1 . 0]
-; x is free with slot 0 at pos 0, bound at pos 2
+'{x} boundness! /bnd-map /func
+bnd-map 'free-vars @           ; $ 0 'x : (x gets slot 0)
+bnd-map 'children @ 0 @        ; $ 1 'is-bound : (x is free)
 
-'{x y} boundness!
-; Returns: ($ 0 'x : 1 'y :) $ [1 1]
-; x gets slot 0, y gets slot 1
+'{/x x} boundness! /bnd-map /func
+bnd-map 'children @            ; [ $ $ 0 'is-bound : ]
+; First element ($) is binder, second has is-bound=0 (bound)
 
-'{/x {x} x} boundness!
-; Returns: $ ($ . 'x :) [. [($ 0 'x :) $ [1]] 0]
-; Outer free-set empty (x is bound), nested closure has x free with slot 0
-
-'{x x} boundness! /b /bnd /fvs
-fvs keys   ; ['x] - each variable appears once
-fvs 'x @   ; 0 - slot number for x
+'{/x {x}} boundness! /bnd-map /func
+bnd-map 'children @ 1 @        ; nested closure's map
+; Has 'children, 'free-vars, 'bound-set keys
 ```
+
+The passes compose: `func boundness! liveness! slots!` returns `(func slots-map)`.
 
 ## Liveness (liveness.froth)
 
@@ -346,51 +343,34 @@ Liveness analysis for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `liveness` | `( func free-set bound-set boundness-array -- liveness-array )` | Analyze last references in function |
+| `liveness` | `( func boundness-map -- func liveness-map )` | Analyze last references in function |
 
-Takes a quoted function and the outputs from `boundness`, and returns a liveness array parallel to the function body. Each element indicates:
+Takes the output from `boundness` and adds liveness information to the map:
 
-- `0` = identifier still live (not the last reference), or binder is used
-- `1` = identifier is last reference, or binder is unused (dead)
-- `.` = not a variable (apply, literal, quoted, operator)
-- `[[liveness] dead-set]` = closure (dead-set = vars whose last use is this capture)
-- `[liveness]` = generator
+- `'is-live`: `0` (still live) or `1` (last reference) for identifiers
+- `'is-used`: `0` (used) or `1` (dead) for binders
+- `'dead-set`: set of vars whose last use is capture (for closures only)
 
 The analysis traverses right-to-left to determine which references are "last" in each scope. Key behaviors:
-- Closures create new scopes; captured vars that aren't used later go in dead-set
+- Closures create new scopes; captured vars that aren't used later go in `'dead-set`
 - Generators share outer scope; binders inside create local scope within generator only
 - Binders report whether the variable is actually used (0) or dead (1)
 
 ```
-'{x} boundness! liveness!
-; [1] - single free var is last-ref
+'{x} boundness! liveness! /map /func
+map 'children @ 0 @            ; $ 1 'is-bound : 1 'is-live :
+; x is free (is-bound=1) and last-ref (is-live=1)
 
-'{x x} boundness! liveness!
-; [0 1] - first x still live, second x last-ref
+'{/x x} boundness! liveness! /map /func
+map 'children @ 0 @            ; $ 0 'is-used :
+; binder is used (is-used=0)
 
-'{/x x} boundness! liveness!
-; [0 1] - binder used (0), x is last-ref
+'{/x} boundness! liveness! /map /func
+map 'children @ 0 @ 'is-used @ ; 1 - binder unused (dead)
 
-'{/x} boundness! liveness!
-; [1] - binder unused (dead)
-
-'{x /x x} boundness! liveness!
-; [1 0 1] - both x's are last-ref (different vars), binder used
-
-'{x {x} x} boundness! liveness!
-; [0 [[1] $] 1] - x still live after, dead-set empty
-
-'{x {x}} boundness! liveness!
-; [0 [[1] $.'x:]] - x's last use is capture, in dead-set
-
-'{x {/x x}} boundness! liveness!
-; [1 [[0 1] $]] - outer x not captured (shadowed)
-
-'{x [x] x} boundness! liveness!
-; [0 [0] 1] - generator shares scope, x still live through generator
-
-'{x [/x x] x} boundness! liveness!
-; [0 [0 1] 1] - generator binder is local and used
+'{x {x}} boundness! liveness! /map /func
+map 'children @ 1 @ 'dead-set @ ; $ . 'x :
+; x's last use is this capture, so in dead-set
 ```
 
 ## Slots (slots.froth)
@@ -399,27 +379,30 @@ Frame slot allocation for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `slots` | `( func boundness-array liveness-array -- slots-array max-slots )` | Allocate frame slots |
+| `slots` | `( func liveness-map -- func slots-map )` | Allocate frame slots |
 
-Takes a quoted function and the outputs from `boundness` and `liveness`, and returns a slots array plus the maximum number of slots needed. Slots are reused when variables go out of scope (last use).
+Takes the output from `liveness` and adds slot allocation information to the map:
 
-- Integer = slot number (for live binders and bound identifier references)
-- `.` = not a slot reference (free vars, operators, literals, dead binders)
-- `[slots]` = nested array for generators (same frame)
-- `[[slots max]]` = nested array for closures (own frame)
+- `'slot`: frame slot number (for live binders and bound identifier references)
+- `'max-slots`: maximum number of slots needed (for functions/generators)
+
+Slots are reused when variables go out of scope (last use). Closures get their own frame (slots start at 0), while generators share the outer frame.
 
 ```
-'{/x x} boundness! liveness! slots!
-; [0 0] 1 - one slot for x
+'{/x x} boundness! liveness! slots! /map /func
+map 'max-slots @               ; 1 - one slot needed
+map 'children @ 0 @ 'slot @    ; 0 - binder gets slot 0
+map 'children @ 1 @ 'slot @    ; 0 - reference uses slot 0
 
-'{/x x /y y} boundness! liveness! slots!
-; [0 0 0 0] 1 - slot 0 reused for y after x's last use
+'{/x x /y y} boundness! liveness! slots! /map /func
+map 'max-slots @               ; 1 - slot 0 reused for y
 
-'{/x [/y y] /z z} boundness! liveness! slots!
-; [0 [1 1] 1 1] 2 - slot 1 freed in generator, reused for z
+'{/x {/y y} x} boundness! liveness! slots! /map /func
+map 'max-slots @               ; 1 - outer needs 1 slot
+map 'children @ 1 @ 'max-slots @ ; 1 - closure needs 1 slot
 
-'{/x {/y y} x} boundness! liveness! slots!
-; [0 [[0 0] 1] 0] 1 - closure has own frame (slots [0 0], max 1)
+'{/x /y [/z z] y x} boundness! liveness! slots! /map /func
+map 'max-slots @               ; 3 - generator uses slot 2 for z
 ```
 
 ## Optimize (optimize.froth)

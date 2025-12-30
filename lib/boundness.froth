@@ -1,29 +1,29 @@
 ; lib/boundness.froth
 ; Boundness analysis for Froth compiler
 
-; boundness-term-impl: (term bound slot acc-free seq-fn term-fn -- result term-bound-set updated-bound new-slot new-acc-free)
+; boundness-term-impl: (term bound slot acc-free seq-fn term-fn -- result-map term-bound-set updated-bound new-slot new-acc-free)
 ; Analyze a single term for boundness.
-; result: 0 (bound ident), 1 (free ident), . (non-ident), or [free bound boundness] array
+; result-map: map with 'is-bound for identifiers, 'children/'free-vars/'bound-set for functions
 ; term-bound-set: map (set) of bound identifiers (binders) found in this term
 ; For closures: recurse with fresh bound set (new scope)
 ; For generators: recurse with current bound set (bindings don't escape)
-; acc-free accumulates free variables with slot numbers
+; acc-free accumulates free variables with context slot numbers
 ['foldl] { /term-fn /seq-fn /acc-free /slot /bound /term
   term isIdent {
     ; Identifier: check if bound
     bound term in {
-      0 $ bound slot acc-free              ; bound: result=0, no changes
+      $ 0 'is-bound : $ bound slot acc-free     ; bound: is-bound=0
     } {
       ; Not bound - check if it's an operator (no slot needed)
       term isOperator {
         ; Operator: looked up in op-table, not captured
-        . $ bound slot acc-free
+        $ $ bound slot acc-free
       } {
         ; Free identifier - check if already seen
         acc-free term in {
-          1 $ bound slot acc-free            ; already seen, don't add again
+          $ 1 'is-bound : $ bound slot acc-free   ; already seen, is-bound=1
         } {
-          1 $ bound slot 1 + acc-free slot term :  ; new free var: assign slot
+          $ 1 'is-bound : $ bound slot 1 + acc-free slot term :  ; new free var: assign slot
         } ?!
       } ?!
     } ?!
@@ -32,13 +32,13 @@
     ; Binder: add to bound set with nil value
     term intern idToIdent /ident
     bound . ident : /new-bound
-    . $ . ident : new-bound slot acc-free
+    $ $ . ident : new-bound slot acc-free
   } {
   term isFunc {
     ; Closure: new scope (fresh bound set, fresh slots starting at 0, fresh acc-free)
-    term $ 0 0 $ seq-fn term-fn seq-fn! /inner-boundness /inner-bound-set /inner-free-set
-    ; Create array for result: [free-set bound-set boundness]
-    [inner-free-set inner-bound-set inner-boundness] /arr
+    term $ 0 0 $ seq-fn term-fn seq-fn! /inner-map /inner-bound-set /inner-free-set
+    ; Build result map with children, free-vars, bound-set
+    $ inner-map 'children : inner-free-set 'free-vars : inner-bound-set 'bound-set : /result-map
     ; Update outer's acc-free with inner's free variables that aren't bound in outer
     slot acc-free inner-free-set keys { /v /acc /s
       bound v in {
@@ -51,14 +51,14 @@
         } ?!
       } ?!
     } foldl! /new-acc-free /new-slot
-    arr $ bound new-slot new-acc-free
+    result-map $ bound new-slot new-acc-free
   } {
   term isGen {
     ; Generator: same scope (inherit bound set, but bindings don't escape)
     ; Fresh slots for inner scope (generators have their own closure context)
-    term bound 0 0 $ seq-fn term-fn seq-fn! /inner-boundness /inner-bound-set /inner-free-set
-    ; Create array for result: [free-set bound-set boundness]
-    [inner-free-set inner-bound-set inner-boundness] /arr
+    term bound 0 0 $ seq-fn term-fn seq-fn! /inner-map /inner-bound-set /inner-free-set
+    ; Build result map with children, free-vars, bound-set
+    $ inner-map 'children : inner-free-set 'free-vars : inner-bound-set 'bound-set : /result-map
     ; Generator free-vars contribute to outer with slot assignment
     slot acc-free inner-free-set keys { /v /acc /s
       acc v in {
@@ -67,49 +67,51 @@
         s 1 + acc s v :  ; new free var for outer
       } ?!
     } foldl! /new-acc-free /new-slot
-    arr $ bound new-slot new-acc-free
+    result-map $ bound new-slot new-acc-free
   } {
   term isQuote {
-    ; Quoted term: not an identifier
-    . $ bound slot acc-free
+    ; Quoted term: empty map
+    $ $ bound slot acc-free
   } {
-    ; Literal, apply, value: not an identifier
-    . $ bound slot acc-free
+    ; Literal, apply, value: empty map
+    $ $ bound slot acc-free
   } ?! } ?! } ?! } ?! } ?!
 } def-fn! /boundness-term-impl
 
-; boundness-seq-impl: (body bound idx slot acc-free seq-fn term-fn -- free-set bound-set boundness-array)
+; boundness-seq-impl: (body bound idx slot acc-free seq-fn term-fn -- free-set bound-set children-array)
 ; Analyze a sequence of terms for boundness.
-; Returns free-set (map with slots), bound-set (map with nil), and boundness array.
+; Returns free-set (map with slots), bound-set (map with nil), and children array of maps.
 ['foldl 'concat] { /term-fn /seq-fn /acc-free /slot /idx /bound /body
   idx body # = {
-    ; Done: return accumulated free-set, empty bound-set, empty boundness
+    ; Done: return accumulated free-set, empty bound-set, empty children
     acc-free $ []
   } {
     ; Process current term
     body idx @ /term
-    term bound slot acc-free seq-fn term-fn term-fn! /new-acc-free /new-slot /new-bound /term-bound-set /term-result
+    term bound slot acc-free seq-fn term-fn term-fn! /new-acc-free /new-slot /new-bound /term-bound-set /term-map
     ; Recurse for rest of sequence (with updated state)
-    body new-bound idx 1 + new-slot new-acc-free seq-fn term-fn seq-fn! /rest-boundness /rest-bound-set /rest-free-set
+    body new-bound idx 1 + new-slot new-acc-free seq-fn term-fn seq-fn! /rest-children /rest-bound-set /rest-free-set
     ; Combine results: free-set is already accumulated, merge bound-sets with nil
     rest-free-set
     rest-bound-set term-bound-set keys { /k . k : } foldl!
-    [term-result] rest-boundness concat!
+    [term-map] rest-children concat!
   } ?!
 } def-fn! /boundness-seq-impl
 
-; boundness: (func -- free-set bound-set boundness-array)
+; boundness: (func -- func boundness-map)
 ; Analyze a function for boundness of each term.
-; Returns three values:
-;   free-set: map from identifiers to slot numbers (for closure context)
-;   bound-set: map from identifiers to nil (just marking presence)
-;   boundness-array: array parallel to function body with:
-;     0 = bound identifier
-;     1 = free identifier
-;     . = not an identifier (binder, apply, literal, quoted)
-;     [free-set bound-set boundness] = nested array for closures/generators
+; Returns the function and a boundness-map with:
+;   'children: array of maps parallel to function body
+;   'free-vars: map from identifiers to context slot numbers
+;   'bound-set: map from identifiers to nil (marking presence)
+; Each child map contains:
+;   'is-bound: 0 (bound) or 1 (free) for identifiers
+;   'children, 'free-vars, 'bound-set: for nested functions/generators
+;   $: empty map for binders, literals, operators, quotes
 ['boundness-seq-impl 'boundness-term-impl] { /func
   func $ 0 0 $ boundness-seq-impl boundness-term-impl boundness-seq-impl!
+  /children /bound-set /free-set
+  func $ children 'children : free-set 'free-vars : bound-set 'bound-set :
 } def-fn! /boundness
 
 ; Remove impl functions from the environment

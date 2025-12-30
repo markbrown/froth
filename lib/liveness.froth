@@ -1,47 +1,46 @@
 ; lib/liveness.froth
 ; Liveness analysis for Froth compiler
 
-; liveness-term-impl: (term boundness-term seen seq-fn term-fn -- result new-seen)
+; liveness-term-impl: (term bnd-map seen seq-fn term-fn -- result-map new-seen)
 ; Analyze a single term for liveness (last reference).
-; result: 0 (still live / binder used), 1 (last ref / binder dead), . (non-var), or nested array
+; Takes boundness map, returns map with liveness info added.
 ; seen: set of variables still live after this point
 ; Traverses right-to-left using boundness info.
-['delete-keys 'add-keys 'restrict 'not 'and 'filter] { /term-fn /seq-fn /seen /bnd /term
-  ; Check if this is an identifier reference (boundness is 0 or 1, not .)
-  term isIdent bnd isNil not! and! {
+['delete-keys 'add-keys 'restrict 'not 'and 'filter] { /term-fn /seq-fn /seen /bnd-map /term
+  ; Check if this is an identifier reference (has 'is-bound key)
+  term isIdent bnd-map 'is-bound in 0 = and! {
     ; Identifier: check if still live (already in seen-set)
     seen term in {
-      0 seen                           ; already seen -> still live
+      bnd-map 0 'is-live : seen                   ; already seen -> still live
     } {
-      1 seen . term :                  ; first occurrence (right-to-left) -> last ref
+      bnd-map 1 'is-live : seen . term :          ; first occurrence (right-to-left) -> last ref
     } ?!
   } {
   term isBinder {
     ; Binder: check if used (in seen-set), then remove from seen
     ; in returns 0 if exists (used), 1 if not (dead)
     term intern idToIdent /ident
-    seen ident in seen ident delete
+    seen ident in /is-used
+    bnd-map is-used 'is-used : seen ident delete
   } {
   term isFunc {
     ; Closure: fresh seen-set, compute dead-at-capture set
-    ; bnd is [free-set bound-set boundness-array]
-    bnd 0 @ /inner-free-set
-    bnd 2 @ /inner-boundness
+    bnd-map 'free-vars @ /inner-free-set
+    bnd-map 'children @ /inner-children
     term # 1 - /inner-last-idx
-    term inner-boundness $ inner-last-idx seq-fn term-fn seq-fn! /inner-seen /inner-liveness
+    term inner-children $ inner-last-idx seq-fn term-fn seq-fn! /inner-seen /new-children
     ; Compute dead-set: free vars NOT in seen (last use is this capture)
     inner-free-set keys { /v seen v in not! } filter! /dead-vars
     $ dead-vars add-keys! /dead-set
     ; Add all free vars to seen (binders to left need to see them as used)
     seen inner-free-set keys add-keys! /new-seen
-    ; Return [inner-liveness dead-set]
-    [inner-liveness dead-set] new-seen
+    ; Return map with updated children and dead-set
+    bnd-map new-children 'children : dead-set 'dead-set : new-seen
   } {
   term isGen {
     ; Generator: shares scope for free vars, but binders are local
-    ; bnd is [free-set bound-set boundness-array]
-    bnd 1 @ /inner-bound-set
-    bnd 2 @ /inner-boundness
+    bnd-map 'bound-set @ /inner-bound-set
+    bnd-map 'children @ /inner-children
     inner-bound-set keys /bound-vars
     ; Save vars that will be shadowed (to restore after)
     seen bound-vars restrict! /save
@@ -49,49 +48,48 @@
     seen bound-vars delete-keys! /gen-seen
     ; Process generator with modified seen
     term # 1 - /inner-last-idx
-    term inner-boundness gen-seen inner-last-idx seq-fn term-fn seq-fn! /after-seen /inner-liveness
+    term inner-children gen-seen inner-last-idx seq-fn term-fn seq-fn! /after-seen /new-children
     ; Restore shadowed vars
     after-seen save keys add-keys! /new-seen
-    inner-liveness new-seen
+    bnd-map new-children 'children : new-seen
   } {
   term isQuote {
-    ; Quoted term: not a reference
-    . seen
+    ; Quoted term: no liveness info
+    bnd-map seen
   } {
-    ; Literal, apply, value: not a reference
-    . seen
+    ; Literal, apply, operator, value: no liveness info
+    bnd-map seen
   } ?! } ?! } ?! } ?! } ?!
 } def-fn! /liveness-term-impl
 
-; liveness-seq-impl: (body boundness-arr seen idx seq-fn term-fn -- liveness-array new-seen)
+; liveness-seq-impl: (body children-arr seen idx seq-fn term-fn -- new-children-arr new-seen)
 ; Process terms from idx down to 0 (right-to-left)
-['concat 'liveness-term-impl] { /term-fn /seq-fn /idx /seen /bnd-arr /body
+['concat 'liveness-term-impl] { /term-fn /seq-fn /idx /seen /children-arr /body
   idx 0 < {
     ; Done: return empty array and current seen
     [] seen
   } {
     ; Process current term (rightmost remaining)
-    body idx @ bnd-arr idx @ seen seq-fn term-fn term-fn! /after-term-seen /term-result
+    body idx @ children-arr idx @ seen seq-fn term-fn term-fn! /after-term-seen /term-map
     ; Recurse for rest (to the left)
-    body bnd-arr after-term-seen idx 1 - seq-fn term-fn seq-fn! /rest-seen /rest-liveness
+    body children-arr after-term-seen idx 1 - seq-fn term-fn seq-fn! /rest-seen /rest-children
     ; Append (we're going right-to-left, so rest is to the left)
-    rest-liveness [term-result] concat! rest-seen
+    rest-children [term-map] concat! rest-seen
   } ?!
 } def-fn! /liveness-seq-impl
 
-; liveness: (func free-set bound-set boundness-array -- liveness-array)
+; liveness: (func boundness-map -- func liveness-map)
 ; Analyze a function for liveness of each identifier reference.
-; Returns liveness array parallel to function body with:
-;   0 = still live (not the last reference), or binder is used
-;   1 = last reference, or binder is unused (dead)
-;   . = not a variable (apply, literal, quoted)
-;   [[liveness] dead-set] = closure (dead-set = vars whose last use is capture)
-;   [liveness] = generator
-['liveness-seq-impl 'liveness-term-impl] { /bnd-arr /bound-set /free-set /func
+; Takes boundness-map and adds liveness info:
+;   'is-live: 0 (still live) or 1 (last reference) for identifiers
+;   'is-used: 0 (used) or 1 (dead) for binders
+;   'dead-set: set of vars whose last use is capture (for closures)
+['liveness-seq-impl 'liveness-term-impl] { /bnd-map /func
+  bnd-map 'children @ /children
   func # 1 - /last-idx
-  func bnd-arr $ last-idx liveness-seq-impl liveness-term-impl liveness-seq-impl!
-  /final-seen /result
-  result
+  func children $ last-idx liveness-seq-impl liveness-term-impl liveness-seq-impl!
+  /final-seen /new-children
+  func bnd-map new-children 'children :
 } def-fn! /liveness
 
 ; Remove impl functions from the environment

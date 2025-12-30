@@ -1,108 +1,106 @@
 ; lib/slots.froth
 ; Frame slot allocation for Froth compiler
 
-; slots-term-impl: (term bnd-term live-term map free max seq-fn term-fn -- result new-map new-free new-max)
+; slots-term-impl: (term live-map slot-map free max seq-fn term-fn -- result-map new-slot-map new-free new-max)
 ; Allocate a slot for a single term.
-; result: slot number (int) for live binders and bound refs, . for others
-; map: identifier -> slot mapping
+; live-map: liveness map for this term (has 'is-used, 'is-live, 'children, 'dead-set, etc.)
+; slot-map: identifier -> slot mapping
 ; free: cons list of free slots (nil if empty)
 ; max: next slot number to allocate if free list is empty
-['delete-keys 'and 'reduce 'swap] { /term-fn /seq-fn /max /free /map /live /bnd /term
+['delete-keys 'reduce 'swap 'and] { /term-fn /seq-fn /max /free /slot-map /live-map /term
   term isBinder {
-    ; Binder: allocate slot if used (live=0), else return .
+    ; Binder: allocate slot if used (is-used=0), else no slot
     term intern idToIdent /ident
-    live 0 = {
+    live-map 'is-used @ 0 = {
       ; Used binder: allocate slot
       free isNil {
         ; No free slots, allocate new one
-        max map max ident : free max 1 +
+        live-map max 'slot : slot-map max ident : free max 1 +
       } {
         ; Pop from free list (cons cell)
         free fst /slot
         free snd /new-free
-        slot map slot ident : new-free max
+        live-map slot 'slot : slot-map slot ident : new-free max
       } ?!
     } {
       ; Dead binder: no slot needed
-      . map free max
+      live-map slot-map free max
     } ?!
   } {
   term isFunc {
     ; Closure: fresh frame (own slot space)
-    bnd 2 @ /inner-bnd
-    ; live is [[inner-liveness] dead-set] for closures
-    live 0 @ /inner-live
-    live 1 @ /dead-set
+    live-map 'children @ /inner-children
+    live-map 'dead-set @ /dead-set
     term # 1 - /last-idx
-    term inner-bnd inner-live $ . 0 0 seq-fn term-fn seq-fn!
-    /inner-max /discard-free /discard-map /inner-slots
+    term inner-children $ . 0 0 seq-fn term-fn seq-fn!
+    /inner-max /discard-free /discard-slot-map /new-children
     ; Free slots for vars in dead-set (their last use was this capture)
-    dead-set keys free { /v /f map v @ f swap! , } reduce! /new-free
-    ; Return [slots max] for closure's own frame
-    [inner-slots inner-max] map new-free max
+    dead-set keys free { /v /f slot-map v @ f swap! , } reduce! /new-free
+    ; Return map with updated children and max-slots
+    live-map new-children 'children : inner-max 'max-slots : slot-map new-free max
   } {
   term isGen {
     ; Generator: same frame, but binders are locally scoped
-    bnd 1 @ /inner-bound-set
-    bnd 2 @ /inner-bnd
-    ; live IS the inner liveness array for generators
+    live-map 'children @ /inner-children
+    live-map 'bound-set @ /inner-bound-set
     inner-bound-set keys /bound-vars
     term # 1 - /last-idx
     ; Thread state through generator
-    term inner-bnd live map free max 0 seq-fn term-fn seq-fn!
-    /after-max /after-free /after-map /inner-slots
-    ; Remove inner binders from map (out of scope)
-    after-map bound-vars delete-keys! /new-map
-    inner-slots new-map after-free after-max
+    term inner-children slot-map free max 0 seq-fn term-fn seq-fn!
+    /after-max /after-free /after-slot-map /new-children
+    ; Remove inner binders from slot-map (out of scope)
+    after-slot-map bound-vars delete-keys! /new-slot-map
+    live-map new-children 'children : after-max 'max-slots : new-slot-map after-free after-max
   } {
-  ; Check for bound identifier (bnd must be int 0)
-  term isIdent bnd isInt and! {
-    bnd 0 = {
+  ; Check for bound identifier (has 'is-bound key with value 0)
+  term isIdent live-map 'is-bound in 0 = and! {
+    live-map 'is-bound @ 0 = {
       ; Bound identifier: lookup slot
-      map term @ /slot
-      live 1 = {
+      slot-map term @ /slot
+      live-map 'is-live @ 1 = {
         ; Last use: add slot to free list
-        slot map free slot , max
+        live-map slot 'slot : slot-map free slot , max
       } {
         ; Still live
-        slot map free max
+        live-map slot 'slot : slot-map free max
       } ?!
     } {
-      ; Free identifier (bnd = 1): no slot
-      . map free max
+      ; Free identifier (is-bound = 1): no frame slot
+      live-map slot-map free max
     } ?!
   } {
-    ; Not an identifier, or operator (bnd = nil): no slot
-    . map free max
+    ; Not an identifier, or operator: no slot
+    live-map slot-map free max
   } ?! } ?! } ?! } ?!
 } def-fn! /slots-term-impl
 
-; slots-seq-impl: (body bnd-arr live-arr map free max idx seq-fn term-fn -- slots-array new-map new-free new-max)
+; slots-seq-impl: (body children-arr slot-map free max idx seq-fn term-fn -- new-children-arr new-slot-map new-free new-max)
 ; Process terms from idx to end (left-to-right).
-['concat] { /term-fn /seq-fn /idx /max /free /map /live-arr /bnd-arr /body
+['concat] { /term-fn /seq-fn /idx /max /free /slot-map /children-arr /body
   idx body # = {
     ; Done
-    [] map free max
+    [] slot-map free max
   } {
     ; Process current term
-    body idx @ bnd-arr idx @ live-arr idx @ map free max seq-fn term-fn term-fn!
-    /after-max /after-free /after-map /term-result
+    body idx @ children-arr idx @ slot-map free max seq-fn term-fn term-fn!
+    /after-max /after-free /after-slot-map /term-map
     ; Recurse for rest
-    body bnd-arr live-arr after-map after-free after-max idx 1 + seq-fn term-fn seq-fn!
-    /final-max /final-free /final-map /rest-slots
+    body children-arr after-slot-map after-free after-max idx 1 + seq-fn term-fn seq-fn!
+    /final-max /final-free /final-slot-map /rest-children
     ; Prepend current result
-    [term-result] rest-slots concat! final-map final-free final-max
+    [term-map] rest-children concat! final-slot-map final-free final-max
   } ?!
 } def-fn! /slots-seq-impl
 
-; slots: (func boundness-array liveness-array -- slots-array max-slots)
+; slots: (func liveness-map -- func slots-map)
 ; Allocate frame slots for a function.
-; Returns slots array parallel to function body and max slots needed.
-; Closures get [inner-slots inner-max], generators get [inner-slots].
-['slots-seq-impl 'slots-term-impl] { /live-arr /bnd-arr /func
-  func bnd-arr live-arr $ . 0 0 slots-seq-impl slots-term-impl slots-seq-impl!
-  /max /free /map /result
-  result max
+; Adds 'slot key to binders and bound identifiers.
+; Adds 'max-slots key to functions and generators.
+['slots-seq-impl 'slots-term-impl] { /live-map /func
+  live-map 'children @ /children
+  func children $ . 0 0 slots-seq-impl slots-term-impl slots-seq-impl!
+  /max /free /slot-map /new-children
+  func live-map new-children 'children : max 'max-slots :
 } def-fn! /slots
 
 ; Remove impl functions
