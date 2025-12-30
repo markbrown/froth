@@ -83,14 +83,14 @@ run_tests(!IO) :-
 test(Name, Input, !IO) :-
     io.format("Test: %s\n", [s(Name)], !IO),
     io.format("  Input: %s\n", [s(Input)], !IO),
-    lexer.tokenize(Input, types.empty_intern_table, LexResult),
+    lexer.tokenize(Input, types.empty_string_table, LexResult),
     (
-        LexResult = lexer.ok(Tokens, IT),
+        LexResult = lexer.ok(Tokens, ST),
         parser.parse(Tokens, ParseResult),
         (
             ParseResult = parser.ok(Terms),
             io.write_string("  Terms:\n", !IO),
-            list.foldl(print_term(IT), Terms, !IO)
+            list.foldl(print_term(ST), Terms, !IO)
         ;
             ParseResult = parser.error(Error),
             io.format("  Parse Error: %s\n", [s(parse_error_to_string(Error))], !IO)
@@ -101,44 +101,46 @@ test(Name, Input, !IO) :-
     ),
     io.write_string("\n", !IO).
 
-:- pred print_term(intern_table::in, term::in, io::di, io::uo) is det.
+:- pred print_term(string_table::in, term::in, io::di, io::uo) is det.
 
-print_term(IT, Term, !IO) :-
-    io.format("    %s\n", [s(term_to_string(IT, Term))], !IO).
+print_term(ST, Term, !IO) :-
+    io.format("    %s\n", [s(term_to_string(ST, Term))], !IO).
 
-:- func term_to_string(intern_table, term) = string.
+:- func term_to_string(string_table, term) = string.
 
-term_to_string(IT, identifier(NameId)) =
-    string.format("identifier(%s)", [s(lookup_string(IT ^ it_strings, NameId))]).
-term_to_string(IT, binder(NameId)) =
-    string.format("binder(%s)", [s(lookup_string(IT ^ it_strings, NameId))]).
-term_to_string(IT, function(Terms)) =
-    "function(" ++ terms_to_string(IT, Terms) ++ ")".
-term_to_string(IT, generator(Terms)) =
-    "generator(" ++ terms_to_string(IT, Terms) ++ ")".
-term_to_string(IT, quoted(T)) =
-    "quoted(" ++ term_to_string(IT, T) ++ ")".
-term_to_string(IT, value(V)) =
-    "value(" ++ value_to_string(IT, V) ++ ")".
+term_to_string(ST, identifier(NameId)) =
+    string.format("identifier(%s)", [s(lookup_string(ST, NameId))]).
+term_to_string(ST, binder(NameId)) =
+    string.format("binder(%s)", [s(lookup_string(ST, NameId))]).
+term_to_string(ST, function(Terms)) =
+    "function(" ++ terms_to_string(ST, Terms) ++ ")".
+term_to_string(ST, generator(Terms)) =
+    "generator(" ++ terms_to_string(ST, Terms) ++ ")".
+term_to_string(ST, quoted(T)) =
+    "quoted(" ++ term_to_string(ST, T) ++ ")".
+term_to_string(ST, value(V)) =
+    "value(" ++ value_to_string(ST, V) ++ ")".
 term_to_string(_, apply_term) = "apply".
 
-:- func terms_to_string(intern_table, list(term)) = string.
+:- func terms_to_string(string_table, list(term)) = string.
 
 terms_to_string(_, []) = "".
-terms_to_string(IT, [T]) = term_to_string(IT, T).
-terms_to_string(IT, [T1, T2 | Ts]) =
-    term_to_string(IT, T1) ++ ", " ++ terms_to_string(IT, [T2 | Ts]).
+terms_to_string(ST, [T]) = term_to_string(ST, T).
+terms_to_string(ST, [T1, T2 | Ts]) =
+    term_to_string(ST, T1) ++ ", " ++ terms_to_string(ST, [T2 | Ts]).
 
-:- func value_to_string(intern_table, value) = string.
+:- func value_to_string(string_table, value) = string.
 
 value_to_string(_, intval(I)) = string.format("int(%d)", [i(I)]).
-value_to_string(IT, stringval(StrId)) =
-    string.format("string(\"%s\")", [s(lookup_string(IT ^ it_strings, StrId))]).
+value_to_string(ST, stringval(StrId)) =
+    string.format("string(\"%s\")", [s(lookup_string(ST, StrId))]).
 value_to_string(_, arrayval(_)) = "array(...)".
 value_to_string(_, mapval(_)) = "map(...)".
-value_to_string(IT, termval(T)) = "term(" ++ term_to_string(IT, T) ++ ")".
+value_to_string(ST, termval(T)) = "term(" ++ term_to_string(ST, T) ++ ")".
 value_to_string(_, nilval) = "nil".
 value_to_string(_, consval(_, _)) = "cons(...)".
+value_to_string(_, closureval(_, _)) = "closure(...)".
+value_to_string(_, bytecodeval(_, _)) = "bytecode(...)".
 
 :- func parse_error_to_string(parse_error) = string.
 

@@ -96,33 +96,33 @@ run_tests(!IO) :-
 test(Name, Input, !IO) :-
     io.format("Test: %s\n", [s(Name)], !IO),
     io.format("  Input: %s\n", [s(escape_for_display(Input))], !IO),
-    lexer.tokenize(Input, types.empty_intern_table, Result),
+    lexer.tokenize(Input, types.empty_string_table, Result),
     (
-        Result = ok(Tokens, IT),
+        Result = ok(Tokens, ST),
         io.write_string("  Tokens:\n", !IO),
-        list.foldl(print_token(IT), Tokens, !IO)
+        list.foldl(print_token(ST), Tokens, !IO)
     ;
         Result = error(Error),
         io.format("  Error: %s\n", [s(error_to_string(Error))], !IO)
     ),
     io.write_string("\n", !IO).
 
-:- pred print_token(intern_table::in, located(token)::in, io::di, io::uo) is det.
+:- pred print_token(string_table::in, located(token)::in, io::di, io::uo) is det.
 
-print_token(IT, located(Pos, Token), !IO) :-
+print_token(ST, located(Pos, Token), !IO) :-
     Pos = position(Line, Col),
     io.format("    [%d:%d] %s\n",
-        [i(Line), i(Col), s(token_to_string(IT, Token))], !IO).
+        [i(Line), i(Col), s(token_to_string(ST, Token))], !IO).
 
-:- func token_to_string(intern_table, token) = string.
+:- func token_to_string(string_table, token) = string.
 
-token_to_string(IT, name(NameId)) =
-    string.format("name(%s)", [s(lookup_string(IT ^ it_strings, NameId))]).
-token_to_string(IT, slash_name(NameId)) =
-    string.format("slash_name(%s)", [s(lookup_string(IT ^ it_strings, NameId))]).
+token_to_string(ST, name(NameId)) =
+    string.format("name(%s)", [s(lookup_string(ST, NameId))]).
+token_to_string(ST, slash_name(NameId)) =
+    string.format("slash_name(%s)", [s(lookup_string(ST, NameId))]).
 token_to_string(_, number(N)) = string.format("number(%d)", [i(N)]).
-token_to_string(IT, string(StrId)) =
-    string.format("string(\"%s\")", [s(lookup_string(IT ^ it_strings, StrId))]).
+token_to_string(ST, string(StrId)) =
+    string.format("string(\"%s\")", [s(lookup_string(ST, StrId))]).
 token_to_string(_, quote) = "quote".
 token_to_string(_, bang) = "bang".
 token_to_string(_, open_curly) = "open_curly".

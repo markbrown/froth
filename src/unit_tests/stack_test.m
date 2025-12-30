@@ -133,6 +133,7 @@ value_to_string(termval(_)) = "term".
 value_to_string(nilval) = "nil".
 value_to_string(consval(_, _)) = "cons".
 value_to_string(closureval(_, _)) = "closure".
+value_to_string(bytecodeval(_, _)) = "bytecode".
 
 :- func value_type(value) = string.
 
@@ -144,6 +145,7 @@ value_type(termval(_)) = "term".
 value_type(nilval) = "nil".
 value_type(consval(_, _)) = "cons".
 value_type(closureval(_, _)) = "closure".
+value_type(bytecodeval(_, _)) = "bytecode".
 
 :- func list_to_string(list(value)) = string.
 
