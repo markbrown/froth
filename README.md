@@ -16,14 +16,16 @@ froth/
 │   ├── array.froth       # Array utilities (foldl, map, filter)
 │   ├── list.froth        # Cons list utilities (lfoldl, lreverse)
 │   ├── map.froth         # Map utilities (restrict, transform-values)
-│   ├── data.froth        # Generic data utilities (transform)
+│   ├── data.froth        # Generic data utilities (transform, swap, dup)
 │   ├── bool.froth        # Boolean operations (not, and, or)
 │   ├── math.froth        # Math utilities (fib)
 │   ├── bench.froth       # Benchmarking (bench)
 │   ├── eval.froth        # Meta-interpreter
 │   ├── preflight.froth   # Pre-flight checks (env/import detection)
 │   ├── boundness.froth   # Boundness analysis for compiler
-│   ├── optimize.froth    # Closure optimization (restrict-closure-env, count-bindings)
+│   ├── liveness.froth    # Liveness analysis for compiler
+│   ├── slots.froth       # Frame slot allocation for compiler
+│   ├── optimize.froth    # Closure optimization (restrict-closure-env)
 │   └── bytecode.froth    # Bytecode constants and utilities
 ├── src/                  # Mercury source
 │   ├── froth.m           # Main entry point, REPL
@@ -36,7 +38,8 @@ froth/
 │   ├── vm.m              # Bytecode virtual machine
 │   ├── datastack.m       # Stack implementation
 │   ├── bytecode.m        # Bytecode storage
-│   └── types.m           # Type definitions
+│   ├── types.m           # Type definitions
+│   └── unit_tests/       # Mercury unit tests
 ├── tests/                # Regression tests
 │   ├── *.froth           # Test programs
 │   ├── *.expected        # Expected outputs
