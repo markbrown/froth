@@ -15,6 +15,8 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `count-bindings` | optimize | Count bindings in environments |
 | `def-fn` | defs | Create closure with minimal environment |
 | `delete-keys` | map | Delete array of keys from map |
+| `drop` | data | Drop top of stack |
+| `dup` | data | Duplicate top of stack |
 | `eval` | eval | Evaluate closure with stack and op-table |
 | `fib` | math | Generate Fibonacci sequence |
 | `filter` | array | Keep elements matching predicate |
@@ -30,9 +32,11 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `map` | array | Transform each element |
 | `merge` | map | Merge two maps (map2 takes precedence) |
 | `nl` | io | Print newline |
+| `nip` | data | Remove second element from stack |
 | `not` | bool | Logical not (0→1, else→0) |
 | `optimize` | optimize | Recursively optimize closures |
 | `or` | bool | Logical or |
+| `over` | data | Copy second element to top |
 | `preflight` | preflight | Check for env/import/applyOperator usage |
 | `println` | io | Print value with newline |
 | `reduce` | array | Reduce with binary function |
@@ -42,6 +46,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `scanl` | array | Iterate left-to-right until predicate returns 0 |
 | `scanr` | array | Iterate right-to-left until predicate returns 0 |
 | `slots` | slots | Allocate frame slots for function |
+| `swap` | data | Swap top two elements |
 | `transform` | data | Recursively transform data structure |
 | `transform-values` | map | Transform each value in map |
 | `writeln` | io | Write in executable form with newline |
@@ -201,10 +206,15 @@ $ ['x 'y] add-keys!            ; $ . 'x : . 'y :
 
 ## Data (data.froth)
 
-Generic data structure utilities.
+Generic data structure utilities and stack manipulation.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
+| `swap` | `( a b -- b a )` | Swap top two elements |
+| `dup` | `( a -- a a )` | Duplicate top element |
+| `over` | `( a b -- a b a )` | Copy second element to top |
+| `drop` | `( a -- )` | Drop top element |
+| `nip` | `( a b -- b )` | Remove second element |
 | `transform` | `( data fn -- data )` | Recursively transform data structure |
 
 The `transform` function applies a function to all leaf values in a data structure, recursively traversing into maps, arrays, and cons cells. Nil values are left unchanged.
