@@ -41,6 +41,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `reverse` | array | Reverse an array |
 | `scanl` | array | Iterate left-to-right until predicate returns 0 |
 | `scanr` | array | Iterate right-to-left until predicate returns 0 |
+| `slots` | slots | Allocate frame slots for function |
 | `transform` | data | Recursively transform data structure |
 | `transform-values` | map | Transform each value in map |
 | `writeln` | io | Write in executable form with newline |
@@ -376,6 +377,35 @@ The analysis traverses right-to-left to determine which references are "last" in
 
 '{x [/x x] x} boundness! liveness!
 ; [0 [0 1] 1] - generator binder is local and used
+```
+
+## Slots (slots.froth)
+
+Frame slot allocation for the compiler.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `slots` | `( func boundness-array liveness-array -- slots-array max-slots )` | Allocate frame slots |
+
+Takes a quoted function and the outputs from `boundness` and `liveness`, and returns a slots array plus the maximum number of slots needed. Slots are reused when variables go out of scope (last use).
+
+- Integer = slot number (for live binders and bound identifier references)
+- `.` = not a slot reference (free vars, operators, literals, dead binders)
+- `[slots]` = nested array for generators (same frame)
+- `[[slots max]]` = nested array for closures (own frame)
+
+```
+'{/x x} boundness! liveness! slots!
+; [0 0] 1 - one slot for x
+
+'{/x x /y y} boundness! liveness! slots!
+; [0 0 0 0] 1 - slot 0 reused for y after x's last use
+
+'{/x [/y y] /z z} boundness! liveness! slots!
+; [0 [1 1] 1 1] 2 - slot 1 freed in generator, reused for z
+
+'{/x {/y y} x} boundness! liveness! slots!
+; [0 [[0 0] 1] 0] 1 - closure has own frame (slots [0 0], max 1)
 ```
 
 ## Optimize (optimize.froth)
