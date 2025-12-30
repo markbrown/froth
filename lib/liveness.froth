@@ -1,19 +1,25 @@
 ; lib/liveness.froth
 ; Liveness analysis for Froth compiler
 
-; liveness-term-impl: (term bnd-map seen seq-fn term-fn -- result-map new-seen)
-; Analyze a single term for liveness (last reference).
+; liveness-term-impl: (term bnd-map seen need-ctx seen-nontail seen-restore-ctx is-tail seq-fn term-fn -- result-map new-seen new-need-ctx new-seen-nontail new-seen-restore-ctx)
+; Analyze a single term for liveness (last reference) and context/return restore.
 ; Takes boundness map, returns map with liveness info added.
 ; seen: set of variables still live after this point
+; need-ctx: 0 if free var accessed since last call (need to restore context)
+; seen-nontail: 0 if we've seen a non-tail call (walking right-to-left)
+; seen-restore-ctx: 0 if we've seen a call needing context restore
+; is-tail: 0 if this term is in tail position
 ; Traverses right-to-left using boundness info.
-['delete-keys 'add-keys 'restrict 'not 'and 'filter] { /term-fn /seq-fn /seen /bnd-map /term
+['delete-keys 'add-keys 'restrict 'not 'and 'filter] { /term-fn /seq-fn /is-tail /seen-restore-ctx /seen-nontail /need-ctx /seen /bnd-map /term
   ; Check if this is an identifier reference (has 'is-bound key)
   term isIdent bnd-map 'is-bound in 0 = and! {
-    ; Identifier: check if still live (already in seen-set)
+    ; Check if free variable (is-bound = 1)
+    bnd-map 'is-bound @ 1 = { 0 } { need-ctx } ?! /new-need-ctx
+    ; Check if still live (already in seen-set)
     seen term in {
-      bnd-map 0 'is-live : seen                   ; already seen -> still live
+      bnd-map 0 'is-live : seen new-need-ctx seen-nontail seen-restore-ctx  ; already seen -> still live
     } {
-      bnd-map 1 'is-live : seen . term :          ; first occurrence (right-to-left) -> last ref
+      bnd-map 1 'is-live : seen . term : new-need-ctx seen-nontail seen-restore-ctx  ; first occurrence -> last ref
     } ?!
   } {
   term isBinder {
@@ -21,21 +27,26 @@
     ; in returns 0 if exists (used), 1 if not (dead)
     term intern idToIdent /ident
     seen ident in /is-used
-    bnd-map is-used 'is-used : seen ident delete
+    bnd-map is-used 'is-used : seen ident delete need-ctx seen-nontail seen-restore-ctx
   } {
   term isFunc {
-    ; Closure: fresh seen-set, compute dead-at-capture set
+    ; Closure: fresh seen-set, need-ctx, seen-nontail, seen-restore-ctx; compute dead-at-capture set
     bnd-map 'free-vars @ /inner-free-set
     bnd-map 'children @ /inner-children
     term # 1 - /inner-last-idx
-    term inner-children $ inner-last-idx seq-fn term-fn seq-fn! /inner-seen /new-children
+    ; Inner function starts fresh: need-ctx=1, seen-nontail=1, seen-restore-ctx=1, is-tail=0
+    term inner-children $ 1 1 1 inner-last-idx 0 seq-fn term-fn seq-fn! /inner-seen-restore-ctx /inner-seen-nontail /inner-need-ctx /inner-seen /new-children
     ; Compute dead-set: free vars NOT in seen (last use is this capture)
     inner-free-set keys { /v seen v in not! } filter! /dead-vars
     $ dead-vars add-keys! /dead-set
     ; Add all free vars to seen (binders to left need to see them as used)
     seen inner-free-set keys add-keys! /new-seen
-    ; Return map with updated children and dead-set
-    bnd-map new-children 'children : dead-set 'dead-set : new-seen
+    ; Build result map with children, dead-set, and save flags
+    bnd-map new-children 'children : dead-set 'dead-set :
+    inner-seen-nontail 0 = { 0 'needs-save-return : } { } ?!
+    inner-seen-restore-ctx 0 = { 0 'needs-save-context : } { } ?!
+    ; Return result; outer state unchanged
+    new-seen need-ctx seen-nontail seen-restore-ctx
   } {
   term isGen {
     ; Generator: shares scope for free vars, but binders are local
@@ -46,35 +57,52 @@
     seen bound-vars restrict! /save
     ; Remove bound vars from seen (entering their scope)
     seen bound-vars delete-keys! /gen-seen
-    ; Process generator with modified seen
+    ; Process generator with modified seen; generators don't have tail calls (is-tail=1)
+    ; Generators share seen-nontail and seen-restore-ctx with outer scope
     term # 1 - /inner-last-idx
-    term inner-children gen-seen inner-last-idx seq-fn term-fn seq-fn! /after-seen /new-children
+    term inner-children gen-seen need-ctx seen-nontail seen-restore-ctx inner-last-idx 1 seq-fn term-fn seq-fn! /new-seen-restore-ctx /new-seen-nontail /new-need-ctx /after-seen /new-children
     ; Restore shadowed vars
     after-seen save keys add-keys! /new-seen
-    bnd-map new-children 'children : new-seen
+    bnd-map new-children 'children : new-seen new-need-ctx new-seen-nontail new-seen-restore-ctx
   } {
   term isQuote {
     ; Quoted term: no liveness info
-    bnd-map seen
+    bnd-map seen need-ctx seen-nontail seen-restore-ctx
   } {
-    ; Literal, apply, operator, value: no liveness info
-    bnd-map seen
-  } ?! } ?! } ?! } ?! } ?!
+  term isApply {
+    ; Apply: check if non-tail call
+    is-tail 1 = {
+      ; Non-tail call: maybe restore context, maybe restore return
+      need-ctx 0 = /needs-restore-ctx
+      bnd-map
+      needs-restore-ctx { 0 'restore-context : } { } ?!  ; restore context if needed
+      seen-nontail 1 = { 0 'restore-return : } { } ?!  ; restore return if first non-tail
+      seen 1 0  ; reset need-ctx, set seen-nontail
+      needs-restore-ctx { 0 } { seen-restore-ctx } ?!  ; set seen-restore-ctx if we marked restore
+    } {
+      ; Tail call: no restores needed
+      bnd-map seen need-ctx seen-nontail seen-restore-ctx
+    } ?!
+  } {
+    ; Literal, operator, value: no liveness info
+    bnd-map seen need-ctx seen-nontail seen-restore-ctx
+  } ?! } ?! } ?! } ?! } ?! } ?!
 } def-fn! /liveness-term-impl
 
-; liveness-seq-impl: (body children-arr seen idx seq-fn term-fn -- new-children-arr new-seen)
+; liveness-seq-impl: (body children-arr seen need-ctx seen-nontail seen-restore-ctx idx is-tail seq-fn term-fn -- new-children-arr new-seen new-need-ctx new-seen-nontail new-seen-restore-ctx)
 ; Process terms from idx down to 0 (right-to-left)
-['concat 'liveness-term-impl] { /term-fn /seq-fn /idx /seen /children-arr /body
+; is-tail: 0 for first term (rightmost), 1 for rest
+['concat 'liveness-term-impl] { /term-fn /seq-fn /is-tail /idx /seen-restore-ctx /seen-nontail /need-ctx /seen /children-arr /body
   idx 0 < {
-    ; Done: return empty array and current seen
-    [] seen
+    ; Done: return empty array and current state
+    [] seen need-ctx seen-nontail seen-restore-ctx
   } {
     ; Process current term (rightmost remaining)
-    body idx @ children-arr idx @ seen seq-fn term-fn term-fn! /after-term-seen /term-map
-    ; Recurse for rest (to the left)
-    body children-arr after-term-seen idx 1 - seq-fn term-fn seq-fn! /rest-seen /rest-children
+    body idx @ children-arr idx @ seen need-ctx seen-nontail seen-restore-ctx is-tail seq-fn term-fn term-fn! /after-seen-restore-ctx /after-seen-nontail /after-need-ctx /after-term-seen /term-map
+    ; Recurse for rest (to the left); is-tail becomes 1 (not tail)
+    body children-arr after-term-seen after-need-ctx after-seen-nontail after-seen-restore-ctx idx 1 - 1 seq-fn term-fn seq-fn! /rest-seen-restore-ctx /rest-seen-nontail /rest-need-ctx /rest-seen /rest-children
     ; Append (we're going right-to-left, so rest is to the left)
-    rest-children [term-map] concat! rest-seen
+    rest-children [term-map] concat! rest-seen rest-need-ctx rest-seen-nontail rest-seen-restore-ctx
   } ?!
 } def-fn! /liveness-seq-impl
 
@@ -84,12 +112,20 @@
 ;   'is-live: 0 (still live) or 1 (last reference) for identifiers
 ;   'is-used: 0 (used) or 1 (dead) for binders
 ;   'dead-set: set of vars whose last use is capture (for closures)
+;   'restore-context: 0 for non-tail calls that need context restored after
+;   'restore-return: 0 for the last non-tail call (where return pointer is restored)
+;   'needs-save-context: 0 if any call needs context restore (function-level)
+;   'needs-save-return: 0 if any non-tail calls exist (function-level)
 ['liveness-seq-impl 'liveness-term-impl] { /bnd-map /func
   bnd-map 'children @ /children
   func # 1 - /last-idx
-  func children $ last-idx liveness-seq-impl liveness-term-impl liveness-seq-impl!
-  /final-seen /new-children
+  ; Start with need-ctx=1, seen-nontail=1, seen-restore-ctx=1, is-tail=0 for rightmost term
+  func children $ 1 1 1 last-idx 0 liveness-seq-impl liveness-term-impl liveness-seq-impl!
+  /final-seen-restore-ctx /final-seen-nontail /final-need-ctx /final-seen /new-children
+  ; Build result map with children and save flags
   func bnd-map new-children 'children :
+  final-seen-nontail 0 = { 0 'needs-save-return : } { } ?!
+  final-seen-restore-ctx 0 = { 0 'needs-save-context : } { } ?!
 } def-fn! /liveness
 
 ; Remove impl functions from the environment
