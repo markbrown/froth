@@ -345,16 +345,27 @@ Liveness analysis for the compiler.
 |------|--------------|-------------|
 | `liveness` | `( func boundness-map -- func liveness-map )` | Analyze last references in function |
 
-Takes the output from `boundness` and adds liveness information to the map:
+Takes the output from `boundness` and adds liveness information to the map.
 
+**Per-term keys:**
 - `'is-live`: `0` (still live) or `1` (last reference) for identifiers
 - `'is-used`: `0` (used) or `1` (dead) for binders
 - `'dead-set`: set of vars whose last use is capture (for closures only)
+- `'restore-context`: `0` for non-tail calls that need context restored after
+- `'restore-return`: `0` for the last non-tail call (where return pointer is restored)
+- `'leave-frame`: `0` for the last term that uses the frame
+
+**Function-level keys:**
+- `'needs-save-context`: `0` if any call needs context restore
+- `'needs-save-return`: `0` if any non-tail calls exist
+- `'needs-frame`: `0` if function uses a frame (bound vars or register saves)
 
 The analysis traverses right-to-left to determine which references are "last" in each scope. Key behaviors:
 - Closures create new scopes; captured vars that aren't used later go in `'dead-set`
 - Generators share outer scope; binders inside create local scope within generator only
 - Binders report whether the variable is actually used (0) or dead (1)
+- Non-tail calls track when context/return pointers need saving and restoring
+- Frame exit point is marked on the last term that accesses the frame
 
 ```
 '{x} boundness! liveness! /map /func
@@ -371,6 +382,14 @@ map 'children @ 0 @ 'is-used @ ; 1 - binder unused (dead)
 '{x {x}} boundness! liveness! /map /func
 map 'children @ 1 @ 'dead-set @ ; $ . 'x :
 ; x's last use is this capture, so in dead-set
+
+'{/fn fn! x fn!} boundness! liveness! /map /func
+map 'needs-save-return in      ; 0 - has non-tail calls
+map 'needs-save-context in     ; 0 - free var x accessed after call
+map 'children @ 2 @            ; first ! has 'restore-context, 'restore-return
+
+'{1 2 +} boundness! liveness! /map /func
+map 'needs-frame in            ; 1 - no frame needed (absent)
 ```
 
 ## Slots (slots.froth)
