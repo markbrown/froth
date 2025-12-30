@@ -6,7 +6,7 @@
 ; result: 0 (still live / binder used), 1 (last ref / binder dead), . (non-var), or nested array
 ; seen: set of variables still live after this point
 ; Traverses right-to-left using boundness info.
-['delete-keys 'add-keys 'restrict 'not 'and] { /term-fn /seq-fn /seen /bnd /term
+['delete-keys 'add-keys 'restrict 'not 'and 'filter] { /term-fn /seq-fn /seen /bnd /term
   ; Check if this is an identifier reference (boundness is 0 or 1, not .)
   term isIdent bnd isNil not! and! {
     ; Identifier: check if still live (already in seen-set)
@@ -23,14 +23,19 @@
     seen ident in seen ident delete
   } {
   term isFunc {
-    ; Closure: fresh seen-set, then add free vars to outer
+    ; Closure: fresh seen-set, compute dead-at-capture set
     ; bnd is [free-set bound-set boundness-array]
     bnd 0 @ /inner-free-set
     bnd 2 @ /inner-boundness
     term # 1 - /inner-last-idx
     term inner-boundness $ inner-last-idx seq-fn term-fn seq-fn! /inner-seen /inner-liveness
-    ; Add closure's free vars to outer seen (closure captures them)
-    inner-liveness seen inner-free-set keys add-keys!
+    ; Compute dead-set: free vars NOT in seen (last use is this capture)
+    inner-free-set keys { /v seen v in not! } filter! /dead-vars
+    $ dead-vars add-keys! /dead-set
+    ; Add all free vars to seen (binders to left need to see them as used)
+    seen inner-free-set keys add-keys! /new-seen
+    ; Return [inner-liveness dead-set]
+    [inner-liveness dead-set] new-seen
   } {
   term isGen {
     ; Generator: shares scope for free vars, but binders are local
@@ -80,7 +85,8 @@
 ;   0 = still live (not the last reference), or binder is used
 ;   1 = last reference, or binder is unused (dead)
 ;   . = not a variable (apply, literal, quoted)
-;   [liveness] = nested array for closures/generators
+;   [[liveness] dead-set] = closure (dead-set = vars whose last use is capture)
+;   [liveness] = generator
 ['liveness-seq-impl 'liveness-term-impl] { /bnd-arr /bound-set /free-set /func
   func # 1 - /last-idx
   func bnd-arr $ last-idx liveness-seq-impl liveness-term-impl liveness-seq-impl!

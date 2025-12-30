@@ -343,10 +343,11 @@ Takes a quoted function and the outputs from `boundness`, and returns a liveness
 - `0` = identifier still live (not the last reference), or binder is used
 - `1` = identifier is last reference, or binder is unused (dead)
 - `.` = not a variable (apply, literal, quoted, operator)
-- `[liveness]` = nested liveness array for closures/generators
+- `[[liveness] dead-set]` = closure (dead-set = vars whose last use is this capture)
+- `[liveness]` = generator
 
 The analysis traverses right-to-left to determine which references are "last" in each scope. Key behaviors:
-- Closures create new scopes; outer variables are live if captured
+- Closures create new scopes; captured vars that aren't used later go in dead-set
 - Generators share outer scope; binders inside create local scope within generator only
 - Binders report whether the variable is actually used (0) or dead (1)
 
@@ -367,10 +368,13 @@ The analysis traverses right-to-left to determine which references are "last" in
 ; [1 0 1] - both x's are last-ref (different vars), binder used
 
 '{x {x} x} boundness! liveness!
-; [0 [1] 1] - outer x captured by closure, still live at pos 0
+; [0 [[1] $] 1] - x still live after, dead-set empty
+
+'{x {x}} boundness! liveness!
+; [0 [[1] $.'x:]] - x's last use is capture, in dead-set
 
 '{x {/x x}} boundness! liveness!
-; [1 [0 1]] - outer x not captured (shadowed), inner binder used
+; [1 [[0 1] $]] - outer x not captured (shadowed)
 
 '{x [x] x} boundness! liveness!
 ; [0 [0] 1] - generator shares scope, x still live through generator
