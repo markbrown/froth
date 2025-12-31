@@ -1,75 +1,61 @@
 # Froth Standard Library Reference
 
-The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is given. It imports the following modules:
+The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is given.
+
+Unlike operators, functions must be followed by `!` to be applied (e.g., `println!`, `foldl!`).
+
+---
+
+# Part 1: Standard Library Modules
 
 ## Quick Reference
 
 | Name | Module | Description |
 |------|--------|-------------|
-| `add-keys` | map | Add array of keys with nil values |
-| `and` | bool | Logical and |
-| `bench` | bench | Benchmark closure execution |
-| `boundness` | boundness | Analyze variable binding (returns map) |
-| `concat` | array | Concatenate two arrays |
-| `contains` | array | Check if array contains element |
-| `fromList` | array | Convert cons list to array |
-| `sort-by` | array | Sort array using key function |
-| `toList` | array | Convert array to cons list |
-| `count-bindings` | optimize | Count bindings in environments |
-| `def-fn` | defs | Create closure with minimal environment |
-| `delete-keys` | map | Delete array of keys from map |
-| `drop` | data | Drop top of stack |
-| `dup` | data | Duplicate top of stack |
-| `emit-all-at` | bytecode | Write array to bytecode store |
-| `emit-at` | bytecode | Write value to bytecode store |
-| `eval` | eval | Evaluate closure with stack and op-table |
-| `fib` | math | Generate Fibonacci sequence |
-| `filter` | array | Keep elements matching predicate |
-| `flatten` | array | Flatten nested arrays |
-| `foldl` | array | Apply fn to elements left-to-right |
-| `foldr` | array | Apply fn to elements right-to-left |
-| `lconcat` | list | Concatenate two lists |
-| `lfoldl` | list | Apply fn head-to-tail |
-| `lfoldr` | list | Apply fn tail-to-head |
-| `llength` | list | Get the length of a list |
-| `lmerge` | list | Merge two sorted lists |
-| `lsort-by` | list | Sort list using key function |
-| `lsplit` | list | Split list into two halves |
-| `liveness` | liveness | Analyze last references in function |
-| `new-apply-node` | node | Create apply node with defaults |
-| `new-binder-node` | node | Create binder node with defaults |
-| `new-closure-node` | node | Create closure node with defaults |
-| `new-generator-node` | node | Create generator node with defaults |
-| `new-identifier-node` | node | Create identifier node with defaults |
-| `new-literal-node` | node | Create literal node with defaults |
-| `new-node` | node | Create empty base node |
-| `new-quote-node` | node | Create quote node with defaults |
-| `lmap` | list | Apply fn to each element |
-| `lreverse` | list | Reverse a cons list |
-| `map` | array | Transform each element |
-| `merge` | map | Merge two maps (map2 takes precedence) |
-| `nl` | io | Print newline |
-| `nip` | data | Remove second element from stack |
-| `not` | bool | Logical not (0→1, else→0) |
-| `optimize` | optimize | Recursively optimize closures |
-| `or` | bool | Logical or |
-| `over` | data | Copy second element to top |
-| `preflight` | preflight | Check for env/import/applyOperator usage |
-| `println` | io | Print value with newline |
-| `reduce` | array | Reduce with binary function |
-| `restrict` | map | Restrict map to specified keys |
-| `restrict-closure-env` | optimize | Restrict closure to free variables |
-| `reverse` | array | Reverse an array |
-| `scanl` | array | Iterate left-to-right until predicate returns 0 |
-| `scanr` | array | Iterate right-to-left until predicate returns 0 |
-| `slots` | slots | Allocate frame slots for function |
-| `codegen` | codegen | Generate bytecode for function |
-| `swap` | data | Swap top two elements |
-| `transform` | data | Recursively transform data structure |
-| `transform-values` | map | Transform each value in map |
-| `writeln` | io | Write in executable form with newline |
-
-Unlike operators, functions must be followed by `!` to be applied (e.g., `println!`, `foldl!`).
+| [`add-keys`](#map-mapfroth) | map | Add array of keys with nil values |
+| [`and`](#boolean-boolfroth) | bool | Logical and |
+| [`bench`](#bench-benchfroth) | bench | Benchmark closure execution |
+| [`concat`](#array-arrayfroth) | array | Concatenate two arrays |
+| [`contains`](#array-arrayfroth) | array | Check if array contains element |
+| [`def-fn`](#definitions-defsfroth) | defs | Create closure with minimal environment |
+| [`delete-keys`](#map-mapfroth) | map | Delete array of keys from map |
+| [`drop`](#data-datafroth) | data | Drop top of stack |
+| [`dup`](#data-datafroth) | data | Duplicate top of stack |
+| [`eval`](#eval-evalfroth) | eval | Evaluate closure with stack and op-table |
+| [`fib`](#math-mathfroth) | math | Generate Fibonacci sequence |
+| [`filter`](#array-arrayfroth) | array | Keep elements matching predicate |
+| [`flatten`](#array-arrayfroth) | array | Flatten nested arrays |
+| [`foldl`](#array-arrayfroth) | array | Apply fn to elements left-to-right |
+| [`foldr`](#array-arrayfroth) | array | Apply fn to elements right-to-left |
+| [`fromList`](#array-arrayfroth) | array | Convert cons list to array |
+| [`lconcat`](#list-listfroth) | list | Concatenate two lists |
+| [`lfoldl`](#list-listfroth) | list | Apply fn head-to-tail |
+| [`lfoldr`](#list-listfroth) | list | Apply fn tail-to-head |
+| [`llength`](#list-listfroth) | list | Get the length of a list |
+| [`lmap`](#list-listfroth) | list | Apply fn to each element |
+| [`lmerge`](#list-listfroth) | list | Merge two sorted lists |
+| [`lreverse`](#list-listfroth) | list | Reverse a cons list |
+| [`lsort-by`](#list-listfroth) | list | Sort list using key function |
+| [`lsplit`](#list-listfroth) | list | Split list into two halves |
+| [`map`](#array-arrayfroth) | array | Transform each element |
+| [`merge`](#map-mapfroth) | map | Merge two maps (map2 takes precedence) |
+| [`nl`](#io-utilities-iofroth) | io | Print newline |
+| [`nip`](#data-datafroth) | data | Remove second element from stack |
+| [`not`](#boolean-boolfroth) | bool | Logical not (0→1, else→0) |
+| [`or`](#boolean-boolfroth) | bool | Logical or |
+| [`over`](#data-datafroth) | data | Copy second element to top |
+| [`println`](#io-utilities-iofroth) | io | Print value with newline |
+| [`reduce`](#array-arrayfroth) | array | Reduce with binary function |
+| [`restrict`](#map-mapfroth) | map | Restrict map to specified keys |
+| [`reverse`](#array-arrayfroth) | array | Reverse an array |
+| [`scanl`](#array-arrayfroth) | array | Iterate left-to-right until predicate returns 0 |
+| [`scanr`](#array-arrayfroth) | array | Iterate right-to-left until predicate returns 0 |
+| [`sort-by`](#array-arrayfroth) | array | Sort array using key function |
+| [`swap`](#data-datafroth) | data | Swap top two elements |
+| [`toList`](#array-arrayfroth) | array | Convert array to cons list |
+| [`transform`](#data-datafroth) | data | Recursively transform data structure |
+| [`transform-values`](#map-mapfroth) | map | Transform each value in map |
+| [`writeln`](#io-utilities-iofroth) | io | Write in executable form with newline |
 
 ## Definitions (defs.froth)
 
@@ -333,24 +319,35 @@ Values produced by the closure are discarded after all iterations.
 { 0 1 20 fib! } 1000 bench! println!
 ```
 
-## Bytecode (bytecode.froth)
+---
 
-Helpers for bytecode generation. The bytecode store is accessed via the `peek` and `poke` operators.
+# Part 2: Compiler Modules
 
-| Name | Stack Effect | Description |
-|------|--------------|-------------|
-| `emit-at` | `( value addr -- addr' )` | Write value at addr, return next addr |
-| `emit-all-at` | `( arr addr -- addr' )` | Write array starting at addr, return next addr |
+## Quick Reference
 
-Track the current address manually:
-
-```
-0 /here
-[ ocPushInt 42 ocReturn ] here emit-all-at! /here
-[] 0 close !               ; execute bytecode at address 0
-```
-
-The module also defines opcode constants (`ocPushInt`, `ocOp`, `ocReturn`, etc.) and operator constants (`opAdd`, `opSub`, `opMul`, etc.) for bytecode generation. See `lib/bytecode.froth` for the full list.
+| Name | Module | Description |
+|------|--------|-------------|
+| [`boundness`](#boundness-boundnessfroth) | boundness | Analyze variable binding (returns map) |
+| [`codegen`](#codegen-codegenfroth) | codegen | Generate bytecode for function |
+| [`compile`](#compile-compilefroth) | compile | Compile closure from env-map by id |
+| [`compile-closure`](#compile-compilefroth) | compile | Compile closure to bytecode |
+| [`compile-func`](#compile-compilefroth) | compile | Compile quoted function to bytecode |
+| [`count-bindings`](#optimize-optimizefroth) | optimize | Count bindings in environments |
+| [`emit-all-at`](#bytecode-bytecodefroth) | bytecode | Write array to bytecode store |
+| [`emit-at`](#bytecode-bytecodefroth) | bytecode | Write value to bytecode store |
+| [`liveness`](#liveness-livenessfroth) | liveness | Analyze last references in function |
+| [`new-apply-node`](#node-nodefroth) | node | Create apply node with defaults |
+| [`new-binder-node`](#node-nodefroth) | node | Create binder node with defaults |
+| [`new-closure-node`](#node-nodefroth) | node | Create closure node with defaults |
+| [`new-generator-node`](#node-nodefroth) | node | Create generator node with defaults |
+| [`new-identifier-node`](#node-nodefroth) | node | Create identifier node with defaults |
+| [`new-literal-node`](#node-nodefroth) | node | Create literal node with defaults |
+| [`new-node`](#node-nodefroth) | node | Create empty base node |
+| [`new-quote-node`](#node-nodefroth) | node | Create quote node with defaults |
+| [`optimize`](#optimize-optimizefroth) | optimize | Recursively optimize closures |
+| [`preflight`](#preflight-preflightfroth) | preflight | Check for env/import/applyOperator usage |
+| [`restrict-closure-env`](#optimize-optimizefroth) | optimize | Restrict closure to free variables |
+| [`slots`](#slots-slotsfroth) | slots | Allocate frame slots for function |
 
 ## Preflight (preflight.froth)
 
@@ -413,6 +410,7 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 **Closure node keys:**
 - `'body`: array of node maps (parallel to body terms)
 - `'free-vars`: map: identifier -> context slot number
+- `'free-vars-array`: array of identifiers in slot order
 - `'bound-set`: map: identifier -> nil (set of bound vars)
 - `'dead-set`: map: identifier -> nil (vars whose last use is capture)
 - `'max-slots`: maximum frame slots needed
@@ -421,6 +419,7 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 **Generator node keys:**
 - `'body`: array of node maps (parallel to body terms)
 - `'free-vars`: map: identifier -> context slot number
+- `'free-vars-array`: array of identifiers in slot order
 - `'bound-set`: map: identifier -> nil (set of bound vars)
 
 Generators share the containing function's frame, so they don't have `'max-slots`.
@@ -436,6 +435,7 @@ Boundness analysis for the compiler.
 Analyzes a quoted function and returns the function plus a closure-node. The map contains:
 - `'body`: array of node maps, one per term in the function body
 - `'free-vars`: map from identifiers to context slot numbers
+- `'free-vars-array`: array of identifiers in slot order
 - `'bound-set`: map from identifiers to nil (marking presence)
 
 Each node map contains keys appropriate to the term type (see Node module).
@@ -547,21 +547,39 @@ map 'max-slots @               ; 1 - slot 0 reused for RP save
 map 'body @ 5 @ 'rp-save-slot @ ; 0 - apply saves RP to slot 0
 ```
 
+## Bytecode (bytecode.froth)
+
+Helpers for bytecode generation. The bytecode store is accessed via the `peek` and `poke` operators.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `emit-at` | `( value addr -- addr' )` | Write value at addr, return next addr |
+| `emit-all-at` | `( arr addr -- addr' )` | Write array starting at addr, return next addr |
+
+Track the current address manually:
+
+```
+0 /here
+[ ocPushInt 42 ocReturn ] here emit-all-at! /here
+[] 0 close !               ; execute bytecode at address 0
+```
+
+The module also defines opcode constants (`ocPushInt`, `ocOp`, `ocReturn`, etc.) and operator constants (`opAdd`, `opSub`, `opMul`, etc.) for bytecode generation. See `lib/bytecode.froth` for the full list.
+
 ## Codegen (codegen.froth)
 
 Bytecode code generation for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `codegen` | `( func slots-node addr -- func new-addr )` | Generate bytecode starting at addr |
+| `codegen` | `( addr func closure-node -- next-addr )` | Generate bytecode starting at addr |
 
-Takes a function and its slots-node (from `slots`), generates bytecode starting at the given address, and returns the function plus the address after the generated code.
+Takes a starting address, function, and closure-node (from `slots`), generates bytecode, and returns the address after the generated code.
 
-Bytecode is written to the bytecode store via `poke`. Use `close` to create an executable bytecode closure:
+The signature is designed to compose with the analysis passes:
 
 ```
-'{/x x 1 +} boundness! liveness! slots! /node /func
-func node 0 codegen! /new-addr /fn
+0 '{/x x 1 +} boundness! liveness! slots! codegen! /next-addr
 [] 0 close /compiled           ; create bytecode closure
 5 compiled!                    ; returns 6
 ```
@@ -569,8 +587,7 @@ func node 0 codegen! /new-addr /fn
 **Nested closures**: Inner functions are compiled after the outer function body and their addresses are backpatched. This ensures the outer function doesn't execute the inner function's code inline.
 
 ```
-'{/x {x 1 +}} boundness! liveness! slots! /node /func
-func node 0 codegen! /new-addr /fn
+0 '{/x {x 1 +}} boundness! liveness! slots! codegen! /next-addr
 [] 0 close /outer
 5 outer! /inner                ; returns closure capturing x=5
 inner!                         ; returns 6
@@ -579,13 +596,55 @@ inner!                         ; returns 6
 **Generators**: Generator bodies are compiled inline but without `return` or `leaveFrame` emissions. They share the outer function's frame.
 
 ```
-'{/x [x x 1 + x 2 +]} boundness! liveness! slots! /node /func
-func node 0 codegen! /new-addr /fn
+0 '{/x [x x 1 + x 2 +]} boundness! liveness! slots! codegen! /next-addr
 [] 0 close /compiled
 10 compiled!                   ; returns [10 11 12]
 ```
 
-The compiler passes compose: `func boundness! liveness! slots! codegen!` produces bytecode for any function that passes `preflight`.
+## Compile (compile.froth)
+
+High-level compiler interface.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `compile` | `( addr env-map id -- next-addr new-env-map )` | Compile closure from map, update map |
+| `compile-func` | `( addr func -- next-addr )` | Compile quoted function to bytecode |
+| `compile-closure` | `( addr closure -- next-addr bytecodeval )` | Compile closure preserving environment |
+
+**compile** looks up a closure in an environment map by identifier, compiles it, and returns the updated map with the compiled bytecode closure. Prints a status message for each outcome:
+
+```
+10 /y {y 1 +} /add-y
+0 env 'add-y compile! /new-env /next-addr
+; prints: compile: add-y ok
+new-env 'add-y @ !             ; returns 11 (compiled version)
+```
+
+On failure (not found, not a closure, or failed preflight), returns the original address and map unchanged:
+
+```
+0 $ 'missing compile!          ; prints: compile: missing not found
+0 $ 42 'x : 'x compile!        ; prints: compile: x is not a closure
+0 $ {env} 'bad : 'bad compile! ; prints: compile: bad failed preflight
+```
+
+**compile-func** composes all compiler passes into a single function: `boundness`, `liveness`, `slots`, and `codegen`. Use `close` to create the bytecode closure.
+
+```
+0 '{/x x 1 +} compile-func! /next-addr
+[] 0 close /compiled
+5 compiled!                    ; returns 6
+```
+
+**compile-closure** takes a closure value (not a quoted function), extracts its body and captured environment, compiles it, and returns both the next address and a ready-to-use bytecode closure.
+
+```
+10 /y
+0 {y 1 +} compile-closure! /compiled /next-addr
+compiled!                      ; returns 11
+```
+
+The captured variable `y` is automatically included in the bytecode closure's context.
 
 ## Optimize (optimize.froth)
 
