@@ -35,6 +35,10 @@
     int::in, int::out) is det.
 :- pred operator_mul(array(value)::array_di, array(value)::array_uo,
     int::in, int::out) is det.
+:- pred operator_div(array(value)::array_di, array(value)::array_uo,
+    int::in, int::out) is det.
+:- pred operator_mod(array(value)::array_di, array(value)::array_uo,
+    int::in, int::out) is det.
 :- pred operator_gt(array(value)::array_di, array(value)::array_uo,
     int::in, int::out) is det.
 :- pred operator_lt(array(value)::array_di, array(value)::array_uo,
@@ -171,6 +175,12 @@ eval_operator(OpTable, ST, Op, Env, !Array, !Ptr, !IO) :-
     ;
         Op = op_mul,
         operator_mul(!Array, !Ptr)
+    ;
+        Op = op_div,
+        operator_div(!Array, !Ptr)
+    ;
+        Op = op_mod,
+        operator_mod(!Array, !Ptr)
     ;
         Op = op_gt,
         operator_gt(!Array, !Ptr)
@@ -381,6 +391,36 @@ operator_mul(!Array, !Ptr) :-
     datastack.pop("*", V2, !Array, !Ptr),
     ( if V1 = intval(I1), V2 = intval(I2) then
         datastack.push(intval(I1 * I2), !Array, !Ptr)
+    else if V1 = intval(_) then
+        throw(type_error("int", V2))
+    else
+        throw(type_error("int", V1))
+    ).
+
+%-----------------------------------------------------------------------%
+% div: ( int int -- int ) Integer division
+%-----------------------------------------------------------------------%
+
+operator_div(!Array, !Ptr) :-
+    datastack.pop("div", V1, !Array, !Ptr),
+    datastack.pop("div", V2, !Array, !Ptr),
+    ( if V1 = intval(I1), V2 = intval(I2) then
+        datastack.push(intval(I2 / I1), !Array, !Ptr)
+    else if V1 = intval(_) then
+        throw(type_error("int", V2))
+    else
+        throw(type_error("int", V1))
+    ).
+
+%-----------------------------------------------------------------------%
+% mod: ( int int -- int ) Integer modulo
+%-----------------------------------------------------------------------%
+
+operator_mod(!Array, !Ptr) :-
+    datastack.pop("mod", V1, !Array, !Ptr),
+    datastack.pop("mod", V2, !Array, !Ptr),
+    ( if V1 = intval(I1), V2 = intval(I2) then
+        datastack.push(intval(I2 mod I1), !Array, !Ptr)
     else if V1 = intval(_) then
         throw(type_error("int", V2))
     else

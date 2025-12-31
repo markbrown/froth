@@ -60,6 +60,8 @@ operator("env", op_env).
 operator("+", op_add).
 operator("-", op_sub).
 operator("*", op_mul).
+operator("div", op_div).
+operator("mod", op_mod).
 operator(">", op_gt).
 operator("<", op_lt).
 operator(">=", op_gte).
@@ -120,6 +122,8 @@ operator_arity(op_env) = 0.
 operator_arity(op_add) = 2.
 operator_arity(op_sub) = 2.
 operator_arity(op_mul) = 2.
+operator_arity(op_div) = 2.
+operator_arity(op_mod) = 2.
 operator_arity(op_gt) = 2.
 operator_arity(op_lt) = 2.
 operator_arity(op_gte) = 2.
@@ -175,7 +179,7 @@ operator_arity(op_apply_operator) = 1.
 % Operator to/from integer conversion for bytecode
 %-----------------------------------------------------------------------%
 
-num_operators = 55.
+num_operators = 57.
 
 operator_to_int(op_print) = 0.
 operator_to_int(op_env) = 1.
@@ -232,6 +236,8 @@ operator_to_int(op_is_closure) = 51.
 operator_to_int(op_peek) = 52.
 operator_to_int(op_poke) = 53.
 operator_to_int(op_apply_operator) = 54.
+operator_to_int(op_div) = 55.
+operator_to_int(op_mod) = 56.
 
 int_to_operator(0, op_print).
 int_to_operator(1, op_env).
@@ -288,6 +294,8 @@ int_to_operator(51, op_is_closure).
 int_to_operator(52, op_peek).
 int_to_operator(53, op_poke).
 int_to_operator(54, op_apply_operator).
+int_to_operator(55, op_div).
+int_to_operator(56, op_mod).
 
 %-----------------------------------------------------------------------%
 % init_operators: intern all operator names and build the operator table
@@ -296,7 +304,7 @@ int_to_operator(54, op_apply_operator).
 init_operators(!ST, OpTable) :-
     OpNames = [
         "print", "env",
-        "+", "-", "*",
+        "+", "-", "*", "div", "mod",
         ">", "<", ">=", "<=",
         "@", "#", "=", "?",
         ".", ",", "fst", "snd",

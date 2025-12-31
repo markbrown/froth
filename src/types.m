@@ -23,6 +23,8 @@
     ;       op_add          % +      ( a b -- a+b )
     ;       op_sub          % -      ( a b -- a-b )
     ;       op_mul          % *      ( a b -- a*b )
+    ;       op_div          % div    ( a b -- a/b )
+    ;       op_mod          % mod    ( a b -- a mod b )
     ;       op_gt           % >      ( a b -- int )
     ;       op_lt           % <      ( a b -- int )
     ;       op_gte          % >=     ( a b -- int )

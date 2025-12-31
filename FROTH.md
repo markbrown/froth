@@ -104,6 +104,8 @@ Evaluation maintains three pieces of state:
 | `+` | `( a b -- a+b )` | Add two integers |
 | `-` | `( a b -- a-b )` | Subtract: `a b -` computes `a - b` |
 | `*` | `( a b -- a*b )` | Multiply two integers |
+| `div` | `( a b -- a/b )` | Integer division: `a b div` computes `a / b` |
+| `mod` | `( a b -- a%b )` | Modulo: `a b mod` computes `a mod b` |
 
 ### Comparison
 
