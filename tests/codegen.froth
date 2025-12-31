@@ -1,0 +1,62 @@
+; Test codegen pass
+
+; Helper to show bytecode from addr to end (Y-combinator style)
+{ /self /end /start
+  start end < {
+    start peek print " " print
+    start 1 + end self self!
+  } { } ?!
+} /show-bc
+
+; Helper to compile and show bytecode
+{ /func
+  func boundness! liveness! slots! /node
+  node 'max-slots @ "max-slots: " print println!
+  func node 0 codegen! /end-addr
+  "bytecode (0 to " print end-addr print "): " println!
+  0 end-addr show-bc show-bc!
+  nl
+  end-addr
+} /compile-and-show
+
+; Test 1: Simple literals and operator
+"Test 1: { 1 2 + }" println!
+'{ 1 2 + } compile-and-show! /addr1
+; Expected: pushInt 1, pushInt 2, op +, return
+; = 0 1 0 2 1 2 2
+
+; Test 2: Simple binder and reference
+"Test 2: { /x x }" println!
+'{ /x x } compile-and-show! /addr2
+; Expected: enterFrame 1, popLocal 0, pushLocal 0, leaveFrame 1, return
+; = 8 1 7 0 6 0 9 1 2
+
+; Test 3: Dead binder
+"Test 3: { /x 42 }" println!
+'{ /x 42 } compile-and-show! /addr3
+; Expected: popUnused, pushInt 42, return
+; = 5 0 42 2
+
+; Test 4: Non-tail call needing both saves
+"Test 4: { /f f! 1 }" println!
+'{ /f f! 1 } compile-and-show! /addr4
+; Expected: enterFrame, popLocal(f), pushLocal(f), saveCtx, popLocal, saveRp, popLocal, call,
+;           pushLocal, restoreRp, pushLocal, restoreCtx, pushInt 1, leaveFrame, return
+
+; Test 5: Tail call (no saves)
+"Test 5: { /f f! }" println!
+'{ /f f! } compile-and-show! /addr5
+; Expected: enterFrame 1, popLocal 0, pushLocal 0, leaveFrame 1, call, return
+
+; Test 6: Free variable access
+"Test 6: { x } (x free)" println!
+'{ x } compile-and-show! /addr6
+; Expected: pushContext 0, return
+
+; Test 7: Closure capturing bound var
+"Test 7: { /x { x } }" println!
+'{ /x { x } } compile-and-show! /addr7
+; Expected for outer: enterFrame 1, popLocal 0, [inner bytecode], startArray, pushLocal 0, endArray, pushInt <addr>, op close, leaveFrame 1, return
+; Inner: pushContext 0, return
+
+"All codegen tests completed" println!

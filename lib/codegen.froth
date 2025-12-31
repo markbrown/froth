@@ -1,0 +1,284 @@
+; lib/codegen.froth
+; Bytecode code generation for Froth compiler
+
+; codegen-term-impl: (term node max-slots addr entered slot-map free-vars deferred seq-fn term-fn -- new-addr new-entered new-slot-map new-deferred)
+; Generate bytecode for a single term.
+; term: the source term
+; node: the slots node (has all analysis info)
+; max-slots: maximum frame slots for this function
+; addr: current bytecode address
+; entered: 1 if we haven't entered frame yet, 0 if we have
+; slot-map: bound variable -> frame slot (for current function)
+; free-vars: free variable -> context slot (for current function)
+; deferred: cons list of (term, node, placeholder-addr) for nested closures
+; Returns updated addr, entered, slot-map, and deferred list.
+['emit-at 'emit-all-at 'and 'swap 'foldl
+ 'ocPushInt 'ocOp 'ocReturn 'ocPushString 'ocPushContext 'ocPopUnused
+ 'ocPushLocal 'ocPopLocal 'ocEnterFrame 'ocLeaveFrame 'ocStartArray 'ocEndArray
+ 'ocCall 'ocSaveReturnPtr 'ocRestoreReturnPtr 'ocSaveContextPtr 'ocRestoreContextPtr
+ 'opClose] { /term-fn /seq-fn /deferred /free-vars /slot-map /entered /addr /max-slots /node /term
+  ; Helper: maybe enter frame (if not entered and slots needed)
+  ; ( addr entered -- addr entered ) where entered becomes 0
+  { /e /a
+    e 0 = { a e } {
+      max-slots 0 = { a e } {
+        ocEnterFrame a emit-at! max-slots swap! emit-at! 0
+      } ?!
+    } ?!
+  } /maybe-enter
+
+  ; Helper: emit leave frame if this term has leave-frame=0
+  ; ( addr entered -- addr entered )
+  ; If we emit leaveFrame, set entered=1 (we've left the frame)
+  { /e /a
+    node 'leave-frame in 0 = {
+      node 'leave-frame @ 0 = {
+        ocLeaveFrame a emit-at! max-slots swap! emit-at! 1
+      } { a e } ?!
+    } { a e } ?!
+  } /maybe-leave
+
+  ; Handle value-wrapped literals (integers/strings in quoted closures)
+  term isValue 0 = {
+    term unwrap /val
+    val isInt {
+      ; Integer literal: pushInt n
+      ocPushInt addr emit-at! val swap! emit-at! entered maybe-leave! slot-map deferred
+    } {
+      ; String literal: pushString intern-id
+      ocPushString addr emit-at! val intern swap! emit-at! entered maybe-leave! slot-map deferred
+    } ?!
+  } {
+  term isInt {
+    ; Raw integer literal: pushInt n
+    ocPushInt addr emit-at! term swap! emit-at! entered maybe-leave! slot-map deferred
+  } {
+  term isString {
+    ; Raw string literal: pushString intern-id
+    ocPushString addr emit-at! term intern swap! emit-at! entered maybe-leave! slot-map deferred
+  } {
+  term isIdent 0 = node 'is-bound in 0 = and! {
+    ; Identifier with is-bound key (variable reference)
+    node 'is-bound @ 0 = {
+      ; Bound identifier: pushLocal slot
+      node 'slot @ /slot
+      addr entered maybe-enter! /new-entered
+      ocPushLocal swap! emit-at! slot swap! emit-at! new-entered maybe-leave! slot-map deferred
+    } {
+      ; Free identifier: pushContext slot
+      node 'slot @ /slot
+      ocPushContext addr emit-at! slot swap! emit-at! entered maybe-leave! slot-map deferred
+    } ?!
+  } {
+  term isBinder {
+    ; Binder: popLocal slot (if used) or popUnused (if dead)
+    node 'is-used @ 0 = {
+      ; Used: need slot, update slot-map
+      node 'slot @ /slot
+      term intern idToIdent /ident
+      addr entered maybe-enter! /new-entered
+      ocPopLocal swap! emit-at! slot swap! emit-at!
+      new-entered slot-map slot ident : deferred
+    } {
+      ; Dead: just discard
+      ocPopUnused addr emit-at! entered slot-map deferred
+    } ?!
+  } {
+  term isApply {
+    ; Apply: handle saves, call, restores
+    ; Check if we need to save context
+    node 'ctx-save-slot in 0 = {
+      node 'ctx-save-slot @ /ctx-slot
+      ctx-slot isNil { . } { ctx-slot } ?!
+    } { . } ?! /ctx-slot
+
+    ; Check if we need to save return
+    node 'rp-save-slot in 0 = {
+      node 'rp-save-slot @ /rp-slot
+      rp-slot isNil { . } { rp-slot } ?!
+    } { . } ?! /rp-slot
+
+    ; Enter frame if needed for saves
+    addr entered /cur-entered /cur-addr
+    ctx-slot isNil { cur-addr cur-entered } {
+      cur-addr cur-entered maybe-enter!
+    } ?! /cur-entered /cur-addr
+    rp-slot isNil { cur-addr cur-entered } {
+      cur-addr cur-entered maybe-enter!
+    } ?! /cur-entered /cur-addr
+
+    ; Emit saves before call
+    ctx-slot isNil { cur-addr } {
+      [ ocSaveContextPtr ocPopLocal ctx-slot ] cur-addr emit-all-at!
+    } ?! /cur-addr
+    rp-slot isNil { cur-addr } {
+      [ ocSaveReturnPtr ocPopLocal rp-slot ] cur-addr emit-all-at!
+    } ?! /cur-addr
+
+    ; Emit call
+    ocCall cur-addr emit-at! /cur-addr
+
+    ; Emit restores after call (reverse order of saves)
+    rp-slot isNil { cur-addr } {
+      [ ocPushLocal rp-slot ocRestoreReturnPtr ] cur-addr emit-all-at!
+    } ?! /cur-addr
+    ctx-slot isNil { cur-addr } {
+      [ ocPushLocal ctx-slot ocRestoreContextPtr ] cur-addr emit-all-at!
+    } ?! /cur-addr
+
+    ; Emit leaveFrame after all restores if needed
+    cur-addr cur-entered maybe-leave! slot-map deferred
+  } {
+  ; isOperator throws on non-identifiers, so guard with isIdent (using conditional to short-circuit)
+  term isIdent 0 = { term isOperator 0 = } { 1 } ?! {
+    ; Operator: op n
+    ocOp addr emit-at! term intern swap! emit-at! entered maybe-leave! slot-map deferred
+  } {
+  term isFunc {
+    ; Closure: emit context-building code, defer inner function compilation
+    node 'free-vars-array @ /inner-free-arr
+
+    ; Emit startArray
+    addr ocStartArray swap! emit-at! /cur-addr
+
+    ; For each identifier in free-vars-array, emit code to push its value
+    cur-addr inner-free-arr { /ident /a
+      ; Look up in current function's slot-map (bound vars) first
+      slot-map ident in 0 = {
+        ; Bound in current function: pushLocal
+        slot-map ident @ /local-slot
+        ocPushLocal a emit-at! local-slot swap! emit-at!
+      } {
+        ; Must be free in current function: pushContext
+        free-vars ident @ /ctx-slot
+        ocPushContext a emit-at! ctx-slot swap! emit-at!
+      } ?!
+    } foldl! /cur-addr
+
+    ; Emit endArray
+    cur-addr ocEndArray swap! emit-at! /cur-addr
+
+    ; Emit pushInt with placeholder (0), record address for backpatching
+    cur-addr /placeholder-addr
+    ocPushInt cur-addr emit-at! 0 swap! emit-at! /cur-addr
+
+    ; Call close operator to create bytecodeval
+    ocOp cur-addr emit-at! opClose swap! emit-at! /cur-addr
+
+    ; Add to deferred list: (entry, rest) where entry is (patch-addr, (node, (term, nil)))
+    ; Build entry: . term , node , patch-addr ,
+    ; Then cons onto deferred: deferred entry ,
+    deferred . term , node , placeholder-addr 1 + , , /new-deferred
+
+    ; Continue with maybe-leave
+    cur-addr entered maybe-leave! slot-map new-deferred
+  } {
+  term isGen {
+    ; Generator: startArray, compile body terms (no return/leaveFrame), endArray
+    ; Generators share the current frame (same slot-map, free-vars, max-slots)
+    node 'body @ /inner-body
+
+    addr ocStartArray swap! emit-at! /cur-addr
+
+    ; Compile each term in the generator body, but skip leave-frame handling
+    ; Use a simple loop instead of seq-fn to avoid emitting return
+    { /self /idx /def /sm /ent /a /body-nodes /body-terms
+      idx body-terms # = {
+        ; Done - return state without emitting return
+        a ent sm def
+      } {
+        ; Get node and remove leave-frame key to prevent leaveFrame emission inside generator
+        body-nodes idx @ /term-node
+        term-node 'leave-frame in 0 = {
+          term-node 'leave-frame delete
+        } { term-node } ?! /gen-node
+        ; Compile current term with modified node
+        body-terms idx @ gen-node max-slots a ent sm free-vars def seq-fn term-fn term-fn!
+        /after-def /after-sm /after-ent /after-a
+        ; Recurse
+        body-terms body-nodes after-a after-ent after-sm after-def idx 1 + self self!
+      } ?!
+    } /gen-loop
+    term inner-body cur-addr entered slot-map deferred 0 gen-loop gen-loop!
+    /new-deferred /new-slot-map /new-entered /after-addr
+
+    after-addr ocEndArray swap! emit-at! new-entered maybe-leave! new-slot-map new-deferred
+  } {
+  term isQuote {
+    ; Quoted terms not supported in bytecode
+    "error: quoted terms not supported in bytecode" println!
+    addr entered slot-map deferred
+  } {
+    ; Unknown term type - skip
+    addr entered maybe-leave! slot-map deferred
+  } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?!
+} def-fn! /codegen-term-impl
+
+; codegen-seq-impl: (func-body body-arr max-slots addr entered slot-map free-vars deferred idx seq-fn term-fn -- new-addr new-entered new-slot-map new-deferred)
+; Process terms from idx to end (left-to-right).
+['emit-at 'ocReturn 'ocLeaveFrame 'and 'swap] { /term-fn /seq-fn /idx /deferred /free-vars /slot-map /entered /addr /max-slots /body-arr /func-body
+  idx func-body # = {
+    ; Done: emit leaveFrame if we entered frame and it wasn't already emitted, then return
+    ; entered=0 means we DID enter, max-slots>0 means there's a frame to leave
+    entered 0 = max-slots 0 > and! {
+      ; We entered a frame and have slots - emit leaveFrame first
+      ocLeaveFrame addr emit-at! max-slots swap! emit-at!
+    } { addr } ?! /addr
+    ocReturn addr emit-at! entered slot-map deferred
+  } {
+    ; Process current term
+    func-body idx @ body-arr idx @ max-slots addr entered slot-map free-vars deferred seq-fn term-fn term-fn!
+    /after-deferred /after-slot-map /after-entered /after-addr
+    ; Recurse for rest
+    func-body body-arr max-slots after-addr after-entered after-slot-map free-vars after-deferred idx 1 + seq-fn term-fn seq-fn!
+  } ?!
+} def-fn! /codegen-seq-impl
+
+; codegen-deferred-impl: (addr deferred seq-fn term-fn self -- final-addr)
+; Process deferred closures: compile each and backpatch the placeholder.
+['emit-at] { /self /term-fn /seq-fn /deferred /addr
+  deferred isNil { addr } {
+    ; Extract (term, node, patch-addr) from head
+    deferred fst /entry
+    deferred snd /rest
+    entry fst /patch-addr
+    entry snd fst /node
+    entry snd snd fst /term
+
+    ; Backpatch: write current addr to the placeholder location
+    addr patch-addr emit-at! /discard
+
+    ; Compile the inner function body
+    node 'body @ /inner-body
+    node 'max-slots @ /inner-max
+    node 'free-vars @ /inner-free-vars
+    term inner-body inner-max addr 1 $ inner-free-vars . 0 seq-fn term-fn seq-fn!
+    /inner-deferred /discard-slot-map /discard-entered /after-addr
+
+    ; Process any closures deferred from the inner function
+    after-addr inner-deferred seq-fn term-fn self self! /after-inner
+
+    ; Continue with rest of deferred list
+    after-inner rest seq-fn term-fn self self!
+  } ?!
+} def-fn! /codegen-deferred-impl
+
+; codegen: (func slots-node addr -- func new-addr)
+; Generate bytecode for a function starting at addr.
+; Returns the function and the address after the generated code.
+['codegen-seq-impl 'codegen-term-impl 'codegen-deferred-impl 'swap] { /addr /node /func
+  node 'body @ /body
+  node 'max-slots @ /max-slots
+  node 'free-vars @ /free-vars
+  ; Compile main body, collecting deferred closures
+  func body max-slots addr 1 $ free-vars . 0 codegen-seq-impl codegen-term-impl codegen-seq-impl!
+  /deferred /discard-slot-map /discard-entered /after-body
+  ; Compile all deferred closures
+  after-body deferred codegen-seq-impl codegen-term-impl codegen-deferred-impl codegen-deferred-impl!
+  /final-addr
+  func final-addr
+} def-fn! /codegen
+
+; Remove impl functions from the environment
+env 'codegen-term-impl delete 'codegen-seq-impl delete 'codegen-deferred-impl delete restore
+

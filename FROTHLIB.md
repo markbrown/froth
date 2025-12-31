@@ -12,6 +12,9 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `boundness` | boundness | Analyze variable binding (returns map) |
 | `concat` | array | Concatenate two arrays |
 | `contains` | array | Check if array contains element |
+| `fromList` | array | Convert cons list to array |
+| `sort-by` | array | Sort array using key function |
+| `toList` | array | Convert array to cons list |
 | `count-bindings` | optimize | Count bindings in environments |
 | `def-fn` | defs | Create closure with minimal environment |
 | `delete-keys` | map | Delete array of keys from map |
@@ -28,6 +31,10 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `lconcat` | list | Concatenate two lists |
 | `lfoldl` | list | Apply fn head-to-tail |
 | `lfoldr` | list | Apply fn tail-to-head |
+| `llength` | list | Get the length of a list |
+| `lmerge` | list | Merge two sorted lists |
+| `lsort-by` | list | Sort list using key function |
+| `lsplit` | list | Split list into two halves |
 | `liveness` | liveness | Analyze last references in function |
 | `new-apply-node` | node | Create apply node with defaults |
 | `new-binder-node` | node | Create binder node with defaults |
@@ -56,6 +63,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `scanl` | array | Iterate left-to-right until predicate returns 0 |
 | `scanr` | array | Iterate right-to-left until predicate returns 0 |
 | `slots` | slots | Allocate frame slots for function |
+| `codegen` | codegen | Generate bytecode for function |
 | `swap` | data | Swap top two elements |
 | `transform` | data | Recursively transform data structure |
 | `transform-values` | map | Transform each value in map |
@@ -115,6 +123,9 @@ This is definition-time optimization: later definitions that capture `c-lean` wi
 | `scanl` | `( arr fn -- 0 \| 1 )` | Iterate left-to-right until fn returns 0 |
 | `scanr` | `( arr fn -- 0 \| 1 )` | Iterate right-to-left until fn returns 0 |
 | `contains` | `( arr x -- 0 \| 1 )` | Check if array contains element |
+| `toList` | `( arr -- list )` | Convert array to cons list |
+| `fromList` | `( list -- arr )` | Convert cons list to array |
+| `sort-by` | `( arr key-fn -- arr )` | Sort array using key function |
 
 The function may leave zero or more values on the stack per element. Use a generator to collect results into an array.
 
@@ -130,6 +141,20 @@ The `scanl` and `scanr` functions iterate until the predicate returns 0 (found):
 [1 2 3] {3 =} scanl!           ; 0 (found 3)
 [1 2 3] {5 =} scanl!           ; 1 (not found)
 [1 2 3] 2 contains!            ; 0 (found)
+```
+
+Convert between arrays and lists:
+
+```
+[1 2 3] toList!                ; . 3 , 2 , 1 , (list [1, 2, 3])
+. 3 , 2 , 1 , fromList!        ; [1 2 3]
+```
+
+Sort arrays with a key function:
+
+```
+[3 1 2] {} sort-by!            ; [1 2 3]
+['c 'a 'b] {intern} sort-by!   ; sort identifiers by intern id
 ```
 
 ## List (list.froth)
@@ -148,6 +173,10 @@ Utilities for cons lists. Lists are built with `.` (nil) and `,` (cons):
 | `lreverse` | `( list -- list )` | Reverse a list |
 | `lconcat` | `( list1 list2 -- list )` | Concatenate two lists |
 | `lmap` | `( list fn -- list )` | Apply fn to each element, return new list |
+| `llength` | `( list -- int )` | Get the length of a list |
+| `lsplit` | `( list -- left right )` | Split list into two halves |
+| `lmerge` | `( list1 list2 key-fn -- list )` | Merge two sorted lists |
+| `lsort-by` | `( list key-fn -- list )` | Sort list using key function |
 
 ```
 . 3 , 2 , 1 , {print} lfoldl!   ; prints 1, 2, 3
@@ -156,6 +185,20 @@ Utilities for cons lists. Lists are built with `.` (nil) and `,` (cons):
 0 . 3 , 2 , 1 , {+} lfoldl!     ; sums to 6
 . 2 , 1 , . 4 , 3 , lconcat!    ; produces [1, 2, 3, 4]
 . 3 , 2 , 1 , {1 +} lmap!       ; produces [2, 3, 4]
+```
+
+List length and splitting:
+
+```
+. 3 , 2 , 1 , llength!          ; 3
+. 4 , 3 , 2 , 1 , lsplit!       ; (. 2 , 1 ,) (. 4 , 3 ,)
+```
+
+Merge sort with key function:
+
+```
+. 3 , 1 , . 4 , 2 , {} lmerge!  ; . 4 , 3 , 2 , 1 , (merged)
+. 3 , 1 , 2 , {} lsort-by!      ; . 3 , 2 , 1 , (sorted [1,2,3])
 ```
 
 ## Eval (eval.froth)
@@ -503,6 +546,46 @@ map 'max-slots @               ; 3 - generator uses slot 2 for z
 map 'max-slots @               ; 1 - slot 0 reused for RP save
 map 'body @ 5 @ 'rp-save-slot @ ; 0 - apply saves RP to slot 0
 ```
+
+## Codegen (codegen.froth)
+
+Bytecode code generation for the compiler.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `codegen` | `( func slots-node addr -- func new-addr )` | Generate bytecode starting at addr |
+
+Takes a function and its slots-node (from `slots`), generates bytecode starting at the given address, and returns the function plus the address after the generated code.
+
+Bytecode is written to the bytecode store via `poke`. Use `close` to create an executable bytecode closure:
+
+```
+'{/x x 1 +} boundness! liveness! slots! /node /func
+func node 0 codegen! /new-addr /fn
+[] 0 close /compiled           ; create bytecode closure
+5 compiled!                    ; returns 6
+```
+
+**Nested closures**: Inner functions are compiled after the outer function body and their addresses are backpatched. This ensures the outer function doesn't execute the inner function's code inline.
+
+```
+'{/x {x 1 +}} boundness! liveness! slots! /node /func
+func node 0 codegen! /new-addr /fn
+[] 0 close /outer
+5 outer! /inner                ; returns closure capturing x=5
+inner!                         ; returns 6
+```
+
+**Generators**: Generator bodies are compiled inline but without `return` or `leaveFrame` emissions. They share the outer function's frame.
+
+```
+'{/x [x x 1 + x 2 +]} boundness! liveness! slots! /node /func
+func node 0 codegen! /new-addr /fn
+[] 0 close /compiled
+10 compiled!                   ; returns [10 11 12]
+```
+
+The compiler passes compose: `func boundness! liveness! slots! codegen!` produces bytecode for any function that passes `preflight`.
 
 ## Optimize (optimize.froth)
 
