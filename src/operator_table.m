@@ -107,8 +107,8 @@ operator("close", op_close).
 operator("closureEnv", op_closure_env).
 operator("closureBody", op_closure_body).
 operator("isClosure", op_is_closure).
-operator("emit", op_emit).
-operator("here", op_here).
+operator("peek", op_peek).
+operator("poke", op_poke).
 operator("applyOperator", op_apply_operator).
 
 %-----------------------------------------------------------------------%
@@ -167,8 +167,8 @@ operator_arity(op_close) = 2.
 operator_arity(op_closure_env) = 1.
 operator_arity(op_closure_body) = 1.
 operator_arity(op_is_closure) = 1.
-operator_arity(op_emit) = 1.
-operator_arity(op_here) = 0.
+operator_arity(op_peek) = 1.
+operator_arity(op_poke) = 2.
 operator_arity(op_apply_operator) = 1.
 
 %-----------------------------------------------------------------------%
@@ -229,8 +229,8 @@ operator_to_int(op_close) = 48.
 operator_to_int(op_closure_env) = 49.
 operator_to_int(op_closure_body) = 50.
 operator_to_int(op_is_closure) = 51.
-operator_to_int(op_emit) = 52.
-operator_to_int(op_here) = 53.
+operator_to_int(op_peek) = 52.
+operator_to_int(op_poke) = 53.
 operator_to_int(op_apply_operator) = 54.
 
 int_to_operator(0, op_print).
@@ -285,8 +285,8 @@ int_to_operator(48, op_close).
 int_to_operator(49, op_closure_env).
 int_to_operator(50, op_closure_body).
 int_to_operator(51, op_is_closure).
-int_to_operator(52, op_emit).
-int_to_operator(53, op_here).
+int_to_operator(52, op_peek).
+int_to_operator(53, op_poke).
 int_to_operator(54, op_apply_operator).
 
 %-----------------------------------------------------------------------%
@@ -308,7 +308,7 @@ init_operators(!ST, OpTable) :-
         "idToString", "idToIdent", "idToBinder", "isOperator", "arity",
         "stack", "import", "time", "restore",
         "close", "closureEnv", "closureBody", "isClosure",
-        "emit", "here", "applyOperator"
+        "peek", "poke", "applyOperator"
     ],
     list.foldl2(intern_operator, OpNames, map.init, OpTable, !ST).
 

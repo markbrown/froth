@@ -183,6 +183,6 @@ Evaluation maintains three pieces of state:
 | `isOperator` | `( 'ident -- int )` | 0 if identifier is an operator, else 1 |
 | `arity` | `( 'ident -- int )` | Get arity (input count) of an operator |
 | `stack` | `( ... -- array )` | Convert entire stack to an array |
-| `emit` | `( int -- )` | Append an integer to the bytecode store |
-| `here` | `( -- int )` | Push current bytecode store address |
+| `peek` | `( addr -- int )` | Read value from bytecode store (0 if beyond size) |
+| `poke` | `( value addr -- )` | Write value to bytecode store (extends if needed) |
 | `applyOperator` | `( 'op -- ... )` | Apply a quoted operator |

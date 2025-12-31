@@ -315,13 +315,13 @@ eval_operator(OpTable, ST, Op, Env, !Array, !Ptr, !IO) :-
         Op = op_is_closure,
         operator_is_closure(!Array, !Ptr)
     ;
-        Op = op_emit,
-        % emit is handled specially in eval.m, should not reach here
-        unexpected($pred, "emit should be handled in eval.m")
+        Op = op_peek,
+        % peek is handled specially in eval.m, should not reach here
+        unexpected($pred, "peek should be handled in eval.m")
     ;
-        Op = op_here,
-        % here is handled specially in eval.m, should not reach here
-        unexpected($pred, "here should be handled in eval.m")
+        Op = op_poke,
+        % poke is handled specially in eval.m, should not reach here
+        unexpected($pred, "poke should be handled in eval.m")
     ;
         Op = op_apply_operator,
         operator_apply_operator(OpTable, ST, Env, !Array, !Ptr, !IO)

@@ -14,12 +14,12 @@
 %-----------------------------------------------------------------------%
 
     % eval_terms(OpTable, BaseDir, Terms, !Env, !Stack, !StackPtr,
-    %            !ST, !Bytecode, !BytecodeSize, !IO):
+    %            !ST, !Bytecode, !IO):
     % Evaluate a list of terms, updating the environment and stack.
     % OpTable is read-only (fixed at engine startup).
     % BaseDir is used to resolve relative paths in imports.
     % StringTable is threaded through (may grow with dynamic imports).
-    % Bytecode array and size are threaded through (may grow with compile).
+    % Bytecode array is threaded through (may grow with poke).
     % Stack is represented as an array and pointer (for efficient operations).
     % Throws eval_error on failure.
     %
@@ -29,7 +29,6 @@
     int::in, int::out,
     string_table::in, string_table::out,
     array(int)::array_di, array(int)::array_uo,
-    int::in, int::out,
     io::di, io::uo) is det.
 
     % Environment operations.
@@ -68,22 +67,21 @@ set_env(Name, Value, !Env) :-
 % Main evaluation
 %-----------------------------------------------------------------------%
 
-eval_terms(_, _, [], !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO).
-eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
-    eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO),
-    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO).
+eval_terms(_, _, [], !Env, !Array, !Ptr, !ST, !BC, !IO).
+eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !Array, !Ptr, !ST, !BC, !IO) :-
+    eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC, !IO),
+    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC, !IO).
 
 :- pred eval_term(operator_table::in, string::in, term::in, env::in, env::out,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out, string_table::in, string_table::out,
     array(int)::array_di, array(int)::array_uo,
-    int::in, int::out,
     io::di, io::uo) is det.
 
-eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
+eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC, !IO) :-
     (
         Term = identifier(NameId),
-        eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO)
+        eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, !ST, !BC, !IO)
     ;
         Term = binder(NameId),
         eval_binder(NameId, !Env, !Array, !Ptr)
@@ -92,7 +90,7 @@ eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
         eval_function(Terms, !.Env, !Array, !Ptr)
     ;
         Term = generator(Terms),
-        eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO)
+        eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC, !IO)
     ;
         Term = quoted(T),
         datastack.push(termval(T), !Array, !Ptr)
@@ -101,7 +99,7 @@ eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
         datastack.push(V, !Array, !Ptr)
     ;
         Term = apply_term,
-        eval_apply(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO)
+        eval_apply(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !IO)
     ).
 
 %-----------------------------------------------------------------------%
@@ -114,25 +112,24 @@ eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
     int::in, int::out,
     string_table::in, string_table::out,
     array(int)::array_di, array(int)::array_uo,
-    int::in, int::out,
     io::di, io::uo) is det.
 
-eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
+eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, !ST, !BC, !IO) :-
     ( if get_env(NameId, V, !.Env) then
         datastack.push(V, !Array, !Ptr)
     else if map.search(OpTable, NameId, Info) then
         ( if Info ^ oi_operator = op_import then
             % import is special: it can modify Env and ST
-            eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO)
+            eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !IO)
         else if Info ^ oi_operator = op_restore then
             % restore is special: it replaces the current Env
             eval_restore(!Env, !Array, !Ptr)
-        else if Info ^ oi_operator = op_emit then
-            % emit is special: it modifies the bytecode store
-            eval_emit(!Array, !Ptr, !BC, !BCSz)
-        else if Info ^ oi_operator = op_here then
-            % here is special: it reads the bytecode store size
-            eval_here(!Array, !Ptr, !.BCSz)
+        else if Info ^ oi_operator = op_peek then
+            % peek is special: it reads the bytecode store
+            eval_peek(!Array, !Ptr, !.BC)
+        else if Info ^ oi_operator = op_poke then
+            % poke is special: it modifies the bytecode store
+            eval_poke(!Array, !Ptr, !BC)
         else
             operators.eval_operator(OpTable, !.ST, Info ^ oi_operator, !.Env,
                 !Array, !Ptr, !IO)
@@ -176,14 +173,13 @@ eval_function(Terms, Env, !Array, !Ptr) :-
     int::in, int::out,
     string_table::in, string_table::out,
     array(int)::array_di, array(int)::array_uo,
-    int::in, int::out,
     io::di, io::uo) is det.
 
-eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
+eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC, !IO) :-
     % Save current stack pointer
     SavedPtr = !.Ptr,
     % Evaluate generator terms (they push values onto the stack)
-    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO),
+    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC, !IO),
     % Extract values pushed by the generator as an array
     datastack.extract_range(!.Array, SavedPtr, !.Ptr, ResultArray),
     % Restore stack pointer and push the result array
@@ -198,14 +194,13 @@ eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out, string_table::in, string_table::out,
     array(int)::array_di, array(int)::array_uo,
-    int::in, int::out,
     io::di, io::uo) is det.
 
-eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
+eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC, !IO) :-
     datastack.pop("!", V, !Array, !Ptr),
     ( if V = closureval(ClosureEnv, Terms) then
         % Evaluate with closure's env, then discard env changes (lexical scoping)
-        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Array, !Ptr, !ST, !BC, !BCSz, !IO)
+        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Array, !Ptr, !ST, !BC, !IO)
     else if V = bytecodeval(Context, CodeAddr) then
         % Execute bytecode closure via VM
         % Note: bytecode array is read-only during VM execution
@@ -227,10 +222,9 @@ eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
     int::in, int::out,
     string_table::in, string_table::out,
     array(int)::array_di, array(int)::array_uo,
-    int::in, int::out,
     io::di, io::uo) is det.
 
-eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
+eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !IO) :-
     datastack.pop("import", V, !Array, !Ptr),
     RelFilename = value_format.value_to_string(!.ST, V),
     % Resolve relative paths using BaseDir
@@ -249,7 +243,7 @@ eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO) :-
             parser.parse(Tokens, ParseResult),
             (
                 ParseResult = ok(Terms),
-                eval_terms(OpTable, NewBaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC, !BCSz, !IO)
+                eval_terms(OpTable, NewBaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC, !IO)
             ;
                 ParseResult = error(ParseError),
                 throw_parse_error(Filename, ParseError)
@@ -326,34 +320,42 @@ eval_restore(!Env, !Array, !Ptr) :-
     ).
 
 %-----------------------------------------------------------------------%
-% emit: ( int -- ) Append an integer to the bytecode store
+% peek: ( addr -- int ) Read bytecode at address
 %-----------------------------------------------------------------------%
 
-:- pred eval_emit(
+:- pred eval_peek(
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out,
-    array(int)::array_di, array(int)::array_uo,
-    int::in, int::out) is det.
+    array(int)::in) is det.
 
-eval_emit(!Array, !Ptr, !BC, !BCSz) :-
-    datastack.pop("emit", V, !Array, !Ptr),
-    ( if V = intval(I) then
-        bytecode.emit(I, !BC, !BCSz)
+eval_peek(!Array, !Ptr, BC) :-
+    datastack.pop("peek", V, !Array, !Ptr),
+    ( if V = intval(Addr) then
+        Value = bytecode.peek(Addr, BC),
+        datastack.push(intval(Value), !Array, !Ptr)
     else
         throw(type_error("int", V))
     ).
 
 %-----------------------------------------------------------------------%
-% here: ( -- int ) Push current bytecode store address
+% poke: ( value addr -- ) Write value to bytecode address
 %-----------------------------------------------------------------------%
 
-:- pred eval_here(
+:- pred eval_poke(
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out,
-    int::in) is det.
+    array(int)::array_di, array(int)::array_uo) is det.
 
-eval_here(!Array, !Ptr, BCSz) :-
-    datastack.push(intval(BCSz), !Array, !Ptr).
+eval_poke(!Array, !Ptr, !BC) :-
+    datastack.pop("poke", AddrVal, !Array, !Ptr),
+    datastack.pop("poke", ValueVal, !Array, !Ptr),
+    ( if AddrVal = intval(Addr), ValueVal = intval(Value) then
+        bytecode.poke(Addr, Value, !BC)
+    else if AddrVal = intval(_) then
+        throw(type_error("int", ValueVal))
+    else
+        throw(type_error("int", AddrVal))
+    ).
 
 %-----------------------------------------------------------------------%
 :- end_module eval.

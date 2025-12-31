@@ -17,6 +17,8 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `delete-keys` | map | Delete array of keys from map |
 | `drop` | data | Drop top of stack |
 | `dup` | data | Duplicate top of stack |
+| `emit-all-at` | bytecode | Write array to bytecode store |
+| `emit-at` | bytecode | Write value to bytecode store |
 | `eval` | eval | Evaluate closure with stack and op-table |
 | `fib` | math | Generate Fibonacci sequence |
 | `filter` | array | Keep elements matching predicate |
@@ -287,6 +289,25 @@ Values produced by the closure are discarded after all iterations.
 { 1 2 + } 10000 bench! println!     ; prints elapsed ticks
 { 0 1 20 fib! } 1000 bench! println!
 ```
+
+## Bytecode (bytecode.froth)
+
+Helpers for bytecode generation. The bytecode store is accessed via the `peek` and `poke` operators.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `emit-at` | `( value addr -- addr' )` | Write value at addr, return next addr |
+| `emit-all-at` | `( arr addr -- addr' )` | Write array starting at addr, return next addr |
+
+Track the current address manually:
+
+```
+0 /here
+[ ocPushInt 42 ocReturn ] here emit-all-at! /here
+[] 0 close !               ; execute bytecode at address 0
+```
+
+The module also defines opcode constants (`ocPushInt`, `ocOp`, `ocReturn`, etc.) and operator constants (`opAdd`, `opSub`, `opMul`, etc.) for bytecode generation. See `lib/bytecode.froth` for the full list.
 
 ## Preflight (preflight.froth)
 
