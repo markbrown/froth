@@ -27,6 +27,14 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `lfoldl` | list | Apply fn head-to-tail |
 | `lfoldr` | list | Apply fn tail-to-head |
 | `liveness` | liveness | Analyze last references in function |
+| `new-apply-node` | node | Create apply node with defaults |
+| `new-binder-node` | node | Create binder node with defaults |
+| `new-closure-node` | node | Create closure node with defaults |
+| `new-generator-node` | node | Create generator node with defaults |
+| `new-identifier-node` | node | Create identifier node with defaults |
+| `new-literal-node` | node | Create literal node with defaults |
+| `new-node` | node | Create empty base node |
+| `new-quote-node` | node | Create quote node with defaults |
 | `lmap` | list | Apply fn to each element |
 | `lreverse` | list | Reverse a cons list |
 | `map` | array | Transform each element |
@@ -301,6 +309,56 @@ Returns `0` if the function is safe, `1` if it contains `env`, `import`, or `app
 
 Use preflight before boundness analysis or compilation to ensure the function can be statically analyzed.
 
+## Node (node.froth)
+
+Compiler node constructors. The compiler passes (boundness, liveness, slots) produce a parallel structure of maps corresponding to each term in the input function. This module provides constructors for each node type.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `new-node` | `( -- node )` | Base constructor returning empty map |
+| `new-literal-node` | `( -- node )` | Create literal node (numbers, strings) |
+| `new-quote-node` | `( -- node )` | Create quote node ('symbol, 'expr) |
+| `new-identifier-node` | `( -- node )` | Create identifier node |
+| `new-binder-node` | `( -- node )` | Create binder node (/name) |
+| `new-apply-node` | `( -- node )` | Create apply node (!) |
+| `new-closure-node` | `( -- node )` | Create closure node ({ }) |
+| `new-generator-node` | `( -- node )` | Create generator node (< >) |
+
+**Value conventions:**
+- Keys use 0 for "yes/true" and 1 for "no/false" (Froth convention)
+- Defaults are set to the common case; passes only write when different
+- `'body` arrays are parallel to the function body terms
+
+**Identifier node keys:**
+- `'is-bound`: 0 = bound variable, 1 = free variable
+- `'is-live`: 0 = still live after this point, 1 = last reference
+- `'slot`: context slot (if free) or frame slot (if bound)
+- `'leave-frame`: 0 = last term using the frame
+
+**Binder node keys:**
+- `'is-used`: 0 = used somewhere, 1 = dead (never referenced)
+- `'slot`: frame slot number (only set if used)
+
+**Apply node keys:**
+- `'restore-context`: 0 = non-tail call needing context restore after
+- `'restore-return`: 0 = last non-tail call (needs return restore)
+- `'leave-frame`: 0 = last term using the frame
+
+**Closure node keys:**
+- `'body`: array of node maps (parallel to body terms)
+- `'free-vars`: map: identifier -> context slot number
+- `'bound-set`: map: identifier -> nil (set of bound vars)
+- `'dead-set`: map: identifier -> nil (vars whose last use is capture)
+- `'max-slots`: maximum frame slots needed
+- `'needs-frame`: 0 = function needs a frame
+
+**Generator node keys:**
+- `'body`: array of node maps (parallel to body terms)
+- `'free-vars`: map: identifier -> context slot number
+- `'bound-set`: map: identifier -> nil (set of bound vars)
+
+Generators share the containing function's frame, so they don't have `'max-slots`.
+
 ## Boundness (boundness.froth)
 
 Boundness analysis for the compiler.
@@ -309,30 +367,27 @@ Boundness analysis for the compiler.
 |------|--------------|-------------|
 | `boundness` | `( func -- func boundness-map )` | Analyze variable binding in a function |
 
-Analyzes a quoted function and returns the function plus a boundness-map. The map contains:
-- `'children`: array of maps, one per term in the function body
+Analyzes a quoted function and returns the function plus a closure-node map. The map contains:
+- `'body`: array of node maps, one per term in the function body
 - `'free-vars`: map from identifiers to context slot numbers
 - `'bound-set`: map from identifiers to nil (marking presence)
 
-Each child map contains:
-- `'is-bound`: `0` for bound identifiers, `1` for free identifiers
-- `'children`, `'free-vars`, `'bound-set`: for nested closures/generators
-- `$` (empty): for binders, operators, literals, quotes
+Each node map contains keys appropriate to the term type (see Node module).
 
 Context slot numbers are assigned in order of first occurrence (0, 1, 2, ...).
 
 ```
 '{x} boundness! /bnd-map /func
 bnd-map 'free-vars @           ; $ 0 'x : (x gets slot 0)
-bnd-map 'children @ 0 @        ; $ 1 'is-bound : (x is free)
+bnd-map 'body @ 0 @            ; identifier-node with is-bound=1 (free)
 
 '{/x x} boundness! /bnd-map /func
-bnd-map 'children @            ; [ $ $ 0 'is-bound : ]
-; First element ($) is binder, second has is-bound=0 (bound)
+bnd-map 'body @                ; [ binder-node identifier-node ]
+; Second element has is-bound=0 (bound)
 
 '{/x {x}} boundness! /bnd-map /func
-bnd-map 'children @ 1 @        ; nested closure's map
-; Has 'children, 'free-vars, 'bound-set keys
+bnd-map 'body @ 1 @            ; nested closure-node
+; Has 'body, 'free-vars, 'bound-set keys
 ```
 
 The passes compose: `func boundness! liveness! slots!` returns `(func slots-map)`.
@@ -356,8 +411,6 @@ Takes the output from `boundness` and adds liveness information to the map.
 - `'leave-frame`: `0` for the last term that uses the frame
 
 **Function-level keys:**
-- `'needs-save-context`: `0` if any call needs context restore
-- `'needs-save-return`: `0` if any non-tail calls exist
 - `'needs-frame`: `0` if function uses a frame (bound vars or register saves)
 
 The analysis traverses right-to-left to determine which references are "last" in each scope. Key behaviors:
@@ -369,27 +422,25 @@ The analysis traverses right-to-left to determine which references are "last" in
 
 ```
 '{x} boundness! liveness! /map /func
-map 'children @ 0 @            ; $ 1 'is-bound : 1 'is-live :
+map 'body @ 0 @                ; identifier-node with is-bound=1, is-live=1
 ; x is free (is-bound=1) and last-ref (is-live=1)
 
 '{/x x} boundness! liveness! /map /func
-map 'children @ 0 @            ; $ 0 'is-used :
+map 'body @ 0 @                ; binder-node with is-used=0
 ; binder is used (is-used=0)
 
 '{/x} boundness! liveness! /map /func
-map 'children @ 0 @ 'is-used @ ; 1 - binder unused (dead)
+map 'body @ 0 @ 'is-used @     ; 1 - binder unused (dead)
 
 '{x {x}} boundness! liveness! /map /func
-map 'children @ 1 @ 'dead-set @ ; $ . 'x :
+map 'body @ 1 @ 'dead-set @    ; $ . 'x :
 ; x's last use is this capture, so in dead-set
 
 '{/fn fn! x fn!} boundness! liveness! /map /func
-map 'needs-save-return in      ; 0 - has non-tail calls
-map 'needs-save-context in     ; 0 - free var x accessed after call
-map 'children @ 2 @            ; first ! has 'restore-context, 'restore-return
+map 'body @ 2 @                ; first ! has restore-context=0, restore-return=0
 
 '{1 2 +} boundness! liveness! /map /func
-map 'needs-frame in            ; 1 - no frame needed (absent)
+map 'needs-frame @             ; 1 - no frame needed
 ```
 
 ## Slots (slots.froth)
@@ -410,15 +461,15 @@ Slots are reused when variables go out of scope (last use). Closures get their o
 ```
 '{/x x} boundness! liveness! slots! /map /func
 map 'max-slots @               ; 1 - one slot needed
-map 'children @ 0 @ 'slot @    ; 0 - binder gets slot 0
-map 'children @ 1 @ 'slot @    ; 0 - reference uses slot 0
+map 'body @ 0 @ 'slot @        ; 0 - binder gets slot 0
+map 'body @ 1 @ 'slot @        ; 0 - reference uses slot 0
 
 '{/x x /y y} boundness! liveness! slots! /map /func
 map 'max-slots @               ; 1 - slot 0 reused for y
 
 '{/x {/y y} x} boundness! liveness! slots! /map /func
 map 'max-slots @               ; 1 - outer needs 1 slot
-map 'children @ 1 @ 'max-slots @ ; 1 - closure needs 1 slot
+map 'body @ 1 @ 'max-slots @   ; 1 - closure needs 1 slot
 
 '{/x /y [/z z] y x} boundness! liveness! slots! /map /func
 map 'max-slots @               ; 3 - generator uses slot 2 for z
