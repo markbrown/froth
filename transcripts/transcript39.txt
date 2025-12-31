@@ -1,0 +1,1683 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Referenced file FROTHLIB.md
+  ⎿  Read FROTH.md (189 lines)
+  ⎿  Read lib/bytecode.froth (91 lines)
+  ⎿  Read tests/vm.froth (110 lines)
+  ⎿  Referenced file src/operators.m
+
+> Are you ready to start implementing codegen? Is there anything you would 
+like to clarify first? 
+
+● I'm ready to start on codegen. A few clarifications would help:
+
+  1. Input format - What's the output of the compiler passes (boundness/liveness/slots) that codegen will consume? Is there an annotated AST or intermediate representation?
+  2. Scope - Should codegen handle the full language, or start with a subset (e.g., arithmetic, locals, simple function calls)?
+  3. Existing code - Is there any partial codegen implementation, or starting fresh?
+  4. Integration - Should codegen be a new Mercury module, or integrated into an existing one?
+
+> look at the existing compiler passes 
+
+● Search(pattern: "src/*.m")
+  ⎿  Found 11 files (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+> The compiler is written in Froth and is in the lib directory. See 
+node.froth and other compiler files in that directory. 
+
+● Search(pattern: "lib/*.froth")
+  ⎿  Found 18 files (ctrl+o to expand)
+
+● Read(lib/node.froth)
+  ⎿  Read 102 lines
+
+● Read(lib/boundness.froth)
+  ⎿  Read 121 lines
+
+● Read(lib/liveness.froth)
+  ⎿  Read 148 lines
+
+● Read(lib/slots.froth)
+  ⎿  Read 108 lines
+
+● Now I understand the compiler architecture. Here's my summary:
+
+  Compiler Pipeline:
+  1. boundness - Identifies bound vs free variables, assigns context slots
+  2. liveness - Marks last references, determines context/return restore needs
+  3. slots - Allocates frame slots with free-list reuse
+
+  Output of slots (input to codegen):
+  The slots-node contains for each term:
+  - Identifiers: 'is-bound (0=bound, 1=free), 'slot, 'is-live, 'leave-frame
+  - Binders: 'is-used, 'slot
+  - Apply: 'restore-context, 'restore-return, 'leave-frame
+  - Closures: 'body, 'free-vars, 'max-slots, 'needs-frame, 'needs-save-return, 'needs-save-context, 'dead-set
+  - Generators: 'body, 'free-vars, 'bound-set
+
+  Key codegen patterns from vm.froth:
+  - Frame: ocEnterFrame N ... ocLeaveFrame N
+  - Locals: ocPopLocal slot / ocPushLocal slot
+  - Calls: save RP/context to locals, ocPushContext idx, ocCall, restore
+  - Arrays: ocStartArray ... ocEndArray
+
+  I'm ready to implement. Should I:
+  1. Create lib/codegen.froth following the same pattern as the other passes?
+  2. Start with a subset (e.g., arithmetic + locals) and build up?
+
+> Read the Mercury code to understand how the virtual machine works 
+
+● Read(src/vm.m)
+  ⎿  Read 231 lines
+
+● Let me also check how bytecode closures are created and how they're called from the interpreter:
+
+● Search(pattern: "bytecodeval", path: "src", output_mode: "content")
+  ⎿  Found 11 lines (ctrl+o to expand)
+
+● Read(src/types.m)
+  ⎿  Read 250 lines
+
+● Let me check the close operator to see how bytecode closures are created:
+
+● Read(src/operators.m)
+  ⎿  Read 50 lines
+
+● Now I have a complete picture. Here's my understanding:
+
+  Bytecode closure: bytecodeval(context_array, code_addr)
+  - Created via close with array + int
+  - Context array holds captured free variables
+  - Code addr is index into bytecode store
+
+  VM Architecture:
+  - Stack grows up (SP++), frame grows down (FP--)
+  - Locals: Stack[FP + slot]
+  - Free vars: Context[slot]
+  - RP = -1 means return to interpreter
+
+  Opcodes:
+  | Opcode            | Args | Effect                      |
+  |-------------------|------|-----------------------------|
+  | pushInt           | n    | Push integer n              |
+  | pushString        | id   | Push string with intern ID  |
+  | pushContext       | slot | Push free var from context  |
+  | pushLocal         | slot | Push local from frame       |
+  | popLocal          | slot | Pop into frame slot         |
+  | popUnused         | -    | Discard top of stack        |
+  | op                | num  | Execute operator            |
+  | enterFrame        | n    | Allocate n frame slots      |
+  | leaveFrame        | n    | Deallocate n frame slots    |
+  | startArray        | -    | Begin generator             |
+  | endArray          | -    | End generator, create array |
+  | call              | -    | Pop closure, jump, set RP   |
+  | saveReturnPtr     | -    | Push RP                     |
+  | restoreReturnPtr  | -    | Pop RP                      |
+  | saveContextPtr    | -    | Push context                |
+  | restoreContextPtr | -    | Pop context                 |
+  | return            | -    | Jump to RP or exit          |
+
+  I'm ready to implement codegen. Should I create lib/codegen.froth?
+
+> Please outline the codegen algorithm you think we require. We can discuss 
+any details after that. 
+
+● Codegen Algorithm Outline
+
+  Input
+
+  - Function body (list of terms)
+  - Slots-node from compiler passes with:
+    - 'body: parallel array of node maps
+    - 'free-vars: identifier → context slot
+    - 'max-slots: frame slots for local variables
+    - 'needs-frame, 'needs-save-return, 'needs-save-context
+
+  Output
+
+  - Bytecode emitted via poke
+  - Returns: (code-addr, next-addr)
+
+  ---
+  Function Structure
+
+  codegen-func(func, node, addr) → (code-addr, next-addr)
+
+  1. FRAME LAYOUT
+     Calculate total frame size:
+     - Slot 0: saved RP (if needs-save-return)
+     - Slot 1: saved context (if needs-save-context)
+     - Slot 2+: user variables (offset by reserved count)
+
+  2. PROLOGUE (if needs-frame)
+     enterFrame total-slots
+     [saveReturnPtr, popLocal rp-slot]      ; if needs-save-return
+     [saveContextPtr, popLocal ctx-slot]    ; if needs-save-context
+
+  3. BODY
+     For each (term, term-node) in parallel:
+       codegen-term(term, term-node, ...)
+
+  4. EPILOGUE
+     [leaveFrame total-slots]               ; if needs-frame
+     return
+
+  ---
+  Term Codegen
+
+  | Term                  | Code                               |
+  |-----------------------|------------------------------------|
+  | int n                 | pushInt n                          |
+  | string s              | pushString intern-id               |
+  | identifier (bound)    | pushLocal (reserved + slot)        |
+  | identifier (free)     | pushContext slot                   |
+  | identifier (operator) | op operator-num                    |
+  | binder (used)         | popLocal (reserved + slot)         |
+  | binder (dead)         | popUnused                          |
+  | quoted identifier     | pushInt intern-id, op opIdToIdent  |
+  | quoted binder         | pushInt intern-id, op opIdToBinder |
+
+  ---
+  Apply (Call)
+
+  codegen-apply(node):
+    if restore-context = 0:
+      ; Non-tail call needing context restore
+      ; Save handled in prologue, restore after call
+
+    if leave-frame = 0:
+      leaveFrame total-slots    ; Last frame usage, release before call
+
+    call
+
+    if restore-return = 0:
+      pushLocal rp-slot
+      restoreReturnPtr
+
+    if restore-context = 0:
+      pushLocal ctx-slot
+      restoreContextPtr
+
+  ---
+  Closure
+
+  codegen-closure(inner-func, node):
+    1. Recursively compile inner function → inner-addr
+
+    2. Build context array:
+       startArray
+       For each free-var in slot order:
+         if bound in outer scope: pushLocal (reserved + outer-slot)
+         else: pushContext outer-context-slot
+       endArray
+
+    3. pushInt inner-addr
+       op opClose
+
+  ---
+  Generator
+
+  codegen-generator(inner-body, node):
+    startArray
+    For each term in inner-body:
+      codegen-term(...)
+    endArray
+
+  ---
+  Open Questions
+
+  1. Quoted functions/generators: How to emit code that constructs '{ ... } at runtime? Defer to interpreter or build term programmatically?
+  2. Scope threading: Need to pass down bound-set and slot mappings for closure context building. What data structure?
+  3. Compilation order: Compile inner closures first (so we know their addresses), or use forward references with backpatching?
+
+> Please read node.froth and all of the compiler passes. Think deeply about 
+what they are doing and what the information they produce is needed for. The
+ passes have been carefully designed so that bytecodes can be emitted in an 
+efficient way, but to do so correctly you need to understand how the 
+bytecodes work and when they are required. Not all code can be supported 
+yet, such as quoted terms, but we will deal with that later. In the liveness
+ pass we calculated positions for restoring registers and leaving the frame,
+ but we have left it to codegen to determine when/if to enter the frame 
+and/or save registers. Are these things clear? 
+
+● Read(lib/node.froth)
+  ⎿  Read 102 lines
+
+● Read(lib/boundness.froth)
+  ⎿  Read 121 lines
+
+● Read(lib/liveness.froth)
+  ⎿  Read 148 lines
+
+● Read(lib/slots.froth)
+  ⎿  Read 108 lines
+
+● Now I understand the design. Let me articulate my understanding:
+
+  Boundness (left-to-right)
+
+  Purpose: Classify each identifier as bound or free, assign context slots to free variables.
+
+  - Bound identifiers: Local to this function (preceded by a binder)
+  - Free identifiers: Captured from outer scope, get a context slot
+  - Operators: Neither bound nor free - looked up in operator table
+
+  Key output: 'is-bound (0=bound, 1=free), 'slot for free vars (context slot), 'free-vars map for closures/generators
+
+  Liveness (right-to-left)
+
+  Purpose: Identify restore points and frame release point by walking backwards.
+
+  Key insight: Walking right-to-left means "first seen" = "last use at runtime".
+
+  What it tracks:
+  - seen: Variables still live after current point
+  - need-ctx: 0 if a free var was accessed since last call (context needs restore)
+  - seen-nontail: 0 if we've seen a non-tail call (only rightmost non-tail needs RP restore)
+  - seen-frame: 0 if we've seen any frame usage (only rightmost frame user gets leave-frame)
+
+  Output:
+  - Per-identifier: 'is-live (1=last reference), 'leave-frame (0=emit leaveFrame after this)
+  - Per-binder: 'is-used (1=dead, use popUnused)
+  - Per-apply: 'restore-context, 'restore-return (0=emit restore after call)
+  - Per-closure: 'dead-set, 'needs-frame, 'needs-save-return, 'needs-save-context
+
+  Critical: 'leave-frame=0 marks the last term using the frame. Codegen emits leaveFrame after this term.
+
+  Slots (left-to-right)
+
+  Purpose: Assign frame slots to bound variables with reuse.
+
+  Uses 'is-live=1 (from liveness) to know when to free slots for reuse.
+
+  Output: 'slot for binders and bound identifiers (frame slot), 'max-slots for closures
+
+  Codegen Responsibilities
+
+  What liveness tells us:
+  - WHERE to restore (marked on specific apply nodes)
+  - WHERE to leave frame (marked on specific term)
+  - WHETHER to save (function-level flags)
+
+  What codegen determines:
+  - Frame layout: reserved slots (0-1 for RP, 1-2 for context) + user slots
+  - Offset user slots by reserved count
+  - HOW MUCH to enter/leave (total frame size)
+
+  Flow:
+  Prologue:
+    if needs-frame: enterFrame (reserved + max-slots)
+    if needs-save-return: saveReturnPtr, popLocal rp-slot
+    if needs-save-context: saveContextPtr, popLocal ctx-slot
+
+  For each term:
+    emit term bytecode
+    if term has 'restore-return=0: pushLocal rp-slot, restoreReturnPtr
+    if term has 'restore-context=0: pushLocal ctx-slot, restoreContextPtr
+    if term has 'leave-frame=0: leaveFrame (reserved + max-slots)
+
+  Epilogue:
+    return
+
+  Is this understanding correct?
+
+> Slots for saving registers should be allocated just before they are 
+needed, in the same way bound variables are. Here are some examples:
+1. `{/f x f!}`
+ - `/f` is allocated frame slot 0 so it needs the frame to be entered -> 
+enterFrame 1, popLocal 0
+ - `x` is allocated context slot 0, last reference to context -> pushContext
+ 0
+ - `f` last reference to f -> pushLocal 0, leaveFrame 1
+ - `!` is a tail call so we don't need to save registers -> tailCall
+2. `{/f x f! y}`
+ - `/f` -> enterFrame 2, popLocal 0
+ - `x` -> pushContext 0
+ - `f` last reference to f -> pushLocal 0 (free slot 0)
+ - `!` requires both registers restored and they haven't been saved yet, 
+allocate slots 0 and 1 -> saveContextPtr 0, saveReturnPtr 1, call, 
+restoreContextPtr 0, restoreReturnPtr 1, leaveFrame 2 (all slots freed)
+ - `y` -> pushContext 1, return
+3. `{/f x f! g!}`
+ - `/f` -> enterFrame 2, popLocal 0
+ - `x` -> pushContext 0
+ - `f` -> pushLocal 0 (free slot 0)
+ - `!` allocate 2 slots -> saveContextPtr 0, saveReturnPtr 1, call, 
+restoreContextPtr 0, restoreReturnPtr 1, leaveFrame 2
+ - `g` last reference to context -> pushContext 1
+ - `!` -> tailCall
+4. `{/f g! f!}`
+ - `/f` -> enterFrame 2, popLocal 0
+ - `g` last reference to context -> pushContext 0
+ - `!` requires RP restored so we allocate 1 slot -> saveReturnPtr 1, call, 
+restoreReturnPtr 1
+ - `f` -> pushLocal 0, leaveFrame 2
+ - `!` -> tailCall
+5. `{\x x x * f! 1 +}`
+ - `\x` -> enterFrame 1, popLocal 0
+ - `x` -> pushLocal 0
+ - `x` -> pushLocal 0 (free slot 0)
+ - `*` -> op n (opcode for `*`)
+ - `f` -> pushContext 0
+ - `!` only need to save RP, reuse slot 0 -> saveReturnPtr 0, call, 
+restoreReturnPtr 0, leaveFrame 1
+ - `1` -> pushInt 1
+ - `+` -> op n (opcode for `+`) 
+
+● This is much cleaner! Now I understand:
+
+  1. Slots are allocated on-demand - both for binders AND register saves
+  2. Slot reuse - freed slots can be reused for register saves
+  3. max-slots - the high-water mark, computed by slots pass (needs to account for save slots)
+  4. enterFrame - emitted when first slot is needed (binder or save)
+  5. leaveFrame - emitted after the last frame usage (marked by 'leave-frame=0)
+
+  Key insight: Register save slots are allocated at the call, used immediately for save/restore, then freed - just like any other slot.
+
+  Required Changes
+
+  Slots pass needs to handle save slots:
+
+  When processing an apply with 'restore-context=0 or 'restore-return=0:
+  - Allocate slot(s) from free list (or new)
+  - Store as 'ctx-save-slot and/or 'rp-save-slot on the apply node
+  - Free the slot(s) immediately (they're only used during this call)
+  - This correctly updates max-slots
+
+  Codegen tracks frame state:
+
+  frame-entered = false
+
+  For each (term, node):
+
+    If term needs a slot AND not frame-entered:
+      emit enterFrame max-slots
+      frame-entered = true
+
+    emit term bytecode
+
+    If node.'leave-frame = 0:
+      emit leaveFrame max-slots
+
+  emit return
+
+  Apply codegen:
+
+  If 'restore-context=0:
+    saveContextPtr, popLocal ctx-save-slot
+  If 'restore-return=0:
+    saveReturnPtr, popLocal rp-save-slot
+
+  If tail-call:
+    emit tailCall (or just call?)
+  Else:
+    emit call
+
+  If 'restore-return=0:
+    pushLocal rp-save-slot, restoreReturnPtr
+  If 'restore-context=0:
+    pushLocal ctx-save-slot, restoreContextPtr
+
+  Questions
+
+  1. Is there a tailCall opcode, or just call with different setup?
+  2. Should I first extend the slots pass to handle save slots, then implement codegen? Or implement both together?
+  3. For the save/restore sequence, does order matter? (I assumed save ctx first, restore ctx last)
+
+> extend the slots pass first 
+
+● Read(lib/slots.froth)
+  ⎿  Read 108 lines
+
+● Now let me check the apply node constructor to see if I need to add the new keys:
+
+● Read(lib/node.froth)
+  ⎿  Read 15 lines
+
+● I'll update both files. First, let me add the new keys to the apply node documentation, then extend the slots pass:
+
+● Update(lib/node.froth)
+  ⎿  Added 4 lines                                                       
+      61  ;   'restore-context (liveness) 0 = non-tail call needing conte
+          xt restore after
+      62  ;   'restore-return  (liveness) 0 = last non-tail call (needs r
+          eturn restore)
+      63  ;   'leave-frame     (liveness) 0 = last term using the frame
+      64 +;   'ctx-save-slot   (slots)    frame slot for saving context p
+         +ointer                                                         
+      65 +;   'rp-save-slot    (slots)    frame slot for saving return po
+         +inter                                                          
+      66  { new-node!
+      67    1 'restore-context :
+      68    1 'restore-return :
+      69    1 'leave-frame :
+      70 +  . 'ctx-save-slot :                                           
+      71 +  . 'rp-save-slot :                                            
+      72  } /new-apply-node
+      73  
+      74  ; new-closure-node: ( -- closure-node )
+
+● Now let me extend the slots pass to handle apply nodes:
+
+● Update(lib/slots.froth)
+  ⎿  Added 41 lines, removed 1 line                                      
+       69        live-map slot-map free max
+       70      } ?!
+       71    } {
+       72 +  term isApply {                                              
+       73 +    ; Apply: allocate slots for register saves if needed      
+       74 +    ; Slots are allocated then immediately freed (only used du
+          +ring this call)                                               
+       75 +    live-map /result-map                                      
+       76 +    free /cur-free                                            
+       77 +    max /cur-max                                              
+       78 +                                                              
+       79 +    ; Allocate ctx-save-slot if restore-context=0             
+       80 +    live-map 'restore-context @ 0 = {                         
+       81 +      cur-free isNil {                                        
+       82 +        result-map cur-max 'ctx-save-slot : /result-map       
+       83 +        cur-max 1 + /cur-max                                  
+       84 +      } {                                                     
+       85 +        cur-free fst /slot                                    
+       86 +        cur-free snd /cur-free                                
+       87 +        result-map slot 'ctx-save-slot : /result-map          
+       88 +      } ?!                                                    
+       89 +    } { } ?!                                                  
+       90 +                                                              
+       91 +    ; Allocate rp-save-slot if restore-return=0               
+       92 +    live-map 'restore-return @ 0 = {                          
+       93 +      cur-free isNil {                                        
+       94 +        result-map cur-max 'rp-save-slot : /result-map        
+       95 +        cur-max 1 + /cur-max                                  
+       96 +      } {                                                     
+       97 +        cur-free fst /slot                                    
+       98 +        cur-free snd /cur-free                                
+       99 +        result-map slot 'rp-save-slot : /result-map           
+      100 +      } ?!                                                    
+      101 +    } { } ?!                                                  
+      102 +                                                              
+      103 +    ; Free the allocated slots (push back to free list)       
+      104 +    result-map 'ctx-save-slot @ /ctx-slot                     
+      105 +    result-map 'rp-save-slot @ /rp-slot                       
+      106 +    cur-free /new-free                                        
+      107 +    ctx-slot isNil { } { ctx-slot new-free swap! , /new-free }
+          + ?!                                                           
+      108 +    rp-slot isNil { } { rp-slot new-free swap! , /new-free } ?
+          +!                                                             
+      109 +                                                              
+      110 +    result-map slot-map new-free cur-max                      
+      111 +  } {                                                         
+      112      ; Not an identifier, or operator: no slot
+      113      live-map slot-map free max
+       74 -  } ?! } ?! } ?! } ?!                                         
+      114 +  } ?! } ?! } ?! } ?! } ?!                                    
+      115  } def-fn! /slots-term-impl
+      116  
+      117  ; slots-seq-impl: (func-body body-arr slot-map free max idx se
+           q-fn term-fn -- new-body-arr new-slot-map new-free new-max)
+
+● Now let me run the tests to verify the changes work:
+
+● Bash(make test 2>&1 | tail -20)
+  ⎿  PASS: preflight               
+     PASS: print_int
+     PASS: print_string
+     … +17 lines (ctrl+o to expand)
+
+● All tests pass. Let me create a test to verify the new save slot allocation. I'll test against the examples you provided:
+
+● Bash(cat > /tmp/test_save_slots.froth << 'EOF'
+      ; Test save slot allocation in slots pass…)
+  ⎿  Error: Exit code 1
+     Runtime error: import: /tmp/lib/stdlib.froth: can't open input file: No such
+      file or directory
+
+● Bash(cat > /tmp/test_save_slots.froth << 'EOF'
+      ; Test save slot allocation in slots pass…)
+  ⎿  Error: Exit code 1
+     Runtime error: import: /tmp/lib/stdlib.froth: can't open input file: No such
+      file or directory
+
+● Bash(cat > /tmp/test_save_slots.froth << 'EOF'
+      ; Test save slot allocation in slots pass…)
+  ⎿  Error: Exit code 1
+     Runtime error: import: /tmp/lib/stdlib.froth: can't open input file: No such
+      file or directory
+
+● Write(tests/save_slots.froth)
+  ⎿  Wrote 53 lines to tests/save_slots.froth                    
+      1 ; Test save slot allocation in slots pass
+      2 "lib/stdlib.froth" import
+      3 ; Helper to show slot info for an apply node
+      4 { /node
+      5   "  ctx-save-slot: " print node 'ctx-save-slot @ println
+      6   "  rp-save-slot: " print node 'rp-save-slot @ println
+      7 } /show-apply
+      8 ; Helper to show closure info
+     … +43 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth tests/save_slots.froth)
+  ⎿  Error: Exit code 1
+     Runtime error: import: tests/lib/stdlib.froth: can't open input file: No 
+     such file or directory
+
+● Bash(head -5 tests/slots.froth)
+  ⎿  ; Test slot allocation                           
+
+     ; Helper to test slots - shows body and max-slots
+     … +2 lines (ctrl+o to expand)
+
+● Bash(grep -n "boundness\|liveness\|slots" tests/slots.froth | head -10)
+  ⎿  3:; Helper to test slots - shows body and max-slots      
+     5:  map 'body @ write " " print map 'max-slots @ println!
+     6:} /test-slots
+     … +7 lines (ctrl+o to expand)
+
+● Bash(grep -n "stdlib\|boundness" lib/stdlib.froth | head -10)
+  ⎿  14:"boundness.froth" import
+
+● Update(tests/save_slots.froth)
+  ⎿  Removed 1 line                                                      
+      1  ; Test save slot allocation in slots pass
+      2 -"lib/stdlib.froth" import                                       
+      2  
+      3  ; Helper to show slot info for an apply node
+      4  { /node
+
+● Bash(timeout 5 ./bin/froth tests/save_slots.froth)
+  ⎿  Error: Exit code 1
+     Runtime error: undefined name: restore-context
+
+● Let me check what happens when we try to access a missing key in a map:
+
+● Bash(echo '$ "foo" @' | timeout 2 ./bin/froth 2>&1)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                     
+     > Runtime error: type error: expected term, got string
+     >
+
+● Bash(echo "\$ 'foo @" | timeout 2 ./bin/froth 2>&1)
+  ⎿  Froth REPL. Press Ctrl-D to exit.   
+     > Runtime error: undefined name: foo
+     >
+
+● I see - accessing a missing key throws an error. I need to check with in first:
+
+● Update(lib/slots.froth)
+  ⎿  Added 14 lines, removed 12 lines                                    
+       75      live-map /result-map
+       76      free /cur-free
+       77      max /cur-max
+       78 +    . /ctx-slot                                               
+       79 +    . /rp-slot                                                
+       80  
+       79 -    ; Allocate ctx-save-slot if restore-context=0             
+       80 -    live-map 'restore-context @ 0 = {                         
+       81 +    ; Allocate ctx-save-slot if restore-context=0 (key present
+          + means restore needed)                                        
+       82 +    live-map 'restore-context in 0 = live-map 'restore-context
+          + @ 0 = and! {                                                 
+       83        cur-free isNil {
+       82 -        result-map cur-max 'ctx-save-slot : /result-map       
+       84 +        cur-max /ctx-slot                                     
+       85 +        result-map ctx-slot 'ctx-save-slot : /result-map      
+       86          cur-max 1 + /cur-max
+       87        } {
+       85 -        cur-free fst /slot                                    
+       88 +        cur-free fst /ctx-slot                                
+       89          cur-free snd /cur-free
+       87 -        result-map slot 'ctx-save-slot : /result-map          
+       90 +        result-map ctx-slot 'ctx-save-slot : /result-map      
+       91        } ?!
+       92      } { } ?!
+       93  
+       91 -    ; Allocate rp-save-slot if restore-return=0               
+       92 -    live-map 'restore-return @ 0 = {                          
+       94 +    ; Allocate rp-save-slot if restore-return=0 (key present m
+          +eans restore needed)                                          
+       95 +    live-map 'restore-return in 0 = live-map 'restore-return @
+          + 0 = and! {                                                   
+       96        cur-free isNil {
+       94 -        result-map cur-max 'rp-save-slot : /result-map        
+       97 +        cur-max /rp-slot                                      
+       98 +        result-map rp-slot 'rp-save-slot : /result-map        
+       99          cur-max 1 + /cur-max
+      100        } {
+       97 -        cur-free fst /slot                                    
+      101 +        cur-free fst /rp-slot                                 
+      102          cur-free snd /cur-free
+       99 -        result-map slot 'rp-save-slot : /result-map           
+      103 +        result-map rp-slot 'rp-save-slot : /result-map        
+      104        } ?!
+      105      } { } ?!
+      106  
+      107      ; Free the allocated slots (push back to free list)
+      104 -    result-map 'ctx-save-slot @ /ctx-slot                     
+      105 -    result-map 'rp-save-slot @ /rp-slot                       
+      108      cur-free /new-free
+      109      ctx-slot isNil { } { ctx-slot new-free swap! , /new-free }
+            ?!
+      110      rp-slot isNil { } { rp-slot new-free swap! , /new-free } ?
+           !
+
+● Bash(timeout 5 ./bin/froth tests/save_slots.froth)
+  ⎿  Error: Exit code 1
+     Runtime error: undefined name: restore-context
+
+● The issue is that and! doesn't short-circuit. Let me use nested conditionals instead:
+
+● Update(lib/slots.froth)
+  ⎿  Added 26 lines, removed 22 lines                                    
+       78      . /ctx-slot
+       79      . /rp-slot
+       80  
+       81 -    ; Allocate ctx-save-slot if restore-context=0 (key present
+          - means restore needed)                                        
+       82 -    live-map 'restore-context in 0 = live-map 'restore-context
+          - @ 0 = and! {                                                 
+       83 -      cur-free isNil {                                        
+       84 -        cur-max /ctx-slot                                     
+       85 -        result-map ctx-slot 'ctx-save-slot : /result-map      
+       86 -        cur-max 1 + /cur-max                                  
+       87 -      } {                                                     
+       88 -        cur-free fst /ctx-slot                                
+       89 -        cur-free snd /cur-free                                
+       90 -        result-map ctx-slot 'ctx-save-slot : /result-map      
+       91 -      } ?!                                                    
+       81 +    ; Allocate ctx-save-slot if restore-context=0 (key present
+          + and value 0 means restore needed)                            
+       82 +    live-map 'restore-context in 0 = {                        
+       83 +      live-map 'restore-context @ 0 = {                       
+       84 +        cur-free isNil {                                      
+       85 +          cur-max /ctx-slot                                   
+       86 +          result-map ctx-slot 'ctx-save-slot : /result-map    
+       87 +          cur-max 1 + /cur-max                                
+       88 +        } {                                                   
+       89 +          cur-free fst /ctx-slot                              
+       90 +          cur-free snd /cur-free                              
+       91 +          result-map ctx-slot 'ctx-save-slot : /result-map    
+       92 +        } ?!                                                  
+       93 +      } { } ?!                                                
+       94      } { } ?!
+       95  
+       94 -    ; Allocate rp-save-slot if restore-return=0 (key present m
+          -eans restore needed)                                          
+       95 -    live-map 'restore-return in 0 = live-map 'restore-return @
+          - 0 = and! {                                                   
+       96 -      cur-free isNil {                                        
+       97 -        cur-max /rp-slot                                      
+       98 -        result-map rp-slot 'rp-save-slot : /result-map        
+       99 -        cur-max 1 + /cur-max                                  
+      100 -      } {                                                     
+      101 -        cur-free fst /rp-slot                                 
+      102 -        cur-free snd /cur-free                                
+      103 -        result-map rp-slot 'rp-save-slot : /result-map        
+      104 -      } ?!                                                    
+       96 +    ; Allocate rp-save-slot if restore-return=0 (key present a
+          +nd value 0 means restore needed)                              
+       97 +    live-map 'restore-return in 0 = {                         
+       98 +      live-map 'restore-return @ 0 = {                        
+       99 +        cur-free isNil {                                      
+      100 +          cur-max /rp-slot                                    
+      101 +          result-map rp-slot 'rp-save-slot : /result-map      
+      102 +          cur-max 1 + /cur-max                                
+      103 +        } {                                                   
+      104 +          cur-free fst /rp-slot                               
+      105 +          cur-free snd /cur-free                              
+      106 +          result-map rp-slot 'rp-save-slot : /result-map      
+      107 +        } ?!                                                  
+      108 +      } { } ?!                                                
+      109      } { } ?!
+      110  
+      111      ; Free the allocated slots (push back to free list)
+
+● Bash(timeout 5 ./bin/froth tests/save_slots.froth)
+  ⎿  Error: Exit code 1
+       max-slots:   ctx-save-slot: Runtime error: undefined name: ctx-save-slot
+
+● The test helper needs to handle missing keys. Let me update it:
+
+● Update(tests/save_slots.froth)
+  ⎿  Added 7 lines, removed 2 lines                                      
+       1  ; Test save slot allocation in slots pass
+       2  
+       3 +; Helper to safely get a key, returning nil if not present     
+       4 +{ /key /map                                                    
+       5 +  map key in 0 = { map key @ } { . } ?!                        
+       6 +} /get-or-nil                                                  
+       7 +                                                               
+       8  ; Helper to show slot info for an apply node
+       9  { /node
+       5 -  "  ctx-save-slot: " print node 'ctx-save-slot @ println      
+       6 -  "  rp-save-slot: " print node 'rp-save-slot @ println        
+      10 +  "  ctx-save-slot: " print node 'ctx-save-slot get-or-nil! pri
+         +ntln                                                           
+      11 +  "  rp-save-slot: " print node 'rp-save-slot get-or-nil! print
+         +ln                                                             
+      12  } /show-apply
+      13  
+      14  ; Helper to show closure info
+
+● Bash(timeout 5 ./bin/froth tests/save_slots.froth)
+  ⎿   max-slots:   ctx-save-slot:   rp-save-slot:   max-slots:   ctx-save-s
+    lot:   rp-save-slot:   max-slots:   ctx-save-slot:   rp-save-slot:   ct
+    x-save-slot:   rp-save-slot:   max-slots:   ctx-save-slot:   rp-save-sl
+    … +2 lines (ctrl+o to expand)
+
+
+
+
+● The output is running but values aren't showing properly. Let me fix the test to show values more clearly:
+
+● Update(tests/save_slots.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      2  
+      3  ; Helper to safely get a key, returning nil if not present
+      4  { /key /map
+      5 -  map key in 0 = { map key @ } { . } ?!                         
+      5 +  map key in 0 = { map key @ } { "nil" } ?!                     
+      6  } /get-or-nil
+      7  
+      8  ; Helper to show slot info for an apply node
+
+● Bash(timeout 5 ./bin/froth tests/save_slots.froth 2>&1)
+  ⎿   max-slots:   ctx-save-slot:   rp-save-slot:   max-slots:   ctx-save-s
+    lot:   rp-save-slot:   max-slots:   ctx-save-slot:   rp-save-slot:   ct
+    x-save-slot:   rp-save-slot:   max-slots:   ctx-save-slot:   rp-save-sl
+    … +2 lines (ctrl+o to expand)
+
+
+
+
+● Bash(echo '"hello" println' | timeout 2 ./bin/froth)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > >
+
+● Bash(echo '"hello" println' > /tmp/test.froth && timeout 2 ./bin/froth
+      /tmp/test.froth)
+  ⎿  (No content)
+
+● Bash(echo '"Test" println' | timeout 2 ./bin/froth 2>&1
+      echo "---"…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.     
+     > Runtime error: undefined name: Error
+     > Runtime error: undefined name: Try
+     >
+
+● Bash(echo '42 println' | ./bin/froth 2>&1)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > >
+
+● Bash(echo '42 println!' | ./bin/froth 2>&1)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > 1:11: invalid token: '\'
+     >
+
+● Bash(printf '42 println\n' | ./bin/froth 2>&1)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > >
+
+● Bash(printf 'println\n' | ./bin/froth 2>&1)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > >
+
+● Bash(printf '42 print\n' | ./bin/froth 2>&1)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > 42>
+
+● Bash(grep -n "println" lib/io.froth)
+  ⎿  6:; println: ( a -- ) Print a value followed by a newline
+     7:['nl] { print nl! } def-fn! /println
+
+● Bash(printf '42 print nl\n' | ./bin/froth 2>&1)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > 42>
+
+● Bash(grep -n "^{.*nl" lib/io.froth)
+  ⎿  No matches found
+
+● Read(lib/io.froth)
+  ⎿  Read 11 lines
+
+● Bash(printf '42 println\n' | ./bin/froth 2>&1 | cat -A)
+  ⎿  Froth REPL. Press Ctrl-D to exit.$
+     > > $
+  ⎿  Interrupted · What should Claude do instead?
+
+> Are you forgetting to add `!` to println? Read the README to understand 
+the command lin 
+  ⎿  Interrupted · What should Claude do instead?
+
+> Are you forgetting to add `!` to println? Read the README to understand 
+the command line 
+
+● You're right, I need println! for user-defined functions. Let me fix the test:
+
+● Read(tests/save_slots.froth)
+  ⎿  Read 57 lines
+
+● Update(tests/save_slots.froth)
+  ⎿  Added 15 lines, removed 15 lines                                    
+       7  
+       8  ; Helper to show slot info for an apply node
+       9  { /node
+      10 -  "  ctx-save-slot: " print node 'ctx-save-slot get-or-nil! pri
+         -ntln                                                           
+      11 -  "  rp-save-slot: " print node 'rp-save-slot get-or-nil! print
+         -ln                                                             
+      10 +  "  ctx-save-slot: " print node 'ctx-save-slot get-or-nil! pri
+         +ntln!                                                          
+      11 +  "  rp-save-slot: " print node 'rp-save-slot get-or-nil! print
+         +ln!                                                            
+      12  } /show-apply
+      13  
+      14  ; Helper to show closure info
+      15  { /node
+      16 -  "  max-slots: " print node 'max-slots @ println              
+      16 +  "  max-slots: " print node 'max-slots @ println!             
+      17  } /show-closure
+      18  
+      19  ; Example 1: {/f x f!} - tail call, no saves needed
+      20 -"Example 1: {/f x f!}" println                                 
+      20 +"Example 1: {/f x f!}" println!                                
+      21  '{/f x f!} boundness! liveness! slots! /node1 /func1
+      22  node1 show-closure!
+      23 -"  apply node:" println                                        
+      23 +"  apply node:" println!                                       
+      24  node1 'body @ 2 @ show-apply!
+      25  
+      26  ; Example 2: {/f x f! y} - non-tail call, needs both saves
+      27 -"Example 2: {/f x f! y}" println                               
+      27 +"Example 2: {/f x f! y}" println!                              
+      28  '{/f x f! y} boundness! liveness! slots! /node2 /func2
+      29  node2 show-closure!
+      30 -"  apply node:" println                                        
+      30 +"  apply node:" println!                                       
+      31  node2 'body @ 2 @ show-apply!
+      32  
+      33  ; Example 3: {/f x f! g!} - non-tail call then tail call
+      34 -"Example 3: {/f x f! g!}" println                              
+      34 +"Example 3: {/f x f! g!}" println!                             
+      35  '{/f x f! g!} boundness! liveness! slots! /node3 /func3
+      36  node3 show-closure!
+      37 -"  first apply node:" println                                  
+      37 +"  first apply node:" println!                                 
+      38  node3 'body @ 2 @ show-apply!
+      39 -"  second apply node:" println                                 
+      39 +"  second apply node:" println!                                
+      40  node3 'body @ 4 @ show-apply!
+      41  
+      42  ; Example 4: {/f g! f!} - RP restore only
+      43 -"Example 4: {/f g! f!}" println                                
+      43 +"Example 4: {/f g! f!}" println!                               
+      44  '{/f g! f!} boundness! liveness! slots! /node4 /func4
+      45  node4 show-closure!
+      46 -"  first apply node:" println                                  
+      46 +"  first apply node:" println!                                 
+      47  node4 'body @ 1 @ show-apply!
+      48 -"  second apply node:" println                                 
+      48 +"  second apply node:" println!                                
+      49  node4 'body @ 3 @ show-apply!
+      50  
+      51  ; Example 5: {/x x x * f! 1 +} - slot reuse
+      52 -"Example 5: {/x x x * f! 1 +}" println                         
+      52 +"Example 5: {/x x x * f! 1 +}" println!                        
+      53  '{/x x x * f! 1 +} boundness! liveness! slots! /node5 /func5
+      54  node5 show-closure!
+      55 -"  apply node:" println                                        
+      55 +"  apply node:" println!                                       
+      56  node5 'body @ 4 @ show-apply!
+
+● Bash(timeout 5 ./bin/froth tests/save_slots.froth)
+  ⎿  Example 1: {/f x f!}          
+       max-slots: 1
+       apply node:
+     … +28 lines (ctrl+o to expand)
+
+● The slots aren't being allocated. Let me debug by checking what liveness outputs:
+
+● Bash(timeout 5 ./bin/froth << 'EOF'
+      '{/f x f! y} boundness! liveness! /node /func…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                        
+     > > Liveness body[2] (the apply):
+     > $ 0 'is-bound : 1 'is-live : . 'slot : 1 'leave-frame :
+     >
+
+● Ah, I had the wrong indices! The function {/f x f! y} has terms at:
+  - 0: /f (binder)
+  - 1: x (identifier)
+  - 2: f (identifier)
+  - 3: ! (apply)
+  - 4: y (identifier)
+
+  Let me fix the test:
+
+● Update(tests/save_slots.froth)
+  ⎿  Added 19 lines, removed 14 lines                                    
+      17  } /show-closure
+      18  
+      19  ; Example 1: {/f x f!} - tail call, no saves needed
+      20 +; Terms: 0=/f 1=x 2=f 3=!                                      
+      21  "Example 1: {/f x f!}" println!
+      22  '{/f x f!} boundness! liveness! slots! /node1 /func1
+      23  node1 show-closure!
+      23 -"  apply node:" println!                                       
+      24 -node1 'body @ 2 @ show-apply!                                  
+      24 +"  apply node (idx 3):" println!                               
+      25 +node1 'body @ 3 @ show-apply!                                  
+      26  
+      27  ; Example 2: {/f x f! y} - non-tail call, needs both saves
+      28 +; Terms: 0=/f 1=x 2=f 3=! 4=y                                  
+      29  "Example 2: {/f x f! y}" println!
+      30  '{/f x f! y} boundness! liveness! slots! /node2 /func2
+      31  node2 show-closure!
+      30 -"  apply node:" println!                                       
+      31 -node2 'body @ 2 @ show-apply!                                  
+      32 +"  apply node (idx 3):" println!                               
+      33 +node2 'body @ 3 @ show-apply!                                  
+      34  
+      35  ; Example 3: {/f x f! g!} - non-tail call then tail call
+      36 +; Terms: 0=/f 1=x 2=f 3=! 4=g 5=!                              
+      37  "Example 3: {/f x f! g!}" println!
+      38  '{/f x f! g!} boundness! liveness! slots! /node3 /func3
+      39  node3 show-closure!
+      37 -"  first apply node:" println!                                 
+      38 -node3 'body @ 2 @ show-apply!                                  
+      39 -"  second apply node:" println!                                
+      40 -node3 'body @ 4 @ show-apply!                                  
+      40 +"  first apply node (idx 3):" println!                         
+      41 +node3 'body @ 3 @ show-apply!                                  
+      42 +"  second apply node (idx 5):" println!                        
+      43 +node3 'body @ 5 @ show-apply!                                  
+      44  
+      45  ; Example 4: {/f g! f!} - RP restore only
+      46 +; Terms: 0=/f 1=g 2=! 3=f 4=!                                  
+      47  "Example 4: {/f g! f!}" println!
+      48  '{/f g! f!} boundness! liveness! slots! /node4 /func4
+      49  node4 show-closure!
+      46 -"  first apply node:" println!                                 
+      47 -node4 'body @ 1 @ show-apply!                                  
+      48 -"  second apply node:" println!                                
+      49 -node4 'body @ 3 @ show-apply!                                  
+      50 +"  first apply node (idx 2):" println!                         
+      51 +node4 'body @ 2 @ show-apply!                                  
+      52 +"  second apply node (idx 4):" println!                        
+      53 +node4 'body @ 4 @ show-apply!                                  
+      54  
+      55  ; Example 5: {/x x x * f! 1 +} - slot reuse
+      56 +; Terms: 0=/x 1=x 2=x 3=* 4=f 5=! 6=1 7=+                      
+      57  "Example 5: {/x x x * f! 1 +}" println!
+      58  '{/x x x * f! 1 +} boundness! liveness! slots! /node5 /func5
+      59  node5 show-closure!
+      55 -"  apply node:" println!                                       
+      56 -node5 'body @ 4 @ show-apply!                                  
+      60 +"  apply node (idx 5):" println!                               
+      61 +node5 'body @ 5 @ show-apply!                                  
+
+● Bash(timeout 5 ./bin/froth tests/save_slots.froth)
+  ⎿  Example 1: {/f x f!}          
+       max-slots: 1
+       apply node (idx 3):
+     … +28 lines (ctrl+o to expand)
+
+● Let me check what liveness is outputting for the apply nodes:
+
+● Bash(timeout 5 ./bin/froth << 'EOF'
+      '{/f x f! y} boundness! liveness! /node /func…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                            
+     > > Liveness body[3] (the apply):
+     > $ 0 'leave-frame : 0 'restore-context : 0 'restore-return :
+     >
+
+● I see the liveness output shows restore-context=0 and restore-return=0. Let me check if isApply is in the slots-term-impl free vars list:
+
+● Read(lib/slots.froth)
+  ⎿  Read 15 lines
+
+● Bash(timeout 5 ./bin/froth << 'EOF'
+      ; Debug slots pass directly…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > > > > > > > > term:'!
+     > term isApply:0
+     … +3 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth << 'EOF'
+      ; Debug slots pass directly…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.  
+     > > > > > > > > Testing conditions:
+     > term isApply: 0
+     … +5 lines (ctrl+o to expand)
+
+● Let me add debug output to understand what's happening:
+
+● Bash(timeout 5 ./bin/froth << 'EOF'
+      ; Manually test what the slots pass should do…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > > > > > > Starting with:
+     >   free = nil
+     … +25 lines (ctrl+o to expand)
+
+● I see the issue! In Froth, /var inside a nested closure creates a local binding that shadows the outer variable - it doesn't mutate the outer scope. My nested conditionals are not threading state correctly.
+
+  Let me rewrite the apply case:
+
+● Update(lib/slots.froth)
+  ⎿  Added 33 lines, removed 28 lines                                    
+       72    term isApply {
+       73      ; Apply: allocate slots for register saves if needed
+       74      ; Slots are allocated then immediately freed (only used du
+           ring this call)
+       75 -    live-map /result-map                                      
+       76 -    free /cur-free                                            
+       77 -    max /cur-max                                              
+       78 -    . /ctx-slot                                               
+       79 -    . /rp-slot                                                
+       75  
+       81 -    ; Allocate ctx-save-slot if restore-context=0 (key present
+          - and value 0 means restore needed)                            
+       76 +    ; Allocate ctx-save-slot if restore-context=0             
+       77 +    ; Returns: (result-map ctx-slot cur-free cur-max)         
+       78      live-map 'restore-context in 0 = {
+       79        live-map 'restore-context @ 0 = {
+       84 -        cur-free isNil {                                      
+       85 -          cur-max /ctx-slot                                   
+       86 -          result-map ctx-slot 'ctx-save-slot : /result-map    
+       87 -          cur-max 1 + /cur-max                                
+       80 +        free isNil {                                          
+       81 +          ; Allocate new slot                                 
+       82 +          live-map max 'ctx-save-slot : max free max 1 +      
+       83          } {
+       89 -          cur-free fst /ctx-slot                              
+       90 -          cur-free snd /cur-free                              
+       91 -          result-map ctx-slot 'ctx-save-slot : /result-map    
+       84 +          ; Reuse from free list                              
+       85 +          free fst /slot                                      
+       86 +          live-map slot 'ctx-save-slot : slot free snd max    
+       87          } ?!
+       93 -      } { } ?!                                                
+       94 -    } { } ?!                                                  
+       88 +      } {                                                     
+       89 +        ; Key exists but value is not 0                       
+       90 +        live-map . free max                                   
+       91 +      } ?!                                                    
+       92 +    } {                                                       
+       93 +      ; Key doesn't exist                                     
+       94 +      live-map . free max                                     
+       95 +    } ?! /cur-max /cur-free /ctx-slot /result-map             
+       96  
+       96 -    ; Allocate rp-save-slot if restore-return=0 (key present a
+          -nd value 0 means restore needed)                              
+       97 -    live-map 'restore-return in 0 = {                         
+       98 -      live-map 'restore-return @ 0 = {                        
+       97 +    ; Allocate rp-save-slot if restore-return=0               
+       98 +    ; Returns: (result-map rp-slot cur-free cur-max)          
+       99 +    result-map 'restore-return in 0 = {                       
+      100 +      result-map 'restore-return @ 0 = {                      
+      101          cur-free isNil {
+      100 -          cur-max /rp-slot                                    
+      101 -          result-map rp-slot 'rp-save-slot : /result-map      
+      102 -          cur-max 1 + /cur-max                                
+      102 +          ; Allocate new slot                                 
+      103 +          result-map cur-max 'rp-save-slot : cur-max cur-free 
+          +cur-max 1 +                                                   
+      104          } {
+      104 -          cur-free fst /rp-slot                               
+      105 -          cur-free snd /cur-free                              
+      106 -          result-map rp-slot 'rp-save-slot : /result-map      
+      105 +          ; Reuse from free list                              
+      106 +          cur-free fst /slot                                  
+      107 +          result-map slot 'rp-save-slot : slot cur-free snd cu
+          +r-max                                                         
+      108          } ?!
+      108 -      } { } ?!                                                
+      109 -    } { } ?!                                                  
+      109 +      } {                                                     
+      110 +        result-map . cur-free cur-max                         
+      111 +      } ?!                                                    
+      112 +    } {                                                       
+      113 +      result-map . cur-free cur-max                           
+      114 +    } ?! /final-max /final-free /rp-slot /final-map           
+      115  
+      116      ; Free the allocated slots (push back to free list)
+      112 -    cur-free /new-free                                        
+      117 +    final-free /new-free                                      
+      118      ctx-slot isNil { } { ctx-slot new-free swap! , /new-free }
+            ?!
+      119      rp-slot isNil { } { rp-slot new-free swap! , /new-free } ?
+           !
+      120  
+      116 -    result-map slot-map new-free cur-max                      
+      121 +    final-map slot-map new-free final-max                     
+      122    } {
+      123      ; Not an identifier, or operator: no slot
+      124      live-map slot-map free max
+
+● Bash(timeout 5 ./bin/froth tests/save_slots.froth)
+  ⎿  Example 1: {/f x f!}          
+       max-slots: 1
+       apply node (idx 3):
+     … +28 lines (ctrl+o to expand)
+
+● Excellent! The slots are now being allocated correctly. Let me verify against your examples:
+
+  | Example           | Expected max-slots | Got | Expected ctx-save | Got   | Expected rp-save | Got   |
+  |-------------------|--------------------|-----|-------------------|-------|------------------|-------|
+  | 1: tail call      | 1                  | 1 ✓ | nil               | nil ✓ | nil              | nil ✓ |
+  | 2: both saves     | 2                  | 2 ✓ | 0 (reuse)         | 0 ✓   | 1                | 1 ✓   |
+  | 3: first non-tail | 2                  | 2 ✓ | 0                 | 0 ✓   | 1                | 1 ✓   |
+  | 4: RP only        | 2                  | 2 ✓ | nil               | nil ✓ | 1                | 1 ✓   |
+  | 5: slot reuse     | 1                  | 1 ✓ | nil               | nil ✓ | 0                | 0 ✓   |
+
+  Let me run the full test suite:
+
+● Bash(make test 2>&1 | tail -10)
+  ⎿  PASS: term_access            
+     PASS: term_convert
+     PASS: time
+     … +7 lines (ctrl+o to expand)
+
+● All tests pass. Let me add the expected output file for the new test and verify it's included:
+
+● Bash(timeout 5 ./bin/froth tests/save_slots.froth > tests/save_slots.expected)
+  ⎿  (No content)
+
+● Bash(make test 2>&1 | grep -E "save_slots|Results")
+  ⎿  PASS: save_slots            
+     Results: 62 passed, 0 failed
+
+● The test passes. Let me verify the node.froth documentation is accurate:
+
+● Read(lib/node.froth)
+  ⎿  Read 20 lines
+
+● The slots pass now correctly handles save slot allocation. Here's a summary of what was done:
+
+  Changes to lib/node.froth:
+  - Added documentation for 'ctx-save-slot and 'rp-save-slot keys on apply nodes
+
+  Changes to lib/slots.froth:
+  - Extended slots-term-impl to handle apply nodes
+  - For 'restore-context=0: allocates a slot, stores as 'ctx-save-slot
+  - For 'restore-return=0: allocates a slot, stores as 'rp-save-slot
+  - Slots are freed immediately after allocation (available for subsequent terms)
+  - This correctly updates max-slots to account for peak slot usage
+
+  New test: tests/save_slots.froth
+  - Verifies all 5 examples you provided
+
+  The key insight was that Froth's /var in nested closures creates local bindings, not mutations. The fix was to restructure the code to return values from nested conditionals and bind them outside: { ... result } ?! /var.
+
+  Ready to proceed with codegen?
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀   claude-opus-4-5-20251101 · 160k/200k tokens (80%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 74 tokens (0.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛶   ⛁ Messages: 97.0k tokens (48.5%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 40k (20.0%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 19 tokens
+     └ MERCURY.md: 55 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> Update FROTH_BYTECODE.md to document any important design notes for 
+codegen. Review the existing contents of that file and either update it or 
+delete it if the information is of low value. 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 127 lines
+
+● The document has some outdated information. Let me update it with the current design:
+
+● Write(FROTH_BYTECODE.md)
+  ⎿  Added 80 lines, removed 77 lines                                    
+       4  
+       5  A bytecode compiler for Froth to improve execution performance 
+          by eliminating tree-walking overhead.
+       6  
+       7 -## Design Decisions                                            
+       7 +## Compiler Pipeline                                           
+       8  
+       9 -### Global Bytecode Array                                      
+       9 +The compiler consists of four passes that analyze a function an
+         +d produce metadata for code generation:                        
+      10  
+      11 -- Single global array of integers holds all compiled bytecode  
+      12 -- Code addresses are integer indices into this array           
+      13 -- Array grows automatically (doubles capacity when full)       
+      14 -- Bytecode is never freed (similar to the string table)        
+      11 +1. **Boundness** (left-to-right): Classifies identifiers as bou
+         +nd (local) or free (captured), assigns context slots to free va
+         +riables                                                        
+      12 +2. **Liveness** (right-to-left): Marks last references, dead bi
+         +nders, and determines register save/restore points             
+      13 +3. **Slots** (left-to-right): Allocates frame slots for bound v
+         +ariables and register saves, with slot reuse                   
+      14 +4. **Codegen** (left-to-right): Emits bytecode based on the met
+         +adata from previous passes                                     
+      15  
+      16 -### Threading with Unique Modes                                
+      16 +## Frame Slot Allocation                                       
+      17  
+      18 -The bytecode array and size are threaded as separate top-level 
+         -arguments:                                                     
+      19 -```mercury                                                     
+      20 -array(int)::array_di, array(int)::array_uo  % bytecode array   
+      21 -int::in, int::out                            % bytecode size (c
+         -ount of emitted codes)                                         
+      22 -```                                                            
+      18 +Slots are allocated on-demand as terms are processed:          
+      19  
+      24 -This mirrors the datastack pattern and avoids uniqueness issues
+         - with arrays inside data structures.                           
+      20 +- **Binders**: Allocate a slot when encountered (if used)      
+      21 +- **Register saves**: Allocate slots at non-tail calls that nee
+         +d saves                                                        
+      22 +- **Slot reuse**: When a variable's last reference is processed
+         +, its slot is freed for reuse                                  
+      23  
+      26 -### Compiled Closure Representation                            
+      24 +Example: `{/x x x * f! 1 +}`                                   
+      25 +- `/x` allocates slot 0                                        
+      26 +- Second `x` frees slot 0 (last reference)                     
+      27 +- `!` reuses slot 0 for saving RP                              
+      28 +- `max-slots` = 1 (peak usage)                                 
+      29  
+      28 -Compiled closures will have:                                   
+      29 -- **Context array**: Environment values indexed by slot (not a 
+         -map)                                                           
+      30 -- **Code address**: Integer index into the global bytecode arra
+         -y                                                              
+      30 +## Register Save/Restore                                       
+      31  
+      32 -The compiler analyzes free variables and assigns slot indices, 
+         -replacing O(log n) map lookups with O(1) array access.         
+      32 +Non-tail calls may need to save and restore registers:         
+      33  
+      34 -### Hybrid Interpreter                                         
+      34 +- **Context pointer**: Saved if a free variable is accessed aft
+         +er the call                                                    
+      35 +- **Return pointer**: Saved for the rightmost non-tail call onl
+         +y                                                              
+      36  
+      36 -- The existing tree-walking interpreter remains                
+      37 -- When `!` encounters a compiled closure, it dispatches to the 
+         -bytecode VM                                                    
+      38 -- Allows gradual migration and graceful fallback               
+      37 +The liveness pass marks:                                       
+      38 +- `'restore-context=0` on calls needing context restore        
+      39 +- `'restore-return=0` on the last non-tail call (first from rig
+         +ht)                                                            
+      40  
+      40 -### Frame Stack                                                
+      41 +The slots pass allocates:                                      
+      42 +- `'ctx-save-slot` for context saves                           
+      43 +- `'rp-save-slot` for return pointer saves                     
+      44  
+      42 -- Located at the top of the datastack array, growing downwards 
+      43 -- Collision detection prevents stack overflow                  
+      44 -- Frame contents: just local slots (no saved FP or linkage)    
+      45 -- ENTER n / LEAVE n must use matching sizes                    
+      46 -- No frame reflection supported                                
+      45 +## Frame Entry/Exit                                            
+      46  
+      48 -### Caller/Callee Convention                                   
+      47 +- `enterFrame` is emitted when the first slot is needed (binder
+         + or save)                                                      
+      48 +- `leaveFrame` is emitted after the last term using the frame (
+         +marked with `'leave-frame=0`)                                  
+      49  
+      50 -- **Caller** saves machine registers (return address, context p
+         -ointer)                                                        
+      51 -- **Callee** creates/destroys activation frames via ENTER/LEAVE
+      52 -- Simple functions like `{}` or `{1}` need no frame at all     
+      53 -- Identity: just `RETURN`                                      
+      54 -- Constant: `PUSH_INT 1; RETURN`                               
+      55 -- With binder: `ENTER 1; STORE_LOCAL 0; ...; LEAVE 1; RETURN`  
+      50 +Functions with no binders and only tail calls need no frame at 
+         +all.                                                           
+      51  
+      57 -### Explicit Compilation                                       
+      52 +## Bytecode Instructions                                       
+      53  
+      59 -Compilation is user-controlled via a `compile` operator:       
+      60 -```froth                                                       
+      61 -{ x -> x x * } compile!   ; returns bytecode closure or fails  
+      54  ```
+      63 -                                                               
+      64 -Compilation fails for closures using:                          
+      65 -- `env` (needs map-based environment access)                   
+      66 -- `restore` (dynamically replaces environment)                 
+      67 -- Possibly `import` (dynamic loading)                          
+      68 -                                                               
+      69 -### Bytecode Instructions                                      
+      70 -                                                               
+      71 -All instruction names use camelCase. Frame stack grows downward
+         -s.                                                             
+      72 -                                                               
+      73 -```                                                            
+      55  ; Frames
+      75 -enterFrame n       ; frame pointer -= n (expand if necessary)  
+      76 -leaveFrame n       ; frame pointer += n (throw on underflow)   
+      56 +enterFrame n       ; allocate n frame slots (FP -= n)          
+      57 +leaveFrame n       ; deallocate n frame slots (FP += n)        
+      58  
+      78 -; Register save/restore (caller-saves convention)              
+      79 -saveContextPtr n   ; save context array to frame slot n        
+      80 -restoreContextPtr n; restore context array from frame slot n   
+      81 -saveReturnPtr n    ; save return pointer to frame slot n       
+      82 -restoreReturnPtr n ; restore return pointer from frame slot n  
+      59 +; Register save/restore (push/pop to stack, then store/load fro
+         +m frame)                                                       
+      60 +saveContextPtr     ; push context array onto stack             
+      61 +restoreContextPtr  ; pop context array from stack              
+      62 +saveReturnPtr      ; push return pointer onto stack            
+      63 +restoreReturnPtr   ; pop return pointer from stack             
+      64  
+      65  ; Values
+      66  pushInt n          ; push integer n
+     ...
+       68  
+       69  ; Variables
+       70  pushContext n      ; push value from context slot n
+       90 -pushLocal n        ; push value from frame slot n (frame_ptr +
+          - n)                                                           
+       71 +pushLocal n        ; push value from frame slot n             
+       72  popLocal n         ; pop value into frame slot n
+       73  popUnused          ; pop and discard value
+       74  
+       75  ; Operators
+       95 -op n               ; call operator number n                   
+       76 +op n               ; execute operator number n                
+       77  
+       78  ; Generators
+       98 -startArray         ; push datastack pointer onto generator sta
+          -ck                                                            
+       99 -endArray           ; pop generator stack, extract array from d
+          -atastack                                                      
+       79 +startArray         ; save SP for array collection             
+       80 +endArray           ; collect values since saved SP into array 
+       81  
+       82  ; Control
+      102 -call               ; pop closure, set return ptr, set context,
+          - jump                                                         
+      103 -tailCall           ; same as call but omit setting return ptr 
+      104 -return             ; jump to return pointer                   
+       83 +call               ; pop closure, set RP to next instruction, 
+          +jump                                                          
+       84 +return             ; jump to RP (or exit VM if RP = -1)       
+       85  ```
+       86  
+      107 -### Nested Closures                                           
+       87 +## Call Sequence                                              
+       88  
+      109 -- Nested closures are compiled recursively to bytecode        
+      110 -- If compilation fails for a nested function, the parent compi
+          -lation also fails                                             
+      111 -- Caveat: Re-entering the term evaluator may cause problems si
+          -nce it expects to update the environment; this will be address
+          -ed later                                                      
+       89 +**Non-tail call with saves:**                                 
+       90 +```                                                           
+       91 +saveContextPtr                                                
+       92 +popLocal <ctx-slot>                                           
+       93 +saveReturnPtr                                                 
+       94 +popLocal <rp-slot>                                            
+       95 +<push closure>                                                
+       96 +call                                                          
+       97 +pushLocal <rp-slot>                                           
+       98 +restoreReturnPtr                                              
+       99 +pushLocal <ctx-slot>                                          
+      100 +restoreContextPtr                                             
+      101 +```                                                           
+      102  
+      113 -### Current Implementation                                    
+      103 +**Tail call (no saves needed):**                              
+      104 +```                                                           
+      105 +<push closure>                                                
+      106 +call                                                          
+      107 +```                                                           
+      108  
+      115 -- `bytecode.m`: Module with `init/2` and `emit/5` predicates  
+      116 -- `emit` operator: Appends an integer to the bytecode store fr
+          -om Froth                                                      
+      117 -- `bytecodeval(context, addr)`: New value type for compiled cl
+          -osures                                                        
+      118 -- `close` operator overloaded: `array + int → bytecodeval` (in
+          - addition to `map + function → closureval`)                   
+      109 +## Bytecode Store                                             
+      110  
+      120 -## Resolved Decisions                                         
+      111 +- Single global array accessed via `peek` and `poke` operators
+      112 +- `peek addr` returns value at addr (0 if beyond size)        
+      113 +- `poke value addr` writes value, extending array if needed   
+      114 +- Bytecode is never freed (like the string table)             
+      115  
+      122 -1. **Stack traces**: Deferred for later consideration.        
+      116 +## Compiled Closure Representation                            
+      117  
+      124 -2. **Tail call detection**: A call is a tail call if `!` is th
+          -e last term in the function body. This is a simple syntactic c
+          -heck during compilation.                                      
+      118 +`bytecodeval(context, addr)` where:                           
+      119 +- `context`: Array of captured free variable values (indexed b
+          +y slot)                                                       
+      120 +- `addr`: Starting address in the bytecode store              
+      121  
+      126 -3. **Quoted terms**: Not supported in compiled code. Compilati
+          -on fails if there are any quoted terms. A constant pool may be
+          - added later.                                                 
+      122 +Created via `close` with array + int arguments.               
+      123 +                                                              
+      124 +## Limitations                                                
+      125 +                                                              
+      126 +Compilation fails for closures using:                         
+      127 +- `env` (needs map-based environment)                         
+      128 +- `restore` (dynamically replaces environment)                
+      129 +- Quoted terms (would need a constant pool)                   
+
+● Updated FROTH_BYTECODE.md with the current design:
+
+  - Compiler Pipeline: Documents all 4 passes and their purposes
+  - Frame Slot Allocation: On-demand allocation with reuse
+  - Register Save/Restore: How liveness marks restore points, how slots allocates save slots
+  - Frame Entry/Exit: When to emit enterFrame/leaveFrame
+  - Bytecode Instructions: Corrected opcodes (save/restore are separate from popLocal/pushLocal)
+  - Call Sequences: Shows the exact bytecode for non-tail and tail calls
+  - Bytecode Store: peek/poke interface
+  - Limitations: What can't be compiled
+
+  Ready to implement codegen.
+
+> Do we need to update any other documentation? 
+
+● Search(pattern: "*.md")
+  ⎿  Found 6 files (ctrl+o to expand)
+
+● Search(pattern: "**/*.md")
+  ⎿  Found 6 files (ctrl+o to expand)
+
+● Bash(grep -n "slots\|save\|restore"
+      /home/mark/Documents/projects/froth/FROTHLIB.md | head -30)
+  ⎿ 58:| `slots` | slots | Allocate frame slots for function |             
+    335:Compiler node constructors. The compiler passes (boundness, livenes
+    s, slots) produce a parallel structure of maps corresponding to each te
+    … +36 lines (ctrl+o to expand)
+
+
+
+● Read(FROTHLIB.md)
+  ⎿  Read 30 lines
+
+● Read(FROTHLIB.md)
+  ⎿  Read 35 lines
+
+● I need to update FROTHLIB.md to document the new save slot keys. Let me make those updates:
+
+● Update(FROTHLIB.md)
+  ⎿  Added 2 lines                                                       
+      364  - `'restore-context`: 0 = non-tail call needing context restor
+           e after
+      365  - `'restore-return`: 0 = last non-tail call (needs return rest
+           ore)
+      366  - `'leave-frame`: 0 = last term using the frame
+      367 +- `'ctx-save-slot`: frame slot for saving context pointer (set
+          + by slots)                                                    
+      368 +- `'rp-save-slot`: frame slot for saving return pointer (set b
+          +y slots)                                                      
+      369  
+      370  **Closure node keys:**
+      371  - `'body`: array of node maps (parallel to body terms)
+
+● Update(FROTHLIB.md)
+  ⎿  Added 3 lines, removed 1 line                                       
+      477  Takes the closure-node from `liveness` and adds slot allocatio
+           n information:
+      478  
+      479  - `'slot`: frame slot number (for live binders and bound ident
+           ifier references)
+      480 +- `'ctx-save-slot`: frame slot for saving context pointer (for
+          + non-tail calls)                                              
+      481 +- `'rp-save-slot`: frame slot for saving return pointer (for n
+          +on-tail calls)                                                
+      482  - `'max-slots`: maximum number of slots needed (for closures o
+           nly)
+      483  
+      482 -Slots are reused when variables go out of scope (last use). Cl
+          -osures get their own frame (slots start at 0), while generator
+          -s share the outer frame.                                      
+      484 +Slots are allocated on-demand and reused when freed. Binder sl
+          +ots are freed at the variable's last use. Register save slots 
+          +are allocated at non-tail calls and freed immediately after. C
+          +losures get their own frame (slots start at 0), while generato
+          +rs share the outer frame.                                     
+      485  
+      486  ```
+      487  '{/x x} boundness! liveness! slots! /map /func
+
+● Let me add an example showing register save slot allocation:
+
+● Update(FROTHLIB.md)
+  ⎿  Added 4 lines                                                       
+      498  
+      499  '{/x /y [/z z] y x} boundness! liveness! slots! /map /func
+      500  map 'max-slots @               ; 3 - generator uses slot 2 for
+            z
+      501 +                                                              
+      502 +'{/x x x * f! 1 +} boundness! liveness! slots! /map /func     
+      503 +map 'max-slots @               ; 1 - slot 0 reused for RP save
+      504 +map 'body @ 5 @ 'rp-save-slot @ ; 0 - apply saves RP to slot 0
+      505  ```
+      506  
+      507  ## Optimize (optimize.froth)
+
+● Bash(make test 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● All tests pass. Let me check if README.md needs any updates:
+
+● Read(README.md)
+  ⎿  Read 271 lines
+
+● The README should mention FROTH_BYTECODE.md in the Documentation section:
+
+● Update(README.md)
+  ⎿  Added 1 line                                                        
+      268  
+      269  - [FROTH.md](FROTH.md) - Language reference
+      270  - [FROTHLIB.md](FROTHLIB.md) - Standard library reference
+      271 +- [FROTH_BYTECODE.md](FROTH_BYTECODE.md) - Bytecode compiler d
+          +esign                                                         
+
+● Documentation is now up to date:
+
+  1. FROTH_BYTECODE.md - Complete rewrite with current compiler design
+  2. FROTHLIB.md - Added 'ctx-save-slot and 'rp-save-slot keys, updated slots section with register save slot info and example
+  3. README.md - Added FROTH_BYTECODE.md to documentation section
+
+  Ready to implement codegen.
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                     
+     Your branch is ahead of 'origin/master' by 2 commits.
+       (use "git push" to publish your local commits)
+     … +10 lines (ctrl+o to expand)
+
+● Bash(git diff --stat)
+  ⎿  (No content)
+
+● Bash(git log --oneline -5)
+  ⎿  497e35c add transcript 38                                  
+     3ad92c4 Replace emit/here with peek/poke bytecode operators
+     d149a42 add transcript 37
+     … +2 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Extend slots pass to allocate register save slots…)
+  ⎿  [master f9e0e9e] Extend slots pass to allocate register save slots
+      7 files changed, 238 insertions(+), 79 deletions(-)
+      create mode 100644 tests/save_slots.expected
+      create mode 100644 tests/save_slots.froth
+
+● Bash(git log --oneline -3)
+  ⎿  f9e0e9e Extend slots pass to allocate register save slots  
+     497e35c add transcript 38
+     3ad92c4 Replace emit/here with peek/poke bytecode operators
+
+● Committed as f9e0e9e:
+
+  Extend slots pass to allocate register save slots
+
+  - Add 'ctx-save-slot and 'rp-save-slot keys to apply nodes
+  - Slots pass now allocates frame slots for non-tail calls that need
+    to save context pointer and/or return pointer
+  - Save slots are allocated on-demand and freed immediately, enabling
+    reuse by subsequent terms
+  - Update FROTH_BYTECODE.md with current compiler design
+  - Update FROTHLIB.md with new apply node keys and slots documentation
+  - Add save_slots test to verify slot allocation behavior
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀   claude-opus-4-5-20251101 · 178k/200k tokens (89%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 74 tokens (0.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 114.6k tokens (57.3%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛶ ⛶ ⛶   ⛶ Free space: 22k (11.2%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 19 tokens
+     └ MERCURY.md: 55 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
