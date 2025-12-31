@@ -42,17 +42,17 @@
   term isFunc {
     ; Closure: fresh seen-set, need-ctx, seen-nontail, seen-restore-ctx, seen-frame
     bnd-map 'free-vars @ /inner-free-set
-    bnd-map 'children @ /inner-children
+    bnd-map 'body @ /inner-body
     term # 1 - /inner-last-idx
     ; Inner function starts fresh: need-ctx=1, seen-nontail=1, seen-restore-ctx=1, seen-frame=1, is-tail=0
-    term inner-children $ 1 1 1 1 inner-last-idx 0 seq-fn term-fn seq-fn! /inner-seen-frame /inner-seen-restore-ctx /inner-seen-nontail /inner-need-ctx /inner-seen /new-children
+    term inner-body $ 1 1 1 1 inner-last-idx 0 seq-fn term-fn seq-fn! /inner-seen-frame /inner-seen-restore-ctx /inner-seen-nontail /inner-need-ctx /inner-seen /new-body
     ; Compute dead-set: free vars NOT in seen (last use is this capture)
     inner-free-set keys { /v seen v in not! } filter! /dead-vars
     $ dead-vars add-keys! /dead-set
     ; Add all free vars to seen (binders to left need to see them as used)
     seen inner-free-set keys add-keys! /new-seen
-    ; Build result map with children, dead-set, and save/frame flags
-    bnd-map new-children 'children : dead-set 'dead-set :
+    ; Build result map with body, dead-set, and save/frame flags
+    bnd-map new-body 'body : dead-set 'dead-set :
     inner-seen-nontail 0 = { 0 'needs-save-return : } { } ?!
     inner-seen-restore-ctx 0 = { 0 'needs-save-context : } { } ?!
     inner-seen-frame 0 = { 0 'needs-frame : } { } ?!
@@ -62,7 +62,7 @@
   term isGen {
     ; Generator: shares scope for free vars, but binders are local
     bnd-map 'bound-set @ /inner-bound-set
-    bnd-map 'children @ /inner-children
+    bnd-map 'body @ /inner-body
     inner-bound-set keys /bound-vars
     ; Save vars that will be shadowed (to restore after)
     seen bound-vars restrict! /save
@@ -71,10 +71,10 @@
     ; Process generator with modified seen; generators don't have tail calls (is-tail=1)
     ; Generators share seen-nontail, seen-restore-ctx, seen-frame with outer scope
     term # 1 - /inner-last-idx
-    term inner-children gen-seen need-ctx seen-nontail seen-restore-ctx seen-frame inner-last-idx 1 seq-fn term-fn seq-fn! /new-seen-frame /new-seen-restore-ctx /new-seen-nontail /new-need-ctx /after-seen /new-children
+    term inner-body gen-seen need-ctx seen-nontail seen-restore-ctx seen-frame inner-last-idx 1 seq-fn term-fn seq-fn! /new-seen-frame /new-seen-restore-ctx /new-seen-nontail /new-need-ctx /after-seen /new-body
     ; Restore shadowed vars
     after-seen save keys add-keys! /new-seen
-    bnd-map new-children 'children : new-seen new-need-ctx new-seen-nontail new-seen-restore-ctx new-seen-frame
+    bnd-map new-body 'body : new-seen new-need-ctx new-seen-nontail new-seen-restore-ctx new-seen-frame
   } {
   term isQuote {
     ; Quoted term: no liveness info
@@ -105,45 +105,41 @@
   } ?! } ?! } ?! } ?! } ?! } ?!
 } def-fn! /liveness-term-impl
 
-; liveness-seq-impl: (body children-arr seen need-ctx seen-nontail seen-restore-ctx seen-frame idx is-tail seq-fn term-fn -- new-children-arr new-seen new-need-ctx new-seen-nontail new-seen-restore-ctx new-seen-frame)
+; liveness-seq-impl: (func-body body-arr seen need-ctx seen-nontail seen-restore-ctx seen-frame idx is-tail seq-fn term-fn -- new-body-arr new-seen new-need-ctx new-seen-nontail new-seen-restore-ctx new-seen-frame)
 ; Process terms from idx down to 0 (right-to-left)
 ; is-tail: 0 for first term (rightmost), 1 for rest
-['concat 'liveness-term-impl] { /term-fn /seq-fn /is-tail /idx /seen-frame /seen-restore-ctx /seen-nontail /need-ctx /seen /children-arr /body
+['concat 'liveness-term-impl] { /term-fn /seq-fn /is-tail /idx /seen-frame /seen-restore-ctx /seen-nontail /need-ctx /seen /body-arr /func-body
   idx 0 < {
     ; Done: return empty array and current state
     [] seen need-ctx seen-nontail seen-restore-ctx seen-frame
   } {
     ; Process current term (rightmost remaining)
-    body idx @ children-arr idx @ seen need-ctx seen-nontail seen-restore-ctx seen-frame is-tail seq-fn term-fn term-fn! /after-seen-frame /after-seen-restore-ctx /after-seen-nontail /after-need-ctx /after-term-seen /term-map
+    func-body idx @ body-arr idx @ seen need-ctx seen-nontail seen-restore-ctx seen-frame is-tail seq-fn term-fn term-fn! /after-seen-frame /after-seen-restore-ctx /after-seen-nontail /after-need-ctx /after-term-seen /term-map
     ; Recurse for rest (to the left); is-tail becomes 1 (not tail)
-    body children-arr after-term-seen after-need-ctx after-seen-nontail after-seen-restore-ctx after-seen-frame idx 1 - 1 seq-fn term-fn seq-fn! /rest-seen-frame /rest-seen-restore-ctx /rest-seen-nontail /rest-need-ctx /rest-seen /rest-children
+    func-body body-arr after-term-seen after-need-ctx after-seen-nontail after-seen-restore-ctx after-seen-frame idx 1 - 1 seq-fn term-fn seq-fn! /rest-seen-frame /rest-seen-restore-ctx /rest-seen-nontail /rest-need-ctx /rest-seen /rest-body
     ; Append (we're going right-to-left, so rest is to the left)
-    rest-children [term-map] concat! rest-seen rest-need-ctx rest-seen-nontail rest-seen-restore-ctx rest-seen-frame
+    rest-body [term-map] concat! rest-seen rest-need-ctx rest-seen-nontail rest-seen-restore-ctx rest-seen-frame
   } ?!
 } def-fn! /liveness-seq-impl
 
-; liveness: (func boundness-map -- func liveness-map)
+; liveness: (func closure-node -- func liveness-node)
 ; Analyze a function for liveness of each identifier reference.
-; Takes boundness-map and adds liveness info:
+; Takes closure-node from boundness and adds liveness info:
 ;   'is-live: 0 (still live) or 1 (last reference) for identifiers
 ;   'is-used: 0 (used) or 1 (dead) for binders
 ;   'dead-set: set of vars whose last use is capture (for closures)
 ;   'restore-context: 0 for non-tail calls that need context restored after
 ;   'restore-return: 0 for the last non-tail call (where return pointer is restored)
 ;   'leave-frame: 0 for the last term that uses the frame
-;   'needs-save-context: 0 if any call needs context restore (function-level)
-;   'needs-save-return: 0 if any non-tail calls exist (function-level)
 ;   'needs-frame: 0 if function needs a frame (function-level)
 ['liveness-seq-impl 'liveness-term-impl] { /bnd-map /func
-  bnd-map 'children @ /children
+  bnd-map 'body @ /body
   func # 1 - /last-idx
   ; Start with need-ctx=1, seen-nontail=1, seen-restore-ctx=1, seen-frame=1, is-tail=0
-  func children $ 1 1 1 1 last-idx 0 liveness-seq-impl liveness-term-impl liveness-seq-impl!
-  /final-seen-frame /final-seen-restore-ctx /final-seen-nontail /final-need-ctx /final-seen /new-children
-  ; Build result map with children and save/frame flags
-  func bnd-map new-children 'children :
-  final-seen-nontail 0 = { 0 'needs-save-return : } { } ?!
-  final-seen-restore-ctx 0 = { 0 'needs-save-context : } { } ?!
+  func body $ 1 1 1 1 last-idx 0 liveness-seq-impl liveness-term-impl liveness-seq-impl!
+  /final-seen-frame /final-seen-restore-ctx /final-seen-nontail /final-need-ctx /final-seen /new-body
+  ; Build result map with body and frame flag
+  func bnd-map new-body 'body :
   final-seen-frame 0 = { 0 'needs-frame : } { } ?!
 } def-fn! /liveness
 

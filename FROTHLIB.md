@@ -365,9 +365,9 @@ Boundness analysis for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `boundness` | `( func -- func boundness-map )` | Analyze variable binding in a function |
+| `boundness` | `( func -- func closure-node )` | Analyze variable binding in a function |
 
-Analyzes a quoted function and returns the function plus a closure-node map. The map contains:
+Analyzes a quoted function and returns the function plus a closure-node. The map contains:
 - `'body`: array of node maps, one per term in the function body
 - `'free-vars`: map from identifiers to context slot numbers
 - `'bound-set`: map from identifiers to nil (marking presence)
@@ -390,7 +390,7 @@ bnd-map 'body @ 1 @            ; nested closure-node
 ; Has 'body, 'free-vars, 'bound-set keys
 ```
 
-The passes compose: `func boundness! liveness! slots!` returns `(func slots-map)`.
+The passes compose: `func boundness! liveness! slots!` returns `(func closure-node)`.
 
 ## Liveness (liveness.froth)
 
@@ -398,9 +398,9 @@ Liveness analysis for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `liveness` | `( func boundness-map -- func liveness-map )` | Analyze last references in function |
+| `liveness` | `( func closure-node -- func closure-node )` | Analyze last references in function |
 
-Takes the output from `boundness` and adds liveness information to the map.
+Takes the closure-node from `boundness` and adds liveness information.
 
 **Per-term keys:**
 - `'is-live`: `0` (still live) or `1` (last reference) for identifiers
@@ -449,12 +449,12 @@ Frame slot allocation for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `slots` | `( func liveness-map -- func slots-map )` | Allocate frame slots |
+| `slots` | `( func closure-node -- func closure-node )` | Allocate frame slots |
 
-Takes the output from `liveness` and adds slot allocation information to the map:
+Takes the closure-node from `liveness` and adds slot allocation information:
 
 - `'slot`: frame slot number (for live binders and bound identifier references)
-- `'max-slots`: maximum number of slots needed (for functions/generators)
+- `'max-slots`: maximum number of slots needed (for closures only)
 
 Slots are reused when variables go out of scope (last use). Closures get their own frame (slots start at 0), while generators share the outer frame.
 
