@@ -4,82 +4,63 @@
 
 A bytecode compiler for Froth to improve execution performance by eliminating tree-walking overhead.
 
-## Design Decisions
+## Compiler Pipeline
 
-### Global Bytecode Array
+The compiler consists of four passes that analyze a function and produce metadata for code generation:
 
-- Single global array of integers holds all compiled bytecode
-- Code addresses are integer indices into this array
-- Array grows automatically (doubles capacity when full)
-- Bytecode is never freed (similar to the string table)
+1. **Boundness** (left-to-right): Classifies identifiers as bound (local) or free (captured), assigns context slots to free variables
+2. **Liveness** (right-to-left): Marks last references, dead binders, and determines register save/restore points
+3. **Slots** (left-to-right): Allocates frame slots for bound variables and register saves, with slot reuse
+4. **Codegen** (left-to-right): Emits bytecode based on the metadata from previous passes
 
-### Threading with Unique Modes
+## Frame Slot Allocation
 
-The bytecode array and size are threaded as separate top-level arguments:
-```mercury
-array(int)::array_di, array(int)::array_uo  % bytecode array
-int::in, int::out                            % bytecode size (count of emitted codes)
-```
+Slots are allocated on-demand as terms are processed:
 
-This mirrors the datastack pattern and avoids uniqueness issues with arrays inside data structures.
+- **Binders**: Allocate a slot when encountered (if used)
+- **Register saves**: Allocate slots at non-tail calls that need saves
+- **Slot reuse**: When a variable's last reference is processed, its slot is freed for reuse
 
-### Compiled Closure Representation
+Example: `{/x x x * f! 1 +}`
+- `/x` allocates slot 0
+- Second `x` frees slot 0 (last reference)
+- `!` reuses slot 0 for saving RP
+- `max-slots` = 1 (peak usage)
 
-Compiled closures will have:
-- **Context array**: Environment values indexed by slot (not a map)
-- **Code address**: Integer index into the global bytecode array
+## Register Save/Restore
 
-The compiler analyzes free variables and assigns slot indices, replacing O(log n) map lookups with O(1) array access.
+Non-tail calls may need to save and restore registers:
 
-### Hybrid Interpreter
+- **Context pointer**: Saved if a free variable is accessed after the call
+- **Return pointer**: Saved for the rightmost non-tail call only
 
-- The existing tree-walking interpreter remains
-- When `!` encounters a compiled closure, it dispatches to the bytecode VM
-- Allows gradual migration and graceful fallback
+The liveness pass marks:
+- `'restore-context=0` on calls needing context restore
+- `'restore-return=0` on the last non-tail call (first from right)
 
-### Frame Stack
+The slots pass allocates:
+- `'ctx-save-slot` for context saves
+- `'rp-save-slot` for return pointer saves
 
-- Located at the top of the datastack array, growing downwards
-- Collision detection prevents stack overflow
-- Frame contents: just local slots (no saved FP or linkage)
-- ENTER n / LEAVE n must use matching sizes
-- No frame reflection supported
+## Frame Entry/Exit
 
-### Caller/Callee Convention
+- `enterFrame` is emitted when the first slot is needed (binder or save)
+- `leaveFrame` is emitted after the last term using the frame (marked with `'leave-frame=0`)
 
-- **Caller** saves machine registers (return address, context pointer)
-- **Callee** creates/destroys activation frames via ENTER/LEAVE
-- Simple functions like `{}` or `{1}` need no frame at all
-- Identity: just `RETURN`
-- Constant: `PUSH_INT 1; RETURN`
-- With binder: `ENTER 1; STORE_LOCAL 0; ...; LEAVE 1; RETURN`
+Functions with no binders and only tail calls need no frame at all.
 
-### Explicit Compilation
-
-Compilation is user-controlled via a `compile` operator:
-```froth
-{ x -> x x * } compile!   ; returns bytecode closure or fails
-```
-
-Compilation fails for closures using:
-- `env` (needs map-based environment access)
-- `restore` (dynamically replaces environment)
-- Possibly `import` (dynamic loading)
-
-### Bytecode Instructions
-
-All instruction names use camelCase. Frame stack grows downwards.
+## Bytecode Instructions
 
 ```
 ; Frames
-enterFrame n       ; frame pointer -= n (expand if necessary)
-leaveFrame n       ; frame pointer += n (throw on underflow)
+enterFrame n       ; allocate n frame slots (FP -= n)
+leaveFrame n       ; deallocate n frame slots (FP += n)
 
-; Register save/restore (caller-saves convention)
-saveContextPtr n   ; save context array to frame slot n
-restoreContextPtr n; restore context array from frame slot n
-saveReturnPtr n    ; save return pointer to frame slot n
-restoreReturnPtr n ; restore return pointer from frame slot n
+; Register save/restore (push/pop to stack, then store/load from frame)
+saveContextPtr     ; push context array onto stack
+restoreContextPtr  ; pop context array from stack
+saveReturnPtr      ; push return pointer onto stack
+restoreReturnPtr   ; pop return pointer from stack
 
 ; Values
 pushInt n          ; push integer n
@@ -87,40 +68,62 @@ pushString n       ; push string with intern ID n
 
 ; Variables
 pushContext n      ; push value from context slot n
-pushLocal n        ; push value from frame slot n (frame_ptr + n)
+pushLocal n        ; push value from frame slot n
 popLocal n         ; pop value into frame slot n
 popUnused          ; pop and discard value
 
 ; Operators
-op n               ; call operator number n
+op n               ; execute operator number n
 
 ; Generators
-startArray         ; push datastack pointer onto generator stack
-endArray           ; pop generator stack, extract array from datastack
+startArray         ; save SP for array collection
+endArray           ; collect values since saved SP into array
 
 ; Control
-call               ; pop closure, set return ptr, set context, jump
-tailCall           ; same as call but omit setting return ptr
-return             ; jump to return pointer
+call               ; pop closure, set RP to next instruction, jump
+return             ; jump to RP (or exit VM if RP = -1)
 ```
 
-### Nested Closures
+## Call Sequence
 
-- Nested closures are compiled recursively to bytecode
-- If compilation fails for a nested function, the parent compilation also fails
-- Caveat: Re-entering the term evaluator may cause problems since it expects to update the environment; this will be addressed later
+**Non-tail call with saves:**
+```
+saveContextPtr
+popLocal <ctx-slot>
+saveReturnPtr
+popLocal <rp-slot>
+<push closure>
+call
+pushLocal <rp-slot>
+restoreReturnPtr
+pushLocal <ctx-slot>
+restoreContextPtr
+```
 
-### Current Implementation
+**Tail call (no saves needed):**
+```
+<push closure>
+call
+```
 
-- `bytecode.m`: Module with `init/2` and `emit/5` predicates
-- `emit` operator: Appends an integer to the bytecode store from Froth
-- `bytecodeval(context, addr)`: New value type for compiled closures
-- `close` operator overloaded: `array + int → bytecodeval` (in addition to `map + function → closureval`)
+## Bytecode Store
 
-## Resolved Decisions
+- Single global array accessed via `peek` and `poke` operators
+- `peek addr` returns value at addr (0 if beyond size)
+- `poke value addr` writes value, extending array if needed
+- Bytecode is never freed (like the string table)
 
-1. **Stack traces**: Deferred for later consideration.
+## Compiled Closure Representation
 
-2. **Tail call detection**: A call is a tail call if `!` is the last term in the function body. This is a simple syntactic check during compilation.
+`bytecodeval(context, addr)` where:
+- `context`: Array of captured free variable values (indexed by slot)
+- `addr`: Starting address in the bytecode store
 
-3. **Quoted terms**: Not supported in compiled code. Compilation fails if there are any quoted terms. A constant pool may be added later.
+Created via `close` with array + int arguments.
+
+## Limitations
+
+Compilation fails for closures using:
+- `env` (needs map-based environment)
+- `restore` (dynamically replaces environment)
+- Quoted terms (would need a constant pool)

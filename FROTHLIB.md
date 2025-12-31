@@ -364,6 +364,8 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 - `'restore-context`: 0 = non-tail call needing context restore after
 - `'restore-return`: 0 = last non-tail call (needs return restore)
 - `'leave-frame`: 0 = last term using the frame
+- `'ctx-save-slot`: frame slot for saving context pointer (set by slots)
+- `'rp-save-slot`: frame slot for saving return pointer (set by slots)
 
 **Closure node keys:**
 - `'body`: array of node maps (parallel to body terms)
@@ -475,9 +477,11 @@ Frame slot allocation for the compiler.
 Takes the closure-node from `liveness` and adds slot allocation information:
 
 - `'slot`: frame slot number (for live binders and bound identifier references)
+- `'ctx-save-slot`: frame slot for saving context pointer (for non-tail calls)
+- `'rp-save-slot`: frame slot for saving return pointer (for non-tail calls)
 - `'max-slots`: maximum number of slots needed (for closures only)
 
-Slots are reused when variables go out of scope (last use). Closures get their own frame (slots start at 0), while generators share the outer frame.
+Slots are allocated on-demand and reused when freed. Binder slots are freed at the variable's last use. Register save slots are allocated at non-tail calls and freed immediately after. Closures get their own frame (slots start at 0), while generators share the outer frame.
 
 ```
 '{/x x} boundness! liveness! slots! /map /func
@@ -494,6 +498,10 @@ map 'body @ 1 @ 'max-slots @   ; 1 - closure needs 1 slot
 
 '{/x /y [/z z] y x} boundness! liveness! slots! /map /func
 map 'max-slots @               ; 3 - generator uses slot 2 for z
+
+'{/x x x * f! 1 +} boundness! liveness! slots! /map /func
+map 'max-slots @               ; 1 - slot 0 reused for RP save
+map 'body @ 5 @ 'rp-save-slot @ ; 0 - apply saves RP to slot 0
 ```
 
 ## Optimize (optimize.froth)

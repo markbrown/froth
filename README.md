@@ -268,3 +268,4 @@ Froth could be described as "Forth with Scheme's scoping semantics" - it looks l
 
 - [FROTH.md](FROTH.md) - Language reference
 - [FROTHLIB.md](FROTHLIB.md) - Standard library reference
+- [FROTH_BYTECODE.md](FROTH_BYTECODE.md) - Bytecode compiler design
