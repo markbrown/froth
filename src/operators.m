@@ -123,9 +123,7 @@
     int::in, int::out, io::di, io::uo) is det.
 :- pred operator_close(array(value)::array_di, array(value)::array_uo,
     int::in, int::out) is det.
-:- pred operator_closure_env(array(value)::array_di, array(value)::array_uo,
-    int::in, int::out) is det.
-:- pred operator_closure_body(array(value)::array_di, array(value)::array_uo,
+:- pred operator_open(array(value)::array_di, array(value)::array_uo,
     int::in, int::out) is det.
 :- pred operator_is_closure(array(value)::array_di, array(value)::array_uo,
     int::in, int::out) is det.
@@ -306,11 +304,8 @@ eval_operator(OpTable, ST, Op, Env, !Array, !Ptr, !IO) :-
         Op = op_close,
         operator_close(!Array, !Ptr)
     ;
-        Op = op_closure_env,
-        operator_closure_env(!Array, !Ptr)
-    ;
-        Op = op_closure_body,
-        operator_closure_body(!Array, !Ptr)
+        Op = op_open,
+        operator_open(!Array, !Ptr)
     ;
         Op = op_is_closure,
         operator_is_closure(!Array, !Ptr)
@@ -990,24 +985,13 @@ operator_close(!Array, !Ptr) :-
     ).
 
 %-----------------------------------------------------------------------%
-% closureEnv: ( closure -- env ) Get the environment from a closure
+% open: ( closure -- env body ) Decompose a closure into env and body
 %-----------------------------------------------------------------------%
 
-operator_closure_env(!Array, !Ptr) :-
-    datastack.pop("closureEnv", V, !Array, !Ptr),
-    ( if V = closureval(Env, _) then
-        datastack.push(mapval(Env), !Array, !Ptr)
-    else
-        throw(type_error("closure", V))
-    ).
-
-%-----------------------------------------------------------------------%
-% closureBody: ( closure -- body ) Get the body from a closure
-%-----------------------------------------------------------------------%
-
-operator_closure_body(!Array, !Ptr) :-
-    datastack.pop("closureBody", V, !Array, !Ptr),
-    ( if V = closureval(_, Body) then
+operator_open(!Array, !Ptr) :-
+    datastack.pop("open", V, !Array, !Ptr),
+    ( if V = closureval(Env, Body) then
+        datastack.push(mapval(Env), !Array, !Ptr),
         datastack.push(termval(function(Body)), !Array, !Ptr)
     else
         throw(type_error("closure", V))
