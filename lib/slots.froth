@@ -32,15 +32,17 @@
     live-map 'body @ /inner-body
     live-map 'dead-set @ /dead-set
     term # 1 - /last-idx
+    ; Process inner body with fresh frame
     term inner-body $ . 0 0 seq-fn term-fn seq-fn!
     /inner-max /discard-free /discard-slot-map /new-body
+    live-map new-body 'body : inner-max 'max-slots : /result-map
     ; Free slots for vars in dead-set (their last use was this capture)
     ; Only free if the var is in slot-map (bound in this scope, not captured from outer)
     dead-set keys free { /v /f
       slot-map v in 0 = { slot-map v @ f swap! , } { f } ?!
     } reduce! /new-free
-    ; Return map with updated body and max-slots
-    live-map new-body 'body : inner-max 'max-slots : slot-map new-free max
+    ; Return result
+    result-map slot-map new-free max
   } {
   term isGen {
     ; Generator: same frame, but binders are locally scoped
@@ -73,55 +75,46 @@
     } ?!
   } {
   term isApply {
-    ; Apply: allocate slots for register saves if needed
-    ; Slots are allocated then immediately freed (only used during this call)
+    ; Apply: allocate ctx-save-slot if restore-context=0, rp-save-slot if restore-return=0
+    ; Each branch leaves (result-map slot free max) on stack
 
-    ; Allocate ctx-save-slot if restore-context=0
-    ; Returns: (result-map ctx-slot cur-free cur-max)
+    ; Allocate ctx-save-slot if needed
     live-map 'restore-context in 0 = {
       live-map 'restore-context @ 0 = {
         free isNil {
-          ; Allocate new slot
           live-map max 'ctx-save-slot : max free max 1 +
         } {
-          ; Reuse from free list
           free fst /slot
           live-map slot 'ctx-save-slot : slot free snd max
         } ?!
       } {
-        ; Key exists but value is not 0
         live-map . free max
       } ?!
     } {
-      ; Key doesn't exist
       live-map . free max
-    } ?! /cur-max /cur-free /ctx-slot /result-map
+    } ?! /ctx-max /ctx-free /ctx-slot /ctx-map
 
-    ; Allocate rp-save-slot if restore-return=0
-    ; Returns: (result-map rp-slot cur-free cur-max)
-    result-map 'restore-return in 0 = {
-      result-map 'restore-return @ 0 = {
-        cur-free isNil {
-          ; Allocate new slot
-          result-map cur-max 'rp-save-slot : cur-max cur-free cur-max 1 +
+    ; Allocate rp-save-slot if needed (using state from ctx allocation)
+    ctx-map 'restore-return in 0 = {
+      ctx-map 'restore-return @ 0 = {
+        ctx-free isNil {
+          ctx-map ctx-max 'rp-save-slot : ctx-max ctx-free ctx-max 1 +
         } {
-          ; Reuse from free list
-          cur-free fst /slot
-          result-map slot 'rp-save-slot : slot cur-free snd cur-max
+          ctx-free fst /slot
+          ctx-map slot 'rp-save-slot : slot ctx-free snd ctx-max
         } ?!
       } {
-        result-map . cur-free cur-max
+        ctx-map . ctx-free ctx-max
       } ?!
     } {
-      result-map . cur-free cur-max
+      ctx-map . ctx-free ctx-max
     } ?! /final-max /final-free /rp-slot /final-map
 
-    ; Free the allocated slots (push back to free list)
-    final-free /new-free
-    ctx-slot isNil { } { ctx-slot new-free swap! , /new-free } ?!
-    rp-slot isNil { } { rp-slot new-free swap! , /new-free } ?!
+    ; Free both slots (used only for this call)
+    ctx-slot isNil { final-free } { ctx-slot final-free swap! , } ?! /new-free
+    rp-slot isNil { new-free } { rp-slot new-free swap! , } ?! /new-free2
 
-    final-map slot-map new-free final-max
+    final-map slot-map new-free2 final-max
   } {
     ; Not an identifier, or operator: no slot
     live-map slot-map free max
@@ -150,6 +143,7 @@
 ; Allocate frame slots for a function.
 ; Adds 'slot key to binders and bound identifiers.
 ; Adds 'max-slots key to closures.
+; Adds 'rp-save-slot and 'ctx-save-slot to apply nodes that need saves.
 ['slots-seq-impl 'slots-term-impl] { /live-map /func
   live-map 'body @ /body
   func body $ . 0 0 slots-seq-impl slots-term-impl slots-seq-impl!

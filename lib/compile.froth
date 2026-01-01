@@ -32,12 +32,10 @@
   next-addr context addr close
 } def-fn! /compile-closure
 
-; compile: (addr env-map id -- next-addr new-env-map)
-; Look up a closure in env-map by id, compile it, and update the map.
-; Prints a status message and returns:
-; - On success: next-addr and updated map with compiled closure
-; - On failure: original addr and map unchanged
-['compile-closure 'preflight 'println] { /id /env /addr
+; compile-impl: (addr env-map id self -- next-addr new-env-map)
+; Internal implementation that takes self for recursion.
+['compile-closure 'preflight 'println 'reduce 'fromList 'reverse
+ 'boundness 'liveness 'slots 'codegen] { /self /id /env /addr
   id intern idToString /name
   env id in 0 = {
     ; Found - get the value
@@ -45,10 +43,70 @@
     val isClosure 0 = {
       ; It's a closure - check preflight
       val closureBody preflight! {
-        ; Preflight passed (returns 0) - compile
-        addr val compile-closure! /compiled /next-addr
+        ; Preflight passed - compile with dependency handling
+        val closureBody /func
+        val closureEnv /closure-env
+
+        ; Run analysis passes
+        func boundness! liveness! slots! /node /fn
+
+        ; Build context array, compiling closures as needed
+        ; Accumulator: [context-list, addr, env, self]
+        ; We build context as a cons list (prepending) then reverse
+        node 'free-vars-array @ [. addr env self] { /ident /acc
+          acc 0 @ /context-list
+          acc 1 @ /current-addr
+          acc 2 @ /current-env
+          acc 3 @ /rec
+          closure-env ident @ /cval
+
+          cval isClosure {
+            ; It's a closure - check cases
+            current-env ident in {
+              ; In env-map - check type
+              current-env ident @ /env-val
+              env-val isClosure {
+                ; Closureval in env-map - compile recursively
+                current-addr current-env ident rec rec!
+                /updated-env /next-addr
+                updated-env ident @ /compiled
+                [context-list compiled , next-addr updated-env rec]
+              } {
+                ; Not a closure in env-map
+                env-val closureEnv isArray {
+                  ; Bytecodeval - use it
+                  [context-list env-val , current-addr current-env rec]
+                } {
+                  ; Not a bytecodeval - compile standalone
+                  current-addr cval compile-closure! /compiled /next-addr
+                  [context-list compiled , next-addr current-env rec]
+                } ?!
+              } ?!
+            } {
+              ; Not in env-map - compile standalone
+              current-addr cval compile-closure! /compiled /next-addr
+              [context-list compiled , next-addr current-env rec]
+            } ?!
+          } {
+            ; Not a closure - use directly
+            [context-list cval , current-addr current-env rec]
+          } ?!
+        } reduce!
+        /result
+        result 0 @ /context-list
+        result 1 @ /after-deps-addr
+        result 2 @ /final-env
+
+        ; Convert list to array and reverse (since we prepended)
+        context-list fromList! reverse! /context
+
+        ; Compile the main function
+        after-deps-addr fn node codegen! /next-addr
+
+        ; Build bytecodeval and update env
+        context after-deps-addr close /compiled
         ["compile: " name " ok"] println!
-        next-addr env compiled id :
+        next-addr final-env compiled id :
       } {
         ; Preflight failed (returns 1)
         ["compile: " name " failed preflight"] println!
@@ -64,4 +122,18 @@
     ["compile: " name " not found"] println!
     addr env
   } ?!
+} def-fn! /compile-impl
+
+; compile: (addr env-map id -- next-addr new-env-map)
+; Look up a closure in env-map by id, compile it, and update the map.
+; Recursively compiles any closures in the captured environment that also
+; exist in env-map, ensuring shared closures are compiled once.
+; Prints a status message and returns:
+; - On success: next-addr and updated map with compiled closure
+; - On failure: original addr and map unchanged
+['compile-impl] { /id /env /addr
+  addr env id compile-impl compile-impl!
 } def-fn! /compile
+
+; Remove impl from environment
+env 'compile-impl delete restore

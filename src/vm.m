@@ -58,6 +58,7 @@
 :- func oc_restoreReturnPtr = int.
 :- func oc_saveContextPtr = int.
 :- func oc_restoreContextPtr = int.
+:- func oc_tailcall = int.
 
 %-----------------------------------------------------------------------%
 
@@ -91,6 +92,7 @@ oc_saveReturnPtr = 13.
 oc_restoreReturnPtr = 14.
 oc_saveContextPtr = 15.
 oc_restoreContextPtr = 16.
+oc_tailcall = 17.
 
 %-----------------------------------------------------------------------%
 % VM execution
@@ -190,6 +192,15 @@ execute(Opcode, BC, IP, !RP, !Context, OpTable, ST, Env, !Stack, !SP, FP, GenSta
         datastack.pop("call", V, !Stack, !SP),
         ( if V = bytecodeval(CalleeContext, CodeAddr) then
             !:RP = IP + 1,
+            !:Context = CalleeContext,
+            run(BC, CodeAddr, !RP, !Context, OpTable, ST, Env, !Stack, !SP, FP, GenStack, !IO)
+        else
+            throw(type_error("bytecode closure", V))
+        )
+    else if Opcode = oc_tailcall then
+        % tailcall: pop closure, switch context, jump (preserves RP for tail call)
+        datastack.pop("tailcall", V, !Stack, !SP),
+        ( if V = bytecodeval(CalleeContext, CodeAddr) then
             !:Context = CalleeContext,
             run(BC, CodeAddr, !RP, !Context, OpTable, ST, Env, !Stack, !SP, FP, GenStack, !IO)
         else

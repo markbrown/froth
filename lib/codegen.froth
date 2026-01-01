@@ -12,11 +12,11 @@
 ; free-vars: free variable -> context slot (for current function)
 ; deferred: cons list of (term, node, placeholder-addr) for nested closures
 ; Returns updated addr, entered, slot-map, and deferred list.
-['emit-at 'emit-all-at 'and 'swap 'foldl
+['emit-at 'emit-all-at 'and 'swap 'foldl 'not
  'ocPushInt 'ocOp 'ocReturn 'ocPushString 'ocPushContext 'ocPopUnused
  'ocPushLocal 'ocPopLocal 'ocEnterFrame 'ocLeaveFrame 'ocStartArray 'ocEndArray
- 'ocCall 'ocSaveReturnPtr 'ocRestoreReturnPtr 'ocSaveContextPtr 'ocRestoreContextPtr
- 'opClose] { /term-fn /seq-fn /deferred /free-vars /slot-map /entered /addr /max-slots /node /term
+ 'ocCall 'ocTailCall 'ocSaveReturnPtr 'ocRestoreReturnPtr 'ocSaveContextPtr 'ocRestoreContextPtr
+ 'opClose 'op-table] { /term-fn /seq-fn /deferred /free-vars /slot-map /entered /addr /max-slots /node /term
   ; Helper: maybe enter frame (if not entered and slots needed)
   ; ( addr entered -- addr entered ) where entered becomes 0
   { /e /a
@@ -86,17 +86,14 @@
   } {
   term isApply {
     ; Apply: handle saves, call, restores
-    ; Check if we need to save context
-    node 'ctx-save-slot in 0 = {
-      node 'ctx-save-slot @ /ctx-slot
-      ctx-slot isNil { . } { ctx-slot } ?!
-    } { . } ?! /ctx-slot
+    ; Get ctx-save-slot from node (per-call) and rp-slot from slot-map (function-level)
+    node 'ctx-save-slot in 0 = { node 'ctx-save-slot @ } { . } ?! /ctx-slot
+    slot-map 'rp-slot in 0 = { slot-map 'rp-slot @ } { . } ?! /rp-slot
+    ; Check if we need to restore RP (restore-return=0 on this call)
+    node 'restore-return in 0 = { node 'restore-return @ 0 = } { 1 } ?! /needs-restore-rp
 
-    ; Check if we need to save return
-    node 'rp-save-slot in 0 = {
-      node 'rp-save-slot @ /rp-slot
-      rp-slot isNil { . } { rp-slot } ?!
-    } { . } ?! /rp-slot
+    ; Tail call if no ctx-slot and no rp-slot
+    ctx-slot isNil rp-slot isNil and! /is-tail-call
 
     ; Enter frame if needed for saves
     addr entered /cur-entered /cur-addr
@@ -107,32 +104,49 @@
       cur-addr cur-entered maybe-enter!
     } ?! /cur-entered /cur-addr
 
-    ; Emit saves before call
+    ; Emit context save before call (if needed)
     ctx-slot isNil { cur-addr } {
       [ ocSaveContextPtr ocPopLocal ctx-slot ] cur-addr emit-all-at!
     } ?! /cur-addr
-    rp-slot isNil { cur-addr } {
+    ; Emit RP save before first non-tail call (check rp-save-done marker)
+    slot-map 'rp-save-done in 1 = rp-slot isNil not! and! /do-save-rp
+    do-save-rp {
       [ ocSaveReturnPtr ocPopLocal rp-slot ] cur-addr emit-all-at!
-    } ?! /cur-addr
+    } { cur-addr } ?! /cur-addr
+    ; Update slot-map with marker if we saved
+    do-save-rp { slot-map 0 'rp-save-done : } { slot-map } ?! /new-slot-map
 
-    ; Emit call
-    ocCall cur-addr emit-at! /cur-addr
+    ; Emit call or tailcall
+    is-tail-call {
+      ; Tail call: use tailcall (preserves RP), and emit leaveFrame before if needed
+      cur-addr cur-entered maybe-enter! /cur-entered /cur-addr
+      cur-entered 0 = max-slots 0 > and! {
+        ocLeaveFrame cur-addr emit-at! max-slots swap! emit-at!
+      } { cur-addr } ?! /cur-addr
+      ocTailCall cur-addr emit-at! /cur-addr
+      ; Return entered=2 to signal seq-impl to skip return
+      node cur-addr 2 new-slot-map deferred
+    } {
+      ; Non-tail call: use regular call with restores
+      ocCall cur-addr emit-at! /cur-addr
 
-    ; Emit restores after call (reverse order of saves)
-    rp-slot isNil { cur-addr } {
-      [ ocPushLocal rp-slot ocRestoreReturnPtr ] cur-addr emit-all-at!
-    } ?! /cur-addr
-    ctx-slot isNil { cur-addr } {
-      [ ocPushLocal ctx-slot ocRestoreContextPtr ] cur-addr emit-all-at!
-    } ?! /cur-addr
+      ; Emit RP restore after call (only if restore-return=0)
+      needs-restore-rp {
+        [ ocPushLocal rp-slot ocRestoreReturnPtr ] cur-addr emit-all-at!
+      } { cur-addr } ?! /cur-addr
+      ; Emit context restore after call (if needed)
+      ctx-slot isNil { cur-addr } {
+        [ ocPushLocal ctx-slot ocRestoreContextPtr ] cur-addr emit-all-at!
+      } ?! /cur-addr
 
-    ; Emit leaveFrame after all restores if needed
-    cur-addr cur-entered maybe-leave! slot-map deferred
+      ; Emit leaveFrame after all restores if needed
+      cur-addr cur-entered maybe-leave! new-slot-map deferred
+    } ?!
   } {
   ; isOperator throws on non-identifiers, so guard with isIdent (using conditional to short-circuit)
   term isIdent 0 = { term isOperator 0 = } { 1 } ?! {
-    ; Operator: op n
-    ocOp addr emit-at! term intern swap! emit-at! entered maybe-leave! slot-map deferred
+    ; Operator: look up opcode number from op-table
+    ocOp addr emit-at! op-table term @ swap! emit-at! entered maybe-leave! slot-map deferred
   } {
   term isFunc {
     ; Closure: emit context-building code, defer inner function compilation
@@ -216,15 +230,22 @@
 
 ; codegen-seq-impl: (func-body body-arr max-slots addr entered slot-map free-vars deferred idx seq-fn term-fn -- new-addr new-entered new-slot-map new-deferred)
 ; Process terms from idx to end (left-to-right).
+; entered: 0=in frame, 1=not entered, 2=tail call (skip return)
 ['emit-at 'ocReturn 'ocLeaveFrame 'and 'swap] { /term-fn /seq-fn /idx /deferred /free-vars /slot-map /entered /addr /max-slots /body-arr /func-body
   idx func-body # = {
-    ; Done: emit leaveFrame if we entered frame and it wasn't already emitted, then return
-    ; entered=0 means we DID enter, max-slots>0 means there's a frame to leave
-    entered 0 = max-slots 0 > and! {
-      ; We entered a frame and have slots - emit leaveFrame first
-      ocLeaveFrame addr emit-at! max-slots swap! emit-at!
-    } { addr } ?! /addr
-    ocReturn addr emit-at! entered slot-map deferred
+    ; Done: check if tail call (entered=2) - skip return
+    entered 2 = {
+      ; Tail call already emitted, no return needed
+      addr entered slot-map deferred
+    } {
+      ; Normal: emit leaveFrame if we entered frame and it wasn't already emitted, then return
+      ; entered=0 means we DID enter, max-slots>0 means there's a frame to leave
+      entered 0 = max-slots 0 > and! {
+        ; We entered a frame and have slots - emit leaveFrame first
+        ocLeaveFrame addr emit-at! max-slots swap! emit-at!
+      } { addr } ?! /addr
+      ocReturn addr emit-at! entered slot-map deferred
+    } ?!
   } {
     ; Process current term
     func-body idx @ body-arr idx @ max-slots addr entered slot-map free-vars deferred seq-fn term-fn term-fn!
@@ -234,9 +255,23 @@
   } ?!
 } def-fn! /codegen-seq-impl
 
+; find-rp-slot: (body-arr -- slot-or-nil)
+; Scan body array to find the rp-save-slot from the call with restore-return=0.
+{ /self /idx /arr
+  idx arr # = { . } {
+    arr idx @ /node
+    node 'rp-save-slot in 0 = {
+      node 'rp-save-slot @
+    } {
+      arr idx 1 + self self!
+    } ?!
+  } ?!
+} /find-rp-slot-loop
+{ /arr arr 0 find-rp-slot-loop find-rp-slot-loop! } /find-rp-slot
+
 ; codegen-deferred-impl: (addr deferred seq-fn term-fn self -- final-addr)
 ; Process deferred closures: compile each and backpatch the placeholder.
-['emit-at] { /self /term-fn /seq-fn /deferred /addr
+['emit-at 'ocEnterFrame 'swap 'find-rp-slot] { /self /term-fn /seq-fn /deferred /addr
   deferred isNil { addr } {
     ; Extract (term, node, patch-addr) from head
     deferred fst /entry
@@ -252,7 +287,15 @@
     node 'body @ /inner-body
     node 'max-slots @ /inner-max
     node 'free-vars @ /inner-free-vars
-    term inner-body inner-max addr 1 $ inner-free-vars . 0 seq-fn term-fn seq-fn!
+    ; Enter frame at start if needed
+    inner-max 0 > {
+      ocEnterFrame addr emit-at! inner-max swap! emit-at! 0
+    } { addr 1 } ?! /entered /start-addr
+    ; Build initial slot-map with rp-slot if function needs RP saving
+    ; Scan body for the call with rp-save-slot
+    inner-body find-rp-slot! /rp-slot
+    rp-slot isNil { $ } { $ rp-slot 'rp-slot : } ?! /init-slot-map
+    term inner-body inner-max start-addr entered init-slot-map inner-free-vars . 0 seq-fn term-fn seq-fn!
     /inner-deferred /discard-slot-map /discard-entered /after-addr
 
     ; Process any closures deferred from the inner function
@@ -263,15 +306,37 @@
   } ?!
 } def-fn! /codegen-deferred-impl
 
+; find-rp-slot: (body-arr -- slot-or-nil)
+; Scan body array to find the rp-save-slot from the call with restore-return=0.
+{ /self /idx /arr
+  idx arr # = { . } {
+    arr idx @ /node
+    node 'rp-save-slot in 0 = {
+      node 'rp-save-slot @
+    } {
+      arr idx 1 + self self!
+    } ?!
+  } ?!
+} /find-rp-slot-loop
+{ /arr arr 0 find-rp-slot-loop find-rp-slot-loop! } /find-rp-slot
+
 ; codegen: (addr func closure-node -- next-addr)
 ; Generate bytecode for a function starting at addr.
 ; Returns the address after the generated code.
-['codegen-seq-impl 'codegen-term-impl 'codegen-deferred-impl] { /node /func /addr
+['codegen-seq-impl 'codegen-term-impl 'codegen-deferred-impl 'ocEnterFrame 'emit-at 'swap 'find-rp-slot] { /node /func /addr
   node 'body @ /body
   node 'max-slots @ /max-slots
   node 'free-vars @ /free-vars
+  ; Enter frame at start if needed (don't defer - causes issues with non-tail calls)
+  max-slots 0 > {
+    ocEnterFrame addr emit-at! max-slots swap! emit-at! 0
+  } { addr 1 } ?! /entered /start-addr
+  ; Build initial slot-map with rp-slot if function needs RP saving
+  ; Scan body for the call with rp-save-slot
+  body find-rp-slot! /rp-slot
+  rp-slot isNil { $ } { $ rp-slot 'rp-slot : } ?! /init-slot-map
   ; Compile main body, collecting deferred closures
-  func body max-slots addr 1 $ free-vars . 0 codegen-seq-impl codegen-term-impl codegen-seq-impl!
+  func body max-slots start-addr entered init-slot-map free-vars . 0 codegen-seq-impl codegen-term-impl codegen-seq-impl!
   /deferred /discard-slot-map /discard-entered /after-body
   ; Compile all deferred closures
   after-body deferred codegen-seq-impl codegen-term-impl codegen-deferred-impl codegen-deferred-impl!

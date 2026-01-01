@@ -1,0 +1,1362 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read lib/codegen.froth (323 lines)
+  ⎿  Read lib/slots.froth (167 lines)
+  ⎿  Read lib/liveness.froth (153 lines)
+  ⎿  Read ../../../../../tmp/test_fib_debug.froth (27 lines)
+  ⎿  Read ../../../../../tmp/test_cond.froth (9 lines)
+  ⎿  Todo list read (5 items)
+
+> continue 
+
+● I need to fix the missing 'or capture in slots.froth. The function uses or! but doesn't have 'or in its capture list.
+
+● Update(lib/slots.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+       7  ; slot-map: identifier -> slot mapping
+       8  ; free: cons list of free slots (nil if empty)
+       9  ; max: next slot number to allocate if free list is empty
+      10 -['delete-keys 'reduce 'swap 'and] { /term-fn /seq-fn /max /free
+         - /slot-map /live-map /term                                     
+      10 +['delete-keys 'reduce 'swap 'and 'or] { /term-fn /seq-fn /max /
+         +free /slot-map /live-map /term                                 
+      11    term isBinder {
+      12      ; Binder: allocate slot if used (is-used=0), else no slot
+      13      term intern idToIdent /ident
+
+● Now let me test the fib compilation:
+
+● Bash(timeout 5 ./bin/froth /tmp/test_cond.froth 2>&1)
+  ⎿  before compile               
+     compile: test ok
+     after compile
+     … +3 lines (ctrl+o to expand)
+
+● The conditional test passes. Now let me test fib:
+
+● Bash(cat > /tmp/test_fib.froth << 'EOF'
+      {/self /n…)
+  ⎿  Error: Exit code 1
+     before compile
+     Runtime error: type error: expected int, got nil
+
+● There's an error during compilation. Let me add some debug output:
+
+● Bash(cat > /tmp/test_fib_debug.froth << 'EOF'
+      {/self /n…)
+  ⎿ body:{ /self /n n 2 < { n } { n 1 - self self ! n 2 - self self ! + } ?
+     ! }
+    boundness done
+    … +3 lines (ctrl+o to expand)
+
+
+● The analysis phases work. Let me test codegen:
+
+● Bash(cat > /tmp/test_fib_codegen.froth << 'EOF'
+      {/self /n…)
+  ⎿  Error: Exit code 1
+     about to codegen
+     Runtime error: type error: expected int, got nil
+
+● Bash(cat > /tmp/test_slots_body.froth << 'EOF'
+      {/self /n…)
+  ⎿  Error: Exit code 1
+     slots-node body:
+     Runtime error: undefined name: whileL
+
+● Bash(cat > /tmp/test_slots_body.froth << 'EOF'
+      {/self /n…)
+  ⎿  slots-node body:             
+     <map:2>
+     <map:2>
+     … +7 lines (ctrl+o to expand)
+
+● Let me look at specific entries in the body:
+
+● Bash(cat > /tmp/test_slots_detail.froth << 'EOF'
+      {/self /n…)
+  ⎿  Entry 0 (binder /self):       
+     slotis-used
+     Entry 1 (binder /n):
+     … +22 lines (ctrl+o to expand)
+
+● I see the issue! In slots.froth, my logic for checking if at least one of save-return/restore-return is 0 is wrong. I'm adding the values, but if one value is 0 and the other is 1, the sum is 1 (not 0). Let me fix this:
+
+● Read(lib/slots.froth)
+  ⎿  Read 30 lines
+
+● The bug is on line 108: + 0 = doesn't work when one value is 0 and the other is 1 (sum is 1, not 0). I should use or 0 = instead:
+
+● Update(lib/slots.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      105        ; One of the keys exists - check if value is 0
+      106        result-map 'save-return in 0 = { result-map 'save-return
+            @ } { 1 } ?!
+      107        result-map 'restore-return in 0 = { result-map 'restore-
+           return @ } { 1 } ?!
+      108 -      + 0 = {  ; At least one is 0                            
+      108 +      or 0 = {  ; At least one is 0                           
+      109          cur-free isNil {
+      110            ; Allocate new slot
+      111            result-map cur-max 'rp-save-slot : cur-max cur-free 
+           cur-max 1 +
+
+● Now let me check if the slot gets allocated:
+
+● Bash(cat > /tmp/test_slots_detail.froth << 'EOF'
+      {/self /n…)
+  ⎿  Error: Exit code 1
+     Runtime error: type error: expected comparable values, got int
+
+● Bash(cat > /tmp/test_slots_detail.froth << 'EOF'
+      {/self /n…)
+  ⎿  Error: Exit code 1
+     Runtime error: type error: expected comparable values, got int
+
+● Bash(cat > /tmp/test_slots_simple.froth << 'EOF'
+      {/self /n…)
+  ⎿  Error: Exit code 1
+     about to call slots
+     Runtime error: type error: expected comparable values, got int
+
+● I think I need or! (with bang) since or is a closure, not a builtin:
+
+● Update(lib/slots.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      105        ; One of the keys exists - check if value is 0
+      106        result-map 'save-return in 0 = { result-map 'save-return
+            @ } { 1 } ?!
+      107        result-map 'restore-return in 0 = { result-map 'restore-
+           return @ } { 1 } ?!
+      108 -      or 0 = {  ; At least one is 0                           
+      108 +      or! 0 = {  ; At least one is 0                          
+      109          cur-free isNil {
+      110            ; Allocate new slot
+      111            result-map cur-max 'rp-save-slot : cur-max cur-free 
+           cur-max 1 +
+
+● Bash(cat > /tmp/test_slots_simple.froth << 'EOF'
+      {/self /n…)
+  ⎿  about to call slots
+     slots done
+     max-slots:2
+
+● Good, now let me check if rp-save-slot is allocated:
+
+● Bash(cat > /tmp/test_rp_slot.froth << 'EOF'
+      {/self /n…)
+  ⎿  Checking terms with save-return or restore-return:
+     term 5 has save-return, rp-save-slot=1
+     term 11 has restore-return, rp-save-slot=2
+
+● Interesting - the slots are different (1 and 2), but they should be the same! The save and restore need to use the same slot. Let me check the inner body length and structure:
+
+● Bash(cat > /tmp/test_inner_body.froth << 'EOF'
+      {/self /n…)
+  ⎿  Inner body length:13                  
+     All terms:
+     term 0: is-boundis-liveslotleave-frame
+     … +12 lines (ctrl+o to expand)
+
+● I see the problem. Both terms have rp-save-slot, but with different values (1 vs 2). They should share the same slot. The save and restore must use the same slot number.
+
+  The fix: only allocate the slot for save-return, and for restore-return, use the slot that was already allocated (pass it through the slot-map).
+
+● Read(lib/slots.froth)
+  ⎿  Read 60 lines
+
+● I need to rewrite the RP slot logic. The approach:
+  1. For save-return=0: allocate new slot, store in slot-map under 'rp-active-slot, don't free it
+  2. For restore-return=0: lookup slot from slot-map 'rp-active-slot, use it, free it
+
+● Update(lib/slots.froth)
+  ⎿  Added 33 lines, removed 25 lines                                    
+       97        live-map . free max
+       98      } ?! /cur-max /cur-free /ctx-slot /result-map
+       99  
+      100 -    ; Allocate rp-save-slot if save-return=0 OR restore-return
+          -=0                                                            
+      101 -    ; save-return marks the first call (source order), restore
+          --return marks the last                                        
+      102 -    ; They share the same slot                                
+      103 -    ; Returns: (result-map rp-slot cur-free cur-max)          
+      104 -    result-map 'save-return in 0 = result-map 'restore-return 
+          -in 0 = or! {                                                  
+      105 -      ; One of the keys exists - check if value is 0          
+      106 -      result-map 'save-return in 0 = { result-map 'save-return
+          - @ } { 1 } ?!                                                 
+      107 -      result-map 'restore-return in 0 = { result-map 'restore-
+          -return @ } { 1 } ?!                                           
+      108 -      or! 0 = {  ; At least one is 0                          
+      109 -        cur-free isNil {                                      
+      110 -          ; Allocate new slot                                 
+      111 -          result-map cur-max 'rp-save-slot : cur-max cur-free 
+          -cur-max 1 +                                                   
+      112 -        } {                                                   
+      113 -          ; Reuse from free list                              
+      114 -          cur-free fst /slot                                  
+      115 -          result-map slot 'rp-save-slot : slot cur-free snd cu
+          -r-max                                                         
+      116 -        } ?!                                                  
+      100 +    ; Handle rp-save-slot for save-return and restore-return  
+      101 +    ; save-return=0: allocate new slot, store in slot-map as '
+          +rp-active-slot                                                
+      102 +    ; restore-return=0: lookup from slot-map, free it         
+      103 +    ; They share the same slot via slot-map threading         
+      104 +    result-map 'save-return in 0 = { result-map 'save-return @
+          + 0 = } { 1 } ?! /has-save-return                              
+      105 +    result-map 'restore-return in 0 = { result-map 'restore-re
+          +turn @ 0 = } { 1 } ?! /has-restore-return                     
+      106 +                                                              
+      107 +    has-save-return {                                         
+      108 +      ; Allocate new slot for RP save                         
+      109 +      cur-free isNil {                                        
+      110 +        ; Allocate from max                                   
+      111 +        result-map cur-max 'rp-save-slot : slot-map cur-max 'r
+          +p-active-slot : cur-free cur-max 1 +                          
+      112        } {
+      118 -        result-map . cur-free cur-max                         
+      119 -      } ?!                                                    
+      113 +        ; Reuse from free list                                
+      114 +        cur-free fst /slot                                    
+      115 +        result-map slot 'rp-save-slot : slot-map slot 'rp-acti
+          +ve-slot : cur-free snd cur-max                                
+      116 +      } ?! /final-max /final-free /final-slot-map /final-map  
+      117 +      ; DON'T free the rp-slot - it stays allocated until rest
+          +ore-return                                                    
+      118 +      final-free /new-free                                    
+      119      } {
+      121 -      result-map . cur-free cur-max                           
+      122 -    } ?! /final-max /final-free /rp-slot /final-map           
+      120 +      has-restore-return {                                    
+      121 +        ; Lookup existing slot from slot-map, free it         
+      122 +        slot-map 'rp-active-slot @ /rp-slot                   
+      123 +        result-map rp-slot 'rp-save-slot : slot-map 'rp-active
+          +-slot delete cur-free cur-max                                 
+      124 +        /final-max /final-free /final-slot-map /final-map     
+      125 +        ; Free the rp-slot now                                
+      126 +        rp-slot final-free swap! , /new-free                  
+      127 +      } {                                                     
+      128 +        ; Neither save nor restore                            
+      129 +        result-map slot-map cur-free cur-max /final-max /final
+          +-free /final-slot-map /final-map                              
+      130 +        final-free /new-free                                  
+      131 +      } ?!                                                    
+      132 +    } ?!                                                      
+      133  
+      124 -    ; Free the allocated slots (push back to free list)       
+      125 -    final-free /new-free                                      
+      134 +    ; Free the ctx-slot (used only for this call)             
+      135      ctx-slot isNil { } { ctx-slot new-free swap! , /new-free }
+            ?!
+      127 -    rp-slot isNil { } { rp-slot new-free swap! , /new-free } ?
+          -!                                                             
+      136  
+      129 -    final-map slot-map new-free final-max                     
+      137 +    final-map final-slot-map new-free final-max               
+      138    } {
+      139      ; Not an identifier, or operator: no slot
+      140      live-map slot-map free max
+
+● Now let me test if the slots share the same value:
+
+● Bash(cat > /tmp/test_rp_slot.froth << 'EOF'
+      {/self /n…)
+  ⎿  Error: Exit code 1
+     Runtime error: undefined name: new-free
+
+● I see the issue - the new-free variable is defined inside the conditional branches, so it goes out of scope. I need to leave the value on the stack and bind it after the ?!:
+
+● Update(lib/slots.froth)
+  ⎿  Added 8 lines, removed 10 lines                                     
+      113          ; Reuse from free list
+      114          cur-free fst /slot
+      115          result-map slot 'rp-save-slot : slot-map slot 'rp-acti
+           ve-slot : cur-free snd cur-max
+      116 -      } ?! /final-max /final-free /final-slot-map /final-map  
+      116 +      } ?!                                                    
+      117        ; DON'T free the rp-slot - it stays allocated until rest
+           ore-return
+      118 -      final-free /new-free                                    
+      118 +      ; Leave (final-map final-slot-map new-free final-max) on
+          + stack                                                        
+      119      } {
+      120        has-restore-return {
+      121          ; Lookup existing slot from slot-map, free it
+      122          slot-map 'rp-active-slot @ /rp-slot
+      123 -        result-map rp-slot 'rp-save-slot : slot-map 'rp-active
+          --slot delete cur-free cur-max                                 
+      124 -        /final-max /final-free /final-slot-map /final-map     
+      125 -        ; Free the rp-slot now                                
+      126 -        rp-slot final-free swap! , /new-free                  
+      123 +        result-map rp-slot 'rp-save-slot : slot-map 'rp-active
+          +-slot delete                                                  
+      124 +        ; Free the rp-slot now: push new-free onto stack      
+      125 +        rp-slot cur-free swap! , cur-max                      
+      126        } {
+      127          ; Neither save nor restore
+      129 -        result-map slot-map cur-free cur-max /final-max /final
+          --free /final-slot-map /final-map                              
+      130 -        final-free /new-free                                  
+      128 +        result-map slot-map cur-free cur-max                  
+      129        } ?!
+      132 -    } ?!                                                      
+      130 +    } ?! /final-max /new-free /final-slot-map /final-map      
+      131  
+      132      ; Free the ctx-slot (used only for this call)
+      135 -    ctx-slot isNil { } { ctx-slot new-free swap! , /new-free }
+          - ?!                                                           
+      133 +    ctx-slot isNil { new-free } { ctx-slot new-free swap! , } 
+          +?! /new-free                                                  
+      134  
+      135      final-map final-slot-map new-free final-max
+      136    } {
+
+● Bash(cat > /tmp/test_rp_slot.froth << 'EOF'
+      {/self /n…)
+  ⎿  Checking terms with save-return or restore-return:
+     term 5 has save-return, rp-save-slot=1
+     term 11 has restore-return, rp-save-slot=1
+
+● Both terms now use slot 1. Let me test codegen:
+
+● Bash(cat > /tmp/test_fib_codegen.froth << 'EOF'
+      {/self /n…)
+  ⎿  about to codegen         
+     codegen done, end addr:79
+
+● Excellent! Now let me test the full fib:
+
+● Bash(cat > /tmp/test_fib.froth << 'EOF'
+      {/self /n…)
+  ⎿  before compile               
+     compile: fib-impl ok
+     after compile, end addr:79
+     … +4 lines (ctrl+o to expand)
+
+● Fib works. Let me test with larger values:
+
+● Bash(cat > /tmp/test_fib_large.froth << 'EOF'
+      {/self /n…)
+  ⎿  compile: fib-impl ok
+     fib(20):6765
+     fib(25):75025
+
+● Let me update the todo and run tests:
+
+● Bash(make test 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+     ./run_tests.sh
+     PASS: add
+     PASS: apply_op
+     PASS: arithmetic
+     PASS: arity
+     PASS: array
+     … +124 lines (ctrl+o to see all)
+
+● Two test failures. Let me check them:
+
+● Read(tests/save_slots.froth)
+  ⎿  Read 62 lines
+
+● Read(tests/vm.froth)
+  ⎿  Read 110 lines
+
+● I see the issues. For vm.froth, the opAdd etc. constants were removed in favor of op-table. For save_slots.froth, when there's only one non-tail call, it needs BOTH save-return AND restore-return.
+
+  Let me fix the liveness logic first - a call that's the last (restore-return) should also save if it's the first:
+
+● Read(lib/liveness.froth)
+  ⎿  Read 30 lines
+
+● The issue is that for a single non-tail call, it needs BOTH save-return and restore-return. Let me update the logic to set save-return for ALL non-tail calls:
+
+● Update(lib/liveness.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      86        ; Non-tail call: maybe save/restore context and return po
+          inter
+      87        ; Walking right-to-left:
+      88        ; - First non-tail seen (seen-nontail=1) is LAST in sourc
+          e -> restore-return
+      89 -      ; - All non-tail calls with seen-nontail=0 need save-retu
+         -rn (first in source gets it)                                   
+      89 +      ; - ALL non-tail calls get save-return; slots pass handle
+         +s sharing the slot                                             
+      90        need-ctx 0 = /needs-restore-ctx
+      91        seen-nontail 1 = /needs-restore-return
+      92 -      seen-nontail 0 = /needs-save-return  ; save RP before thi
+         -s call (if not first seen)                                     
+      92 +      0 /needs-save-return  ; ALL non-tail calls save RP (first
+         + allocation used by all)                                       
+      93        ; Register restores use the frame
+      94        needs-restore-ctx needs-restore-return 0 = or! needs-save
+          -return 0 = or! seen-frame 1 = and! /needs-leave-frame
+      95        bnd-map
+
+● Now I need to update slots to handle multiple save-return calls - only allocate if slot doesn't exist yet:
+
+● Update(lib/slots.froth)
+  ⎿  Added 14 lines, removed 7 lines                                     
+      105      result-map 'restore-return in 0 = { result-map 'restore-re
+           turn @ 0 = } { 1 } ?! /has-restore-return
+      106  
+      107      has-save-return {
+      108 -      ; Allocate new slot for RP save                         
+      109 -      cur-free isNil {                                        
+      110 -        ; Allocate from max                                   
+      111 -        result-map cur-max 'rp-save-slot : slot-map cur-max 'r
+          -p-active-slot : cur-free cur-max 1 +                          
+      108 +      ; Allocate new slot for RP save (only if not already all
+          +ocated)                                                       
+      109 +      slot-map 'rp-active-slot in 0 = {                       
+      110 +        ; Slot already allocated, reuse it                    
+      111 +        slot-map 'rp-active-slot @ /rp-slot                   
+      112 +        result-map rp-slot 'rp-save-slot : slot-map cur-free c
+          +ur-max                                                        
+      113        } {
+      113 -        ; Reuse from free list                                
+      114 -        cur-free fst /slot                                    
+      115 -        result-map slot 'rp-save-slot : slot-map slot 'rp-acti
+          -ve-slot : cur-free snd cur-max                                
+      114 +        ; First save-return, allocate new slot                
+      115 +        cur-free isNil {                                      
+      116 +          ; Allocate from max                                 
+      117 +          result-map cur-max 'rp-save-slot : slot-map cur-max 
+          +'rp-active-slot : cur-free cur-max 1 +                        
+      118 +        } {                                                   
+      119 +          ; Reuse from free list                              
+      120 +          cur-free fst /slot                                  
+      121 +          result-map slot 'rp-save-slot : slot-map slot 'rp-ac
+          +tive-slot : cur-free snd cur-max                              
+      122 +        } ?!                                                  
+      123        } ?!
+      124        ; DON'T free the rp-slot - it stays allocated until rest
+           ore-return
+      125        ; Leave (final-map final-slot-map new-free final-max) on
+            stack
+
+● Actually, I realize the issue with my approach. We only need to save RP ONCE (before first call) and restore ONCE (after last call). Let me revert the liveness change and do it correctly:
+
+● Update(lib/liveness.froth)
+  ⎿  Added 6 lines, removed 3 lines                                      
+      85      is-tail 1 = {
+      86        ; Non-tail call: maybe save/restore context and return po
+          inter
+      87        ; Walking right-to-left:
+      88 -      ; - First non-tail seen (seen-nontail=1) is LAST in sourc
+         -e -> restore-return                                            
+      89 -      ; - ALL non-tail calls get save-return; slots pass handle
+         -s sharing the slot                                             
+      88 +      ; - First non-tail seen (seen-nontail=1) is LAST in sourc
+         +e -> restore-return AND save-return                            
+      89 +      ; - Later non-tail calls (seen-nontail=0) only get save-r
+         +eturn                                                          
+      90        need-ctx 0 = /needs-restore-ctx
+      91        seen-nontail 1 = /needs-restore-return
+      92 -      0 /needs-save-return  ; ALL non-tail calls save RP (first
+         - allocation used by all)                                       
+      92 +      ; save-return: all non-tail calls need save UNTIL we've s
+         +et restore-return                                              
+      93 +      ; For single call: needs both save and restore           
+      94 +      ; For multiple: first (source) saves, last (source) resto
+         +res                                                            
+      95 +      0 /needs-save-return  ; ALL non-tail calls get save-retur
+         +n (slots will share the slot)                                  
+      96        ; Register restores use the frame
+      97        needs-restore-ctx needs-restore-return 0 = or! needs-save
+          -return 0 = or! seen-frame 1 = and! /needs-leave-frame
+      98        bnd-map
+
+● Now let me run the save_slots test to see if it works:
+
+● Bash(timeout 10 ./bin/froth tests/save_slots.froth 2>&1)
+  ⎿  Example 1: {/f x f!}          
+       max-slots: 1
+       apply node (idx 3):
+     … +28 lines (ctrl+o to expand)
+
+● Read(tests/save_slots.expected)
+  ⎿  Read 32 lines
+
+● The output matches expected. Now let me fix the vm.froth test which uses the old opAdd constants. I need to update it to use op-table:
+
+● Read(lib/bytecode.froth)
+  ⎿  Read 50 lines
+
+● I need to update vm.froth to use op-table '+ @ instead of opAdd. Let me update the test:
+
+● Update(tests/vm.froth)
+  ⎿  Added 5 lines                                                       
+       1  ; Test bytecode VM execution
+       2  ; Track bytecode address explicitly with /here pattern
+       3  
+       4 +; Get operator numbers from op-table                           
+       5 +op-table '+ @ /opAdd                                           
+       6 +op-table '- @ /opSub                                           
+       7 +op-table '* @ /opMul                                           
+       8 +                                                               
+       9  0 /here
+      10  
+      11  ; Test 1: 1 + 2 = 3
+
+● Bash(timeout 10 ./bin/froth tests/vm.froth 2>&1)
+  ⎿  3                            
+     7
+     42
+     … +9 lines (ctrl+o to expand)
+
+● Now let me run all tests:
+
+● Bash(make test 2>&1)
+  ⎿  cd src && mmc --make froth        
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+     … +70 lines (ctrl+o to expand)
+
+● All tests pass. Let me verify fib still works and update the todos:
+
+● Bash(cat > /tmp/test_fib_final.froth << 'EOF'
+      {/self /n…)
+  ⎿  Error: Exit code 1
+     compile: fib-impl ok
+     fib(10):Runtime error: vm error: stack overflow: frame collision
+
+● Fib broke again. Let me check the slot allocation:
+
+● Bash(cat > /tmp/debug_fib.froth << 'EOF'
+      {/self /n…)
+  ⎿  outer max-slots:2            
+     inner max-slots:2
+     Inner body term analysis:
+     … +8 lines (ctrl+o to expand)
+
+● I see term 11 has BOTH save-return and restore-return. Let me check the slot values:
+
+● Bash(cat > /tmp/debug_fib2.froth << 'EOF'
+      {/self /n…)
+  ⎿  term 5:                      
+       rp-save-slot: 1
+       ctx-save-slot: 0
+     … +2 lines (ctrl+o to expand)
+
+● The slots look correct. Let me check the generated bytecode:
+
+● Bash(cat > /tmp/debug_fib3.froth << 'EOF'
+      {/self /n…)
+  ⎿  Generating bytecode...        
+     end addr:82
+     bytecode dump:
+     … +82 lines (ctrl+o to expand)
+
+● I see the issue. My change to set save-return on ALL non-tail calls causes multiple saves, which corrupts the saved RP (the second save overwrites with a different value). The fix is to save RP at the FUNCTION level, not at each call.
+
+  Looking at the liveness code, needs-save-return=0 is already set on the closure node. Let me update codegen to save RP at function start instead of at each call:
+
+● Update(lib/liveness.froth)
+  ⎿  Error editing file
+
+● Read(lib/liveness.froth)
+  ⎿  Read 25 lines
+  ⎿  Interrupted · What should Claude do instead?
+
+> Save it at the first call where it needs to be saved. Don't just save it 
+at the start, as that will occupy a frame slot unnecessarily. Read 
+FROTH_BYTECODE.md to understand the design. Is there anything you need 
+clarified before you continue? 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 130 lines
+
+● I understand now. The key insight from the doc:
+  - Save RP before the FIRST non-tail call (leftmost in source)
+  - Restore RP after the LAST non-tail call (rightmost in source)
+  - For a single call, both happen around that call
+
+  The bug is: my liveness sets save-return on calls seen AFTER the first (which are earlier in source), but for a single call there are no such calls.
+
+  The fix:
+  1. In liveness, set save-return=0 on the call that gets restore-return=0 as well
+  2. In codegen, track whether save has been emitted and only emit once
+
+  This way for multiple calls A, B (A first, B last in source):
+  - Walking right-to-left: B gets restore-return=0 AND save-return=0, A gets save-return=0
+  - Codegen walks left-to-right: A emits save (first), B emits restore (has restore-return)
+
+● Update(lib/liveness.froth)
+  ⎿  Added 3 lines, removed 6 lines                                      
+      85      is-tail 1 = {
+      86        ; Non-tail call: maybe save/restore context and return po
+          inter
+      87        ; Walking right-to-left:
+      88 -      ; - First non-tail seen (seen-nontail=1) is LAST in sourc
+         -e -> restore-return AND save-return                            
+      89 -      ; - Later non-tail calls (seen-nontail=0) only get save-r
+         -eturn                                                          
+      88 +      ; - First non-tail seen (seen-nontail=1) is LAST in sourc
+         +e -> restore-return                                            
+      89 +      ; - ALL non-tail calls get save-return (codegen emits sav
+         +e only on first)                                               
+      90        need-ctx 0 = /needs-restore-ctx
+      91        seen-nontail 1 = /needs-restore-return
+      92 -      ; save-return: all non-tail calls need save UNTIL we've s
+         -et restore-return                                              
+      93 -      ; For single call: needs both save and restore           
+      94 -      ; For multiple: first (source) saves, last (source) resto
+         -res                                                            
+      95 -      0 /needs-save-return  ; ALL non-tail calls get save-retur
+         -n (slots will share the slot)                                  
+      92 +      0 /needs-save-return  ; ALL non-tail calls marked; codege
+         +n emits save once                                              
+      93        ; Register restores use the frame
+      94        needs-restore-ctx needs-restore-return 0 = or! needs-save
+          -return 0 = or! seen-frame 1 = and! /needs-leave-frame
+      95        bnd-map
+
+● Now I need to update codegen to only emit save once. I'll track this via the slot-map threading - if rp-active-slot exists in slot-map, the save has already been emitted:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 70 lines
+
+● I need to modify codegen to only emit save once. I'll use a 'rp-save-done marker in slot-map:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      122      ctx-slot isNil { cur-addr } {
+      123        [ ocSaveContextPtr ocPopLocal ctx-slot ] cur-addr emit-a
+           ll-at!
+      124      } ?! /cur-addr
+      125 -    ; Emit RP save before call (only if save-return=0)        
+      126 -    needs-save-rp {                                           
+      125 +    ; Emit RP save before call (only ONCE - first call with sa
+          +ve-return)                                                    
+      126 +    ; Check if already saved via 'rp-save-done marker in slot-
+          +map                                                           
+      127 +    slot-map 'rp-save-done in 1 = needs-save-rp and! {        
+      128        [ ocSaveReturnPtr ocPopLocal rp-slot ] cur-addr emit-all
+           -at!
+      129      } { cur-addr } ?! /cur-addr
+      130  
+
+● Now I need to set the 'rp-save-done marker in slot-map after emitting the save. Let me update the return path:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 20 lines
+
+● Update(lib/codegen.froth)
+  ⎿  Added 6 lines, removed 3 lines                                      
+      124      } ?! /cur-addr
+      125      ; Emit RP save before call (only ONCE - first call with sa
+           ve-return)
+      126      ; Check if already saved via 'rp-save-done marker in slot-
+           map
+      127 -    slot-map 'rp-save-done in 1 = needs-save-rp and! {        
+      127 +    slot-map 'rp-save-done in 1 = needs-save-rp and! /do-save-
+          +rp                                                            
+      128 +    do-save-rp {                                              
+      129        [ ocSaveReturnPtr ocPopLocal rp-slot ] cur-addr emit-all
+           -at!
+      130      } { cur-addr } ?! /cur-addr
+      131 +    ; Update slot-map with marker if we saved                 
+      132 +    do-save-rp { slot-map 0 'rp-save-done : } { slot-map } ?! 
+          +/new-slot-map                                                 
+      133  
+      134      ; Emit call or tailcall
+      135      is-tail-call {
+     ...
+      140        } { cur-addr } ?! /cur-addr
+      141        ocTailCall cur-addr emit-at! /cur-addr
+      142        ; Return entered=2 to signal seq-impl to skip return
+      140 -      node cur-addr 2 slot-map deferred                       
+      143 +      node cur-addr 2 new-slot-map deferred                   
+      144      } {
+      145        ; Non-tail call: use regular call with restores
+      146        ocCall cur-addr emit-at! /cur-addr
+     ...
+      155        } ?! /cur-addr
+      156  
+      157        ; Emit leaveFrame after all restores if needed
+      155 -      cur-addr cur-entered maybe-leave! slot-map deferred     
+      158 +      cur-addr cur-entered maybe-leave! new-slot-map deferred 
+      159      } ?!
+      160    } {
+      161    ; isOperator throws on non-identifiers, so guard with isIden
+           t (using conditional to short-circuit)
+
+● Now let me test:
+
+● Bash(cat > /tmp/test_fib_final.froth << 'EOF'
+      {/self /n…)
+  ⎿  compile: fib-impl ok         
+     fib(0):0
+     fib(1):1
+     … +3 lines (ctrl+o to expand)
+
+● Fib works. Let me run all tests:
+
+● Bash(make test 2>&1)
+  ⎿  cd src && mmc --make froth        
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+     … +70 lines (ctrl+o to expand)
+
+● All tests pass. Let me verify with a larger fib and update the todos:
+
+● Bash(cat > /tmp/test_fib_large.froth << 'EOF'
+      {/self /n…)
+  ⎿  compile: fib-impl ok
+     fib(25):75025
+     fib(30):832040
+
+● All tasks completed. The fix involved:
+
+  1. Liveness: Set save-return=0 on ALL non-tail calls (not just earlier ones), ensuring single-call cases get the flag
+  2. Slots: First call with save-return allocates the slot; later calls reuse it from 'rp-active-slot in slot-map
+  3. Codegen: Track 'rp-save-done in slot-map to emit save only once (on the first non-tail call)
+
+  This correctly handles both single-call and multi-call scenarios:
+  - Single call: save → call → restore
+  - Multiple calls: save (first) → call → call → restore (last)
+
+> Please look at the staged files and carefully review the changes. A large 
+number of changes have been made, some of which might not make sense. 
+Explain why liveness is trying to determine when to save the return 
+register. If the return pointer needs to be stored at all then it needs to 
+be saved just before the first call. You only need to know whether the 
+return pointer needs to be saved at some point. Why is save-return required 
+on calls? It seems equivalent to saying that the call is not a tail call. 
+
+● Bash(git diff --cached 2>&1)
+  ⎿  diff --git a/FROTH.md b/FROTH.md
+     index 0e9b74f..675713a 100644
+     --- a/FROTH.md
+     … +890 lines (ctrl+o to expand)
+
+● You're right. Let me think through this more carefully.
+
+  Looking at the design in FROTH_BYTECODE.md:
+  - "Return pointer: Saved for the rightmost non-tail call only"
+  - The function-level needs-save-return=0 flag already indicates whether RP needs to be saved
+
+  The save-return=0 per-call flag is indeed redundant. A call either:
+  1. Is a tail call → no RP handling needed
+  2. Is a non-tail call → RP must be saved (once, before the first such call) and restored (once, after the last)
+
+  The presence of rp-save-slot on a call already indicates it's a non-tail call needing RP handling. In codegen, I can simply:
+  1. Check if rp-save-slot exists on the call node
+  2. If yes and save not yet emitted → emit save, mark done
+  3. If restore-return=0 → emit restore
+
+  The per-call save-return flag adds no information - it's equivalent to "this call has rp-save-slot" which is equivalent to "this is not a tail call".
+
+  What should change:
+  - Remove save-return flag from liveness entirely
+  - In slots, allocate rp-save-slot based on restore-return=0 (as before my changes)
+  - In codegen, emit save on first call with rp-save-slot, emit restore on call with restore-return=0
+
+  The core issue I was solving (single non-tail call needing both save and restore) is already handled: if there's one non-tail call, it has restore-return=0 and gets rp-save-slot. Codegen sees rp-save-slot → save. Sees restore-return=0 → restore.
+
+  Should I revert the save-return additions and simplify the logic?
+
+> yes, simplify it 
+
+● Read(lib/liveness.froth)
+  ⎿  Read 30 lines
+
+● Update(lib/liveness.froth)
+  ⎿  Added 8 lines, removed 12 lines                                     
+       83    term isApply {
+       84      ; Apply: check if non-tail call
+       85      is-tail 1 = {
+       86 -      ; Non-tail call: maybe save/restore context and return p
+          -ointer                                                        
+       87 -      ; Walking right-to-left:                                
+       88 -      ; - First non-tail seen (seen-nontail=1) is LAST in sour
+          -ce -> restore-return                                          
+       89 -      ; - ALL non-tail calls get save-return (codegen emits sa
+          -ve only on first)                                             
+       86 +      ; Non-tail call: maybe restore context and/or return poi
+          +nter                                                          
+       87 +      ; Walking right-to-left, first non-tail seen is LAST in 
+          +source -> restore-return                                      
+       88        need-ctx 0 = /needs-restore-ctx
+       89        seen-nontail 1 = /needs-restore-return
+       92 -      0 /needs-save-return  ; ALL non-tail calls marked; codeg
+          -en emits save once                                            
+       90        ; Register restores use the frame
+       94 -      needs-restore-ctx needs-restore-return 0 = or! needs-sav
+          -e-return 0 = or! seen-frame 1 = and! /needs-leave-frame       
+       91 +      needs-restore-ctx needs-restore-return 0 = or! seen-fram
+          +e 1 = and! /needs-leave-frame                                 
+       92        bnd-map
+       96 -      needs-restore-ctx { 0 'restore-context : } { } ?!  ; res
+          -tore context if needed                                        
+       97 -      needs-restore-return { 0 'restore-return : } { } ?!  ; r
+          -estore return after last call                                 
+       98 -      needs-save-return { 0 'save-return : } { } ?!  ; save re
+          -turn before earlier calls                                     
+       99 -      needs-leave-frame { 0 'leave-frame : } { } ?!  ; leave f
+          -rame if first frame usage                                     
+       93 +      needs-restore-ctx { 0 'restore-context : } { } ?!       
+       94 +      needs-restore-return { 0 'restore-return : } { } ?!     
+       95 +      needs-leave-frame { 0 'leave-frame : } { } ?!           
+       96        seen 1 0  ; reset need-ctx, set seen-nontail
+      101 -      needs-restore-ctx { 0 } { seen-restore-ctx } ?!  ; set s
+          -een-restore-ctx if we marked restore                          
+      102 -      needs-leave-frame { 0 } { seen-frame } ?!  ; set seen-fr
+          -ame if we marked leave                                        
+       97 +      needs-restore-ctx { 0 } { seen-restore-ctx } ?!         
+       98 +      needs-leave-frame { 0 } { seen-frame } ?!               
+       99      } {
+      100        ; Tail call: no restores needed
+      101        bnd-map seen need-ctx seen-nontail seen-restore-ctx seen
+           -frame
+
+● Now simplify slots - allocate rp-save-slot based on restore-return=0 only:
+
+● Read(lib/slots.froth)
+  ⎿  Read 55 lines
+
+● Update(lib/slots.froth)
+  ⎿  Added 15 lines, removed 35 lines                                    
+       97        live-map . free max
+       98      } ?! /cur-max /cur-free /ctx-slot /result-map
+       99  
+      100 -    ; Handle rp-save-slot for save-return and restore-return  
+      101 -    ; save-return=0: allocate new slot, store in slot-map as '
+          -rp-active-slot                                                
+      102 -    ; restore-return=0: lookup from slot-map, free it         
+      103 -    ; They share the same slot via slot-map threading         
+      104 -    result-map 'save-return in 0 = { result-map 'save-return @
+          - 0 = } { 1 } ?! /has-save-return                              
+      105 -    result-map 'restore-return in 0 = { result-map 'restore-re
+          -turn @ 0 = } { 1 } ?! /has-restore-return                     
+      106 -                                                              
+      107 -    has-save-return {                                         
+      108 -      ; Allocate new slot for RP save (only if not already all
+          -ocated)                                                       
+      109 -      slot-map 'rp-active-slot in 0 = {                       
+      110 -        ; Slot already allocated, reuse it                    
+      111 -        slot-map 'rp-active-slot @ /rp-slot                   
+      112 -        result-map rp-slot 'rp-save-slot : slot-map cur-free c
+          -ur-max                                                        
+      113 -      } {                                                     
+      114 -        ; First save-return, allocate new slot                
+      100 +    ; Allocate rp-save-slot if restore-return=0               
+      101 +    ; The slot is allocated and freed per-call (same as ctx-sa
+          +ve-slot)                                                      
+      102 +    result-map 'restore-return in 0 = {                       
+      103 +      result-map 'restore-return @ 0 = {                      
+      104          cur-free isNil {
+      116 -          ; Allocate from max                                 
+      117 -          result-map cur-max 'rp-save-slot : slot-map cur-max 
+          -'rp-active-slot : cur-free cur-max 1 +                        
+      105 +          result-map cur-max 'rp-save-slot : cur-max cur-free 
+          +cur-max 1 +                                                   
+      106          } {
+      119 -          ; Reuse from free list                              
+      107            cur-free fst /slot
+      121 -          result-map slot 'rp-save-slot : slot-map slot 'rp-ac
+          -tive-slot : cur-free snd cur-max                              
+      108 +          result-map slot 'rp-save-slot : slot cur-free snd cu
+          +r-max                                                         
+      109          } ?!
+      123 -      } ?!                                                    
+      124 -      ; DON'T free the rp-slot - it stays allocated until rest
+          -ore-return                                                    
+      125 -      ; Leave (final-map final-slot-map new-free final-max) on
+          - stack                                                        
+      126 -    } {                                                       
+      127 -      has-restore-return {                                    
+      128 -        ; Lookup existing slot from slot-map, free it         
+      129 -        slot-map 'rp-active-slot @ /rp-slot                   
+      130 -        result-map rp-slot 'rp-save-slot : slot-map 'rp-active
+          --slot delete                                                  
+      131 -        ; Free the rp-slot now: push new-free onto stack      
+      132 -        rp-slot cur-free swap! , cur-max                      
+      110        } {
+      134 -        ; Neither save nor restore                            
+      135 -        result-map slot-map cur-free cur-max                  
+      111 +        result-map . cur-free cur-max                         
+      112        } ?!
+      137 -    } ?! /final-max /new-free /final-slot-map /final-map      
+      113 +    } {                                                       
+      114 +      result-map . cur-free cur-max                           
+      115 +    } ?! /final-max /final-free /rp-slot /final-map           
+      116  
+      139 -    ; Free the ctx-slot (used only for this call)             
+      140 -    ctx-slot isNil { new-free } { ctx-slot new-free swap! , } 
+          -?! /new-free                                                  
+      117 +    ; Free the allocated slots (push back to free list)       
+      118 +    final-free /new-free                                      
+      119 +    ctx-slot isNil { } { ctx-slot new-free swap! , /new-free }
+          + ?!                                                           
+      120 +    rp-slot isNil { } { rp-slot new-free swap! , /new-free } ?
+          +!                                                             
+      121  
+      142 -    final-map final-slot-map new-free final-max               
+      122 +    final-map slot-map new-free final-max                     
+      123    } {
+      124      ; Not an identifier, or operator: no slot
+      125      live-map slot-map free max
+
+● Now remove 'or from the capture list since we're not using it:
+
+● Update(lib/slots.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+       7  ; slot-map: identifier -> slot mapping
+       8  ; free: cons list of free slots (nil if empty)
+       9  ; max: next slot number to allocate if free list is empty
+      10 -['delete-keys 'reduce 'swap 'and 'or] { /term-fn /seq-fn /max /
+         -free /slot-map /live-map /term                                 
+      10 +['delete-keys 'reduce 'swap 'and] { /term-fn /seq-fn /max /free
+         + /slot-map /live-map /term                                     
+      11    term isBinder {
+      12      ; Binder: allocate slot if used (is-used=0), else no slot
+      13      term intern idToIdent /ident
+
+● Wait, I realize the issue now. With the simplified slots, only the LAST non-tail call has rp-save-slot. But for multiple non-tail calls, we need to save BEFORE the first one. Let me think about this more carefully.
+
+  For {g! f! +} (both calls are non-tail):
+  - f! is marked with restore-return=0 (last non-tail)
+  - g! has no marker
+  - But g! corrupts RP before f! even runs!
+
+  I need to mark ALL non-tail calls so slots can allocate the shared slot on the first one. Let me add a simple is-nontail=0 flag in liveness:
+
+● Update(lib/liveness.froth)
+  ⎿  Added 1 line                                                        
+      90        ; Register restores use the frame
+      91        needs-restore-ctx needs-restore-return 0 = or! seen-frame
+           1 = and! /needs-leave-frame
+      92        bnd-map
+      93 +      0 'is-nontail :  ; mark all non-tail calls for RP slot sh
+         +aring                                                          
+      94        needs-restore-ctx { 0 'restore-context : } { } ?!
+      95        needs-restore-return { 0 'restore-return : } { } ?!
+      96        needs-leave-frame { 0 'leave-frame : } { } ?!
+
+● Now update slots to use is-nontail=0 for shared RP slot allocation:
+
+● Update(lib/slots.froth)
+  ⎿  Added 25 lines, removed 13 lines                                    
+       97        live-map . free max
+       98      } ?! /cur-max /cur-free /ctx-slot /result-map
+       99  
+      100 -    ; Allocate rp-save-slot if restore-return=0               
+      101 -    ; The slot is allocated and freed per-call (same as ctx-sa
+          -ve-slot)                                                      
+      102 -    result-map 'restore-return in 0 = {                       
+      103 -      result-map 'restore-return @ 0 = {                      
+      100 +    ; Allocate rp-save-slot for non-tail calls (is-nontail=0) 
+      101 +    ; First non-tail call allocates, later ones reuse via rp-a
+          +ctive-slot in slot-map                                        
+      102 +    ; Last non-tail call (restore-return=0) frees the slot    
+      103 +    result-map 'is-nontail in 0 = {                           
+      104 +      ; Non-tail call: allocate or reuse RP slot              
+      105 +      slot-map 'rp-active-slot in 0 = {                       
+      106 +        ; Already allocated, reuse it                         
+      107 +        slot-map 'rp-active-slot @ /rp-slot                   
+      108 +        result-map rp-slot 'rp-save-slot : slot-map cur-free c
+          +ur-max                                                        
+      109 +      } {                                                     
+      110 +        ; First non-tail call, allocate new slot              
+      111          cur-free isNil {
+      105 -          result-map cur-max 'rp-save-slot : cur-max cur-free 
+          -cur-max 1 +                                                   
+      112 +          result-map cur-max 'rp-save-slot : slot-map cur-max 
+          +'rp-active-slot : cur-free cur-max 1 +                        
+      113          } {
+      114            cur-free fst /slot
+      108 -          result-map slot 'rp-save-slot : slot cur-free snd cu
+          -r-max                                                         
+      115 +          result-map slot 'rp-save-slot : slot-map slot 'rp-ac
+          +tive-slot : cur-free snd cur-max                              
+      116          } ?!
+      110 -      } {                                                     
+      111 -        result-map . cur-free cur-max                         
+      117        } ?!
+      118 +      ; Check if this is the last non-tail call (restore-retur
+          +n=0) - free the slot                                          
+      119 +      result-map 'restore-return in 0 = {                     
+      120 +        ; Last call: free the slot, remove from slot-map      
+      121 +        /after-max /after-free /after-slot-map /after-map     
+      122 +        after-slot-map 'rp-active-slot @ /rp-slot             
+      123 +        after-map after-slot-map 'rp-active-slot delete rp-slo
+          +t after-free swap! , after-max                                
+      124 +      } { } ?!                                                
+      125      } {
+      114 -      result-map . cur-free cur-max                           
+      115 -    } ?! /final-max /final-free /rp-slot /final-map           
+      126 +      ; Tail call: no RP slot needed                          
+      127 +      result-map slot-map cur-free cur-max                    
+      128 +    } ?! /final-max /final-free /final-slot-map /final-map    
+      129  
+      117 -    ; Free the allocated slots (push back to free list)       
+      130 +    ; Free the ctx-slot (used only for this call)             
+      131      final-free /new-free
+      132      ctx-slot isNil { } { ctx-slot new-free swap! , /new-free }
+            ?!
+      120 -    rp-slot isNil { } { rp-slot new-free swap! , /new-free } ?
+          -!                                                             
+      133  
+      122 -    final-map slot-map new-free final-max                     
+      134 +    final-map final-slot-map new-free final-max               
+      135    } {
+      136      ; Not an identifier, or operator: no slot
+      137      live-map slot-map free max
+  ⎿  Interrupted · What should Claude do instead?
+
+> Marking all non-tail calls does not make sense. Either you need to save 
+the return pointer or you don't. The slot needs to be allocated at the first
+ non-tail call. `slots` only needs that one flag. Tell me what you plan to 
+write, but do not write any code. 
+
+● You're right. Let me think through this clearly.
+
+  The core issue: Slots walks left-to-right. It needs to allocate the RP slot when it encounters the first non-tail call. But liveness (walking right-to-left) only marks the last non-tail call with restore-return=0.
+
+  The insight: If the function has ANY non-tail calls, liveness already sets needs-save-return=0 on the closure node. This is the "one flag" - it's at the function level.
+
+  My plan:
+
+  1. Liveness (no change needed):
+    - restore-return=0 on the last non-tail call
+    - needs-save-return=0 on the closure node if any non-tail calls exist
+  2. Slots:
+    - When starting to process a closure body, check if needs-save-return=0
+    - If yes, allocate the RP slot immediately (before processing terms) and store it as rp-slot on the closure node
+    - Individual Apply nodes don't get rp-save-slot - they'll use the function-level rp-slot
+  3. Codegen:
+    - Check if the function node has rp-slot
+    - If yes, emit save before the first ocCall (track with rp-save-done marker)
+    - Emit restore after any call with restore-return=0
+
+  This way, the RP slot is allocated at the function level based on one flag (needs-save-return), and codegen emits save before whichever call happens to be first. We don't need to mark individual calls as non-tail.
+
+  Does this make sense?
+
+> yes, please try to implement that 
+
+● Read(lib/liveness.froth)
+  ⎿  Read 30 lines
+
+● Read(lib/liveness.froth)
+  ⎿  Read 25 lines
+
+● First, remove the is-nontail flag from liveness (not needed - we'll use function-level needs-save-return):
+
+● Update(lib/liveness.froth)
+  ⎿  Removed 1 line                                                      
+      90        ; Register restores use the frame
+      91        needs-restore-ctx needs-restore-return 0 = or! seen-frame
+           1 = and! /needs-leave-frame
+      92        bnd-map
+      93 -      0 'is-nontail :  ; mark all non-tail calls for RP slot sh
+         -aring                                                          
+      93        needs-restore-ctx { 0 'restore-context : } { } ?!
+      94        needs-restore-return { 0 'restore-return : } { } ?!
+      95        needs-leave-frame { 0 'leave-frame : } { } ?!
+
+● Now update slots. First, let me look at the Func handling:
+
+● Read(lib/slots.froth)
+  ⎿  Read 30 lines
+
+● Update the Func handling to allocate RP slot at function level:
+
+● Update(lib/slots.froth)
+  ⎿  Added 14 lines, removed 4 lines                                     
+      32      live-map 'body @ /inner-body
+      33      live-map 'dead-set @ /dead-set
+      34      term # 1 - /last-idx
+      35 -    term inner-body $ . 0 0 seq-fn term-fn seq-fn!             
+      36 -    /inner-max /discard-free /discard-slot-map /new-body       
+      35 +    ; Check if this closure needs RP saving (has non-tail calls
+         +)                                                              
+      36 +    live-map 'needs-save-return in 0 = {                       
+      37 +      ; Allocate slot 0 for RP, start body slots at 1          
+      38 +      term inner-body $ . 1 1 seq-fn term-fn seq-fn!           
+      39 +      /inner-max /discard-free /discard-slot-map /new-body     
+      40 +      live-map new-body 'body : inner-max 'max-slots : 0 'rp-sl
+         +ot :                                                           
+      41 +    } {                                                        
+      42 +      ; No RP saving needed                                    
+      43 +      term inner-body $ . 0 0 seq-fn term-fn seq-fn!           
+      44 +      /inner-max /discard-free /discard-slot-map /new-body     
+      45 +      live-map new-body 'body : inner-max 'max-slots :         
+      46 +    } ?! /result-map                                           
+      47      ; Free slots for vars in dead-set (their last use was this 
+          capture)
+      48      ; Only free if the var is in slot-map (bound in this scope,
+           not captured from outer)
+      49      dead-set keys free { /v /f
+      50        slot-map v in 0 = { slot-map v @ f swap! , } { f } ?!
+      51      } reduce! /new-free
+      42 -    ; Return map with updated body and max-slots               
+      43 -    live-map new-body 'body : inner-max 'max-slots : slot-map n
+         -ew-free max                                                    
+      52 +    ; Return result                                            
+      53 +    result-map slot-map new-free max                           
+      54    } {
+      55    term isGen {
+      56      ; Generator: same frame, but binders are locally scoped
+
+● Now simplify the Apply handling - remove per-call RP slot logic:
+
+● Read(lib/slots.froth)
+  ⎿  Read 60 lines
+
+● Update(lib/slots.froth)
+  ⎿  Added 4 lines, removed 41 lines                                     
+       83      } ?!
+       84    } {
+       85    term isApply {
+       86 -    ; Apply: allocate slots for register saves if needed      
+       87 -    ; Slots are allocated then immediately freed (only used du
+          -ring this call)                                               
+       88 -                                                              
+       89 -    ; Allocate ctx-save-slot if restore-context=0             
+       90 -    ; Returns: (result-map ctx-slot cur-free cur-max)         
+       86 +    ; Apply: allocate ctx-save-slot if restore-context=0      
+       87 +    ; RP slot is handled at function level (rp-slot on closure
+          + node)                                                        
+       88      live-map 'restore-context in 0 = {
+       89        live-map 'restore-context @ 0 = {
+       90          free isNil {
+       94 -          ; Allocate new slot                                 
+       91            live-map max 'ctx-save-slot : max free max 1 +
+       92          } {
+       97 -          ; Reuse from free list                              
+       93            free fst /slot
+       94            live-map slot 'ctx-save-slot : slot free snd max
+       95          } ?!
+       96        } {
+      102 -        ; Key exists but value is not 0                       
+       97          live-map . free max
+       98        } ?!
+       99      } {
+      106 -      ; Key doesn't exist                                     
+      100        live-map . free max
+      108 -    } ?! /cur-max /cur-free /ctx-slot /result-map             
+      101 +    } ?! /final-max /final-free /ctx-slot /final-map          
+      102  
+      110 -    ; Allocate rp-save-slot for non-tail calls (is-nontail=0) 
+      111 -    ; First non-tail call allocates, later ones reuse via rp-a
+          -ctive-slot in slot-map                                        
+      112 -    ; Last non-tail call (restore-return=0) frees the slot    
+      113 -    result-map 'is-nontail in 0 = {                           
+      114 -      ; Non-tail call: allocate or reuse RP slot              
+      115 -      slot-map 'rp-active-slot in 0 = {                       
+      116 -        ; Already allocated, reuse it                         
+      117 -        slot-map 'rp-active-slot @ /rp-slot                   
+      118 -        result-map rp-slot 'rp-save-slot : slot-map cur-free c
+          -ur-max                                                        
+      119 -      } {                                                     
+      120 -        ; First non-tail call, allocate new slot              
+      121 -        cur-free isNil {                                      
+      122 -          result-map cur-max 'rp-save-slot : slot-map cur-max 
+          -'rp-active-slot : cur-free cur-max 1 +                        
+      123 -        } {                                                   
+      124 -          cur-free fst /slot                                  
+      125 -          result-map slot 'rp-save-slot : slot-map slot 'rp-ac
+          -tive-slot : cur-free snd cur-max                              
+      126 -        } ?!                                                  
+      127 -      } ?!                                                    
+      128 -      ; Check if this is the last non-tail call (restore-retur
+          -n=0) - free the slot                                          
+      129 -      result-map 'restore-return in 0 = {                     
+      130 -        ; Last call: free the slot, remove from slot-map      
+      131 -        /after-max /after-free /after-slot-map /after-map     
+      132 -        after-slot-map 'rp-active-slot @ /rp-slot             
+      133 -        after-map after-slot-map 'rp-active-slot delete rp-slo
+          -t after-free swap! , after-max                                
+      134 -      } { } ?!                                                
+      135 -    } {                                                       
+      136 -      ; Tail call: no RP slot needed                          
+      137 -      result-map slot-map cur-free cur-max                    
+      138 -    } ?! /final-max /final-free /final-slot-map /final-map    
+      139 -                                                              
+      103      ; Free the ctx-slot (used only for this call)
+      104      final-free /new-free
+      105      ctx-slot isNil { } { ctx-slot new-free swap! , /new-free }
+            ?!
+      106  
+      144 -    final-map final-slot-map new-free final-max               
+      107 +    final-map slot-map new-free final-max                     
+      108    } {
+      109      ; Not an identifier, or operator: no slot
+      110      live-map slot-map free max
+
+● Now update codegen. First let me read the current Apply handling:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 80 lines
+
+● I need to thread rp-slot through slot-map since it's on the function node, not individual term nodes. Let me update codegen:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 28 lines
+
+● Update the main codegen function to add rp-slot to initial slot-map:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines, removed 1 line                                       
+      314    max-slots 0 > {
+      315      ocEnterFrame addr emit-at! max-slots swap! emit-at! 0
+      316    } { addr 1 } ?! /entered /start-addr
+      317 +  ; Build initial slot-map with rp-slot if function needs RP s
+          +aving                                                         
+      318 +  node 'rp-slot in 0 = { $ node 'rp-slot @ 'rp-slot : } { $ } 
+          +?! /init-slot-map                                             
+      319    ; Compile main body, collecting deferred closures
+      318 -  func body max-slots start-addr entered $ free-vars . 0 codeg
+          -en-seq-impl codegen-term-impl codegen-seq-impl!               
+      320 +  func body max-slots start-addr entered init-slot-map free-va
+          +rs . 0 codegen-seq-impl codegen-term-impl codegen-seq-impl!   
+      321    /deferred /discard-slot-map /discard-entered /after-body
+      322    ; Compile all deferred closures
+      323    after-body deferred codegen-seq-impl codegen-term-impl codeg
+           en-deferred-impl codegen-deferred-impl!
+
+● Now update codegen-deferred-impl similarly:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 35 lines
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines, removed 1 line                                       
+      292      inner-max 0 > {
+      293        ocEnterFrame addr emit-at! inner-max swap! emit-at! 0
+      294      } { addr 1 } ?! /entered /start-addr
+      295 -    term inner-body inner-max start-addr entered $ inner-free-
+          -vars . 0 seq-fn term-fn seq-fn!                               
+      295 +    ; Build initial slot-map with rp-slot if function needs RP
+          + saving                                                       
+      296 +    node 'rp-slot in 0 = { $ node 'rp-slot @ 'rp-slot : } { $ 
+          +} ?! /init-slot-map                                           
+      297 +    term inner-body inner-max start-addr entered init-slot-map
+          + inner-free-vars . 0 seq-fn term-fn seq-fn!                   
+      298      /inner-deferred /discard-slot-map /discard-entered /after-
+           addr
+      299  
+      300      ; Process any closures deferred from the inner function
+
+● Now update the Apply handling to use slot-map 'rp-slot:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 8 lines, removed 23 lines                                     
+       86    } {
+       87    term isApply {
+       88      ; Apply: handle saves, call, restores
+       89 -    ; Check if this is a tail call (no save slots needed)     
+       90 -    ; in returns 0 if key exists, 1 if not                    
+       91 -    ; Tail call if BOTH keys don't exist (both in return 1, su
+          -m = 2)                                                        
+       92 -    node 'ctx-save-slot in /no-ctx-save                       
+       93 -    node 'rp-save-slot in /no-rp-save                         
+       94 -    no-ctx-save no-rp-save + 2 = /is-tail-call                
+       95 -                                                              
+       96 -    ; Check if we need to save/restore context                
+       97 -    no-ctx-save {                                             
+       98 -      node 'ctx-save-slot @ /slot                             
+       99 -      slot isNil { . } { slot } ?!                            
+      100 -    } { . } ?! /ctx-slot                                      
+      101 -                                                              
+      102 -    ; Check if we need to save RP (save-return=0 on this call)
+      103 -    node 'save-return in 0 = { node 'save-return @ 0 = } { 1 }
+          - ?! /needs-save-rp                                            
+       89 +    ; Get ctx-save-slot from node (per-call) and rp-slot from 
+          +slot-map (function-level)                                     
+       90 +    node 'ctx-save-slot in 0 = { node 'ctx-save-slot @ } { . }
+          + ?! /ctx-slot                                                 
+       91 +    slot-map 'rp-slot in 0 = { slot-map 'rp-slot @ } { . } ?! 
+          +/rp-slot                                                      
+       92      ; Check if we need to restore RP (restore-return=0 on this
+            call)
+       93      node 'restore-return in 0 = { node 'restore-return @ 0 = }
+            { 1 } ?! /needs-restore-rp
+      106 -    ; Get the RP save slot if we need either                  
+      107 -    no-rp-save {                                              
+      108 -      node 'rp-save-slot @ /slot                              
+      109 -      slot isNil { . } { slot } ?!                            
+      110 -    } { . } ?! /rp-slot                                       
+       94  
+       95 +    ; Tail call if no ctx-slot and no rp-slot                 
+       96 +    ctx-slot isNil rp-slot isNil and! /is-tail-call           
+       97 +                                                              
+       98      ; Enter frame if needed for saves
+       99      addr entered /cur-entered /cur-addr
+      100      ctx-slot isNil { cur-addr cur-entered } {
+     ...
+      108      ctx-slot isNil { cur-addr } {
+      109        [ ocSaveContextPtr ocPopLocal ctx-slot ] cur-addr emit-a
+           ll-at!
+      110      } ?! /cur-addr
+      125 -    ; Emit RP save before call (only ONCE - first call with sa
+          -ve-return)                                                    
+      126 -    ; Check if already saved via 'rp-save-done marker in slot-
+          -map                                                           
+      127 -    slot-map 'rp-save-done in 1 = needs-save-rp and! /do-save-
+          -rp                                                            
+      111 +    ; Emit RP save before first non-tail call (check rp-save-d
+          +one marker)                                                   
+      112 +    slot-map 'rp-save-done in 1 = rp-slot isNil not! and! /do-
+          +save-rp                                                       
+      113      do-save-rp {
+      114        [ ocSaveReturnPtr ocPopLocal rp-slot ] cur-addr emit-all
+           -at!
+      115      } { cur-addr } ?! /cur-addr
+
+● Now let's test:
+
+● Bash(make test 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+     ./run_tests.sh
+     PASS: add
+     PASS: apply_op
+     PASS: arithmetic
+     PASS: arity
+     PASS: array
+     … +131 lines (ctrl+o to see all)
+
+● The test expects rp-save-slot on apply nodes, but now it's rp-slot on the closure node. I need to update the test:
+
+● Read(tests/save_slots.froth)
+  ⎿  Read 62 lines
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀   claude-opus-4-5-20251101 · 200k/200k tokens (100%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 74 tokens (0.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 137.4k tokens (68.7%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 19 tokens
+     └ MERCURY.md: 55 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+

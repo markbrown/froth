@@ -1030,25 +1030,31 @@ operator_close(!Array, !Ptr) :-
     ).
 
 %-----------------------------------------------------------------------%
-% closureEnv: ( closure -- env ) Get the environment from a closure
+% closureEnv: ( closure -- env-or-context )
+% Get the environment from a closure or context from a bytecode closure
 %-----------------------------------------------------------------------%
 
 operator_closure_env(!Array, !Ptr) :-
     datastack.pop("closureEnv", V, !Array, !Ptr),
     ( if V = closureval(Env, _) then
         datastack.push(mapval(Env), !Array, !Ptr)
+    else if V = bytecodeval(Context, _) then
+        datastack.push(arrayval(Context), !Array, !Ptr)
     else
         throw(type_error("closure", V))
     ).
 
 %-----------------------------------------------------------------------%
-% closureBody: ( closure -- body ) Get the body from a closure
+% closureBody: ( closure -- body-or-addr )
+% Get the body from a closure or code address from a bytecode closure
 %-----------------------------------------------------------------------%
 
 operator_closure_body(!Array, !Ptr) :-
     datastack.pop("closureBody", V, !Array, !Ptr),
     ( if V = closureval(_, Body) then
         datastack.push(termval(function(Body)), !Array, !Ptr)
+    else if V = bytecodeval(_, CodeAddr) then
+        datastack.push(intval(CodeAddr), !Array, !Ptr)
     else
         throw(type_error("closure", V))
     ).
