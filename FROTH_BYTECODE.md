@@ -31,16 +31,22 @@ Example: `{/x x x * f! 1 +}`
 
 Non-tail calls may need to save and restore registers:
 
-- **Context pointer**: Saved if a free variable is accessed after the call
-- **Return pointer**: Saved for the rightmost non-tail call only
+- **Context pointer**: Saved before and restored after each call that needs it
+- **Return pointer**: Saved before the leftmost non-tail call, restored after the rightmost
+
+For RP, the save and restore may happen at different calls:
+- `f! g! +` — save RP before `f!`, restore after `g!`
+- `f! +` — save and restore both happen around `f!`
 
 The liveness pass marks:
 - `'restore-context=0` on calls needing context restore
-- `'restore-return=0` on the last non-tail call (first from right)
+- `'restore-return=0` on the rightmost non-tail call (where RP is restored)
 
 The slots pass allocates:
-- `'ctx-save-slot` for context saves
-- `'rp-save-slot` for return pointer saves
+- `'ctx-save-slot` on calls with `'restore-context=0`
+- `'rp-save-slot` on calls with `'restore-return=0`
+
+Codegen saves RP before the first non-tail call it encounters (if the function has any), using the slot from the call with `'restore-return=0`.
 
 ## Frame Entry/Exit
 
