@@ -10,6 +10,7 @@ This document describes the compiler infrastructure for Froth, including bytecod
 | `emit-all-at` | bytecode | Write array to bytecode store |
 | `emit-at` | bytecode | Write value to bytecode store |
 | `liveness` | liveness | Analyze last references in function |
+| `op-table` | ops | Constant: map from operator identifiers to opcodes |
 | `new-apply-node` | node | Create apply node with defaults |
 | `new-binder-node` | node | Create binder node with defaults |
 | `new-closure-node` | node | Create closure node with defaults |
@@ -39,6 +40,29 @@ Track the current address manually:
 ```
 
 The module also defines opcode constants (`ocPushInt`, `ocOp`, `ocReturn`, etc.) and operator constants (`opAdd`, `opSub`, `opMul`, etc.) for bytecode generation. See `lib/bytecode.froth` for the full list.
+
+## Ops (ops.froth)
+
+Operator table for bytecode generation.
+
+| Name | Type | Description |
+|------|------|-------------|
+| `op-table` | map | Map from quoted operator identifiers to opcodes |
+
+The `op-table` constant maps each operator identifier to its bytecode opcode number. This is kept in sync with `src/operator_table.m`.
+
+```
+op-table '+ @              ; 2 (opcode for addition)
+op-table 'print @          ; 0 (opcode for print)
+op-table 'close @          ; 48 (opcode for close)
+```
+
+Use with bytecode generation:
+
+```
+op-table '+ @ /opAdd
+[ ocOp opAdd ocReturn ] 0 emit-all-at! drop!
+```
 
 ## Preflight (preflight.froth)
 
