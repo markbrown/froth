@@ -10,7 +10,8 @@ This document describes the compiler infrastructure for Froth, including bytecod
 | `emit-all-at` | bytecode | Write array to bytecode store |
 | `emit-at` | bytecode | Write value to bytecode store |
 | `liveness` | liveness | Analyze last references in function |
-| `op-table` | ops | Constant: map from operator identifiers to opcodes |
+| `operator-table` | ops | Constant: map from operator identifiers to codes |
+| `instruction-table` | bytecode | Constant: map from symbols to VM instruction codes |
 | `new-apply-node` | node | Create apply node with defaults |
 | `new-binder-node` | node | Create binder node with defaults |
 | `new-closure-node` | node | Create closure node with defaults |
@@ -26,20 +27,54 @@ This document describes the compiler infrastructure for Froth, including bytecod
 
 Helpers for bytecode generation. The bytecode store is accessed via the `peek` and `poke` operators.
 
-| Name | Stack Effect | Description |
-|------|--------------|-------------|
-| `emit-at` | `( value addr -- addr' )` | Write value at addr, return next addr |
-| `emit-all-at` | `( arr addr -- addr' )` | Write array starting at addr, return next addr |
+| Name | Type | Description |
+|------|------|-------------|
+| `instruction-table` | map | Map from symbols to VM instruction codes |
+| `emit-at` | function | `( value addr -- addr' )` Write value at addr, return next addr |
+| `emit-all-at` | function | `( arr addr -- addr' )` Write array starting at addr, return next addr |
+
+The `instruction-table` constant maps symbols to VM instruction codes. Available instructions:
+
+| Symbol | Code | Description |
+|--------|------|-------------|
+| `'push-int` | 0 | Push next value as integer |
+| `'op` | 1 | Execute operator (next value is opcode) |
+| `'return` | 2 | Return from function |
+| `'push-string` | 3 | Push string from context |
+| `'push-context` | 4 | Push value from context slot |
+| `'pop-unused` | 5 | Discard top of stack |
+| `'push-local` | 6 | Push value from frame slot |
+| `'pop-local` | 7 | Pop value to frame slot |
+| `'enter-frame` | 8 | Allocate frame with n slots |
+| `'leave-frame` | 9 | Deallocate frame |
+| `'start-array` | 10 | Begin array generator |
+| `'end-array` | 11 | End array generator |
+| `'call` | 12 | Call bytecode closure |
+| `'save-return-ptr` | 13 | Push return pointer to stack |
+| `'restore-return-ptr` | 14 | Pop return pointer from stack |
+| `'save-context-ptr` | 15 | Push context pointer to stack |
+| `'restore-context-ptr` | 16 | Pop context pointer from stack |
 
 Track the current address manually:
 
 ```
+instruction-table 'push-int @ /ocPushInt
+instruction-table 'return @ /ocReturn
+
 0 /here
 [ ocPushInt 42 ocReturn ] here emit-all-at! /here
 [] 0 close !               ; execute bytecode at address 0
 ```
 
-The module also defines opcode constants (`ocPushInt`, `ocOp`, `ocReturn`, etc.) and operator constants (`opAdd`, `opSub`, `opMul`, etc.) for bytecode generation. See `lib/bytecode.froth` for the full list.
+Use with `operator-table` for operator codes:
+
+```
+operator-table '+ @ /opAdd
+instruction-table 'op @ /ocOp
+
+[ ocPushInt 1 ocPushInt 2 ocOp opAdd ocReturn ] 0 emit-all-at! drop!
+[] 0 close !               ; returns 3
+```
 
 ## Ops (ops.froth)
 
@@ -47,20 +82,20 @@ Operator table for bytecode generation.
 
 | Name | Type | Description |
 |------|------|-------------|
-| `op-table` | map | Map from quoted operator identifiers to opcodes |
+| `operator-table` | map | Map from quoted operator identifiers to codes |
 
-The `op-table` constant maps each operator identifier to its bytecode opcode number. This is kept in sync with `src/operator_table.m`.
+The `operator-table` constant maps each operator identifier to its bytecode operator code. This is kept in sync with `src/operator_table.m`.
 
 ```
-op-table '+ @              ; 2 (opcode for addition)
-op-table 'print @          ; 0 (opcode for print)
-op-table 'close @          ; 48 (opcode for close)
+operator-table '+ @        ; 2 (code for addition)
+operator-table 'print @    ; 0 (code for print)
+operator-table 'close @    ; 48 (code for close)
 ```
 
 Use with bytecode generation:
 
 ```
-op-table '+ @ /opAdd
+operator-table '+ @ /opAdd
 [ ocOp opAdd ocReturn ] 0 emit-all-at! drop!
 ```
 
