@@ -6,12 +6,15 @@ A bytecode compiler for Froth to improve execution performance by eliminating tr
 
 ## Compiler Pipeline
 
-The compiler consists of four passes that analyze a function and produce metadata for code generation:
+The compiler consists of analysis passes that produce metadata for code generation:
 
-1. **Boundness** (left-to-right): Classifies identifiers as bound (local) or free (captured), assigns context slots to free variables
-2. **Liveness** (right-to-left): Marks last references, dead binders, and determines register save/restore points
-3. **Slots** (left-to-right): Allocates frame slots for bound variables and register saves, with slot reuse
-4. **Codegen** (left-to-right): Emits bytecode based on the metadata from previous passes
+1. **Preflight**: Checks for unsupported constructs (`env`, `import`, `applyOperator`)
+2. **Boundness** (left-to-right): Classifies identifiers as bound (local) or free (captured), assigns context slots to free variables
+3. **Liveness** (right-to-left): Marks last references, dead binders, and determines register save/restore points
+4. **Slots** (left-to-right): Allocates frame slots for bound variables and register saves, with slot reuse
+5. **Codegen** (left-to-right): Emits bytecode based on the metadata from previous passes
+
+See FROTH_COMPILER.md for documentation of the analysis passes (`preflight`, `boundness`, `liveness`, `slots`) and bytecode helpers (`instruction-table`, `operator-table`, `emit-at`, `emit-all-at`).
 
 ## Frame Slot Allocation
 
@@ -50,40 +53,42 @@ Codegen saves RP before the first non-tail call it encounters (if the function h
 
 ## Frame Entry/Exit
 
-- `enterFrame` is emitted when the first slot is needed (binder or save)
-- `leaveFrame` is emitted after the last term using the frame (marked with `'leave-frame=0`)
+- `enter-frame` is emitted when the first slot is needed (binder or save)
+- `leave-frame` is emitted after the last term using the frame (marked with `'leave-frame=0`)
 
 Functions with no binders and only tail calls need no frame at all.
 
 ## Bytecode Instructions
 
+Instructions are identified by codes from `instruction-table`. See FROTH_COMPILER.md for the full table.
+
 ```
 ; Frames
-enterFrame n       ; allocate n frame slots (FP -= n)
-leaveFrame n       ; deallocate n frame slots (FP += n)
+enter-frame n      ; allocate n frame slots (FP -= n)
+leave-frame n      ; deallocate n frame slots (FP += n)
 
 ; Register save/restore (push/pop to stack, then store/load from frame)
-saveContextPtr     ; push context array onto stack
-restoreContextPtr  ; pop context array from stack
-saveReturnPtr      ; push return pointer onto stack
-restoreReturnPtr   ; pop return pointer from stack
+save-context-ptr   ; push context array onto stack
+restore-context-ptr ; pop context array from stack
+save-return-ptr    ; push return pointer onto stack
+restore-return-ptr ; pop return pointer from stack
 
 ; Values
-pushInt n          ; push integer n
-pushString n       ; push string with intern ID n
+push-int n         ; push integer n
+push-string n      ; push string with intern ID n
 
 ; Variables
-pushContext n      ; push value from context slot n
-pushLocal n        ; push value from frame slot n
-popLocal n         ; pop value into frame slot n
-popUnused          ; pop and discard value
+push-context n     ; push value from context slot n
+push-local n       ; push value from frame slot n
+pop-local n        ; pop value into frame slot n
+pop-unused         ; pop and discard value
 
 ; Operators
-op n               ; execute operator number n
+op n               ; execute operator number n (from operator-table)
 
 ; Generators
-startArray         ; save SP for array collection
-endArray           ; collect values since saved SP into array
+start-array        ; save SP for array collection
+end-array          ; collect values since saved SP into array
 
 ; Control
 call               ; pop closure, set RP to next instruction, jump
@@ -94,16 +99,16 @@ return             ; jump to RP (or exit VM if RP = -1)
 
 **Non-tail call with saves:**
 ```
-saveContextPtr
-popLocal <ctx-slot>
-saveReturnPtr
-popLocal <rp-slot>
+save-context-ptr
+pop-local <ctx-slot>
+save-return-ptr
+pop-local <rp-slot>
 <push closure>
 call
-pushLocal <rp-slot>
-restoreReturnPtr
-pushLocal <ctx-slot>
-restoreContextPtr
+push-local <rp-slot>
+restore-return-ptr
+push-local <ctx-slot>
+restore-context-ptr
 ```
 
 **Tail call (no saves needed):**
@@ -125,11 +130,13 @@ call
 - `context`: Array of captured free variable values (indexed by slot)
 - `addr`: Starting address in the bytecode store
 
-Created via `close` with array + int arguments.
+Created via `close` with array + int arguments. Decomposed via `open` back to array + int.
 
 ## Limitations
 
-Compilation fails for closures using:
-- `env` (needs map-based environment)
-- `restore` (dynamically replaces environment)
-- Quoted terms (would need a constant pool)
+Compilation fails (preflight returns 1) for closures using:
+- `env` (requires dynamic environment access)
+- `import` (modifies environment at runtime)
+- `applyOperator` (dynamic operator dispatch)
+
+These constructs require the tree-walking interpreter.
