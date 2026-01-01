@@ -985,7 +985,9 @@ operator_close(!Array, !Ptr) :-
     ).
 
 %-----------------------------------------------------------------------%
-% open: ( closure -- env body ) Decompose a closure into env and body
+% open: Decompose a closure into its components (inverse of close)
+%   ( closure -- env body )      term closure -> map + function
+%   ( bytecode -- context addr ) bytecode closure -> array + int
 %-----------------------------------------------------------------------%
 
 operator_open(!Array, !Ptr) :-
@@ -993,8 +995,11 @@ operator_open(!Array, !Ptr) :-
     ( if V = closureval(Env, Body) then
         datastack.push(mapval(Env), !Array, !Ptr),
         datastack.push(termval(function(Body)), !Array, !Ptr)
+    else if V = bytecodeval(Context, Addr) then
+        datastack.push(arrayval(Context), !Array, !Ptr),
+        datastack.push(intval(Addr), !Array, !Ptr)
     else
-        throw(type_error("closure", V))
+        throw(type_error("closure or bytecode", V))
     ).
 
 %-----------------------------------------------------------------------%

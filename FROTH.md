@@ -172,8 +172,8 @@ Evaluation maintains three pieces of state:
 |------|--------------|-------------|
 | `env` | `( -- map )` | Push current environment as a map |
 | `restore` | `( map -- )` | Replace current environment with the map |
-| `close` | `( env body -- closure )` | Create a closure from environment and function body |
-| `open` | `( closure -- env body )` | Decompose a closure into environment and body (inverse of `close`) |
+| `close` | `( env body -- closure )` | Create a closure from (map, term) or (array, int) |
+| `open` | `( closure -- env body )` | Decompose a closure to (map, term) or (array, int) |
 | `unwrap` | `( 'x -- x )` | Extract inner from quoted value or quoted term |
 | `intern` | `( a -- int )` | Get intern id from string, identifier, or binder |
 | `idToString` | `( int -- string )` | Create string from intern id |
