@@ -30,9 +30,11 @@
 :- implementation.
 
 :- import_module array.
+:- import_module assoc_list.
 :- import_module int.
 :- import_module list.
 :- import_module map.
+:- import_module pair.
 :- import_module string.
 
 %-----------------------------------------------------------------------%
@@ -83,7 +85,10 @@ value_to_write_string(ST, arrayval(A)) = "[ " ++ ArrayElems ++ "]" :-
         List),
     ArrayElems = string.append_list(ElemStrings).
 value_to_write_string(ST, mapval(M)) = Result :-
-    map.foldl(map_entry_to_string(ST), M, "$", Result).
+    map.to_assoc_list(M, Pairs),
+    % Sort by key name (not string_id) for deterministic output
+    list.sort(compare_by_key_name(ST), Pairs, SortedPairs),
+    list.foldl(map_entry_to_string(ST), SortedPairs, "$", Result).
 value_to_write_string(ST, termval(T)) = "'" ++ term_to_write_string(ST, T).
 value_to_write_string(_, nilval) = ".".
 value_to_write_string(ST, consval(H, T)) =
@@ -93,10 +98,17 @@ value_to_write_string(ST, closureval(_, Body)) =
 value_to_write_string(_, bytecodeval(_, Addr)) =
     "<bytecode:" ++ int_to_string(Addr) ++ ">".
 
-:- pred map_entry_to_string(string_table::in, string_id::in, value::in,
+:- pred compare_by_key_name(string_table::in,
+    pair(string_id, value)::in, pair(string_id, value)::in,
+    comparison_result::out) is det.
+
+compare_by_key_name(ST, K1 - _, K2 - _, Result) :-
+    compare(Result, lookup_string(ST, K1), lookup_string(ST, K2)).
+
+:- pred map_entry_to_string(string_table::in, pair(string_id, value)::in,
     string::in, string::out) is det.
 
-map_entry_to_string(ST, NameId, V, !Acc) :-
+map_entry_to_string(ST, NameId - V, !Acc) :-
     !:Acc = !.Acc ++ " " ++ value_to_write_string(ST, V) ++ " '" ++
         lookup_string(ST, NameId) ++ " :".
 
