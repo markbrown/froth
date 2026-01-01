@@ -1,14 +1,33 @@
 %-----------------------------------------------------------------------%
-% value_format.m
-% String conversion utilities for Froth values and terms.
+% values.m
+% Predicates and functions for working with Froth values.
 %-----------------------------------------------------------------------%
 
-:- module value_format.
+:- module values.
 :- interface.
+
+:- import_module list.
 
 :- import_module types.
 
 %-----------------------------------------------------------------------%
+
+    % values_equal(V1, V2):
+    % Test structural equality of two values.
+    % Succeeds if equal, fails if not equal.
+    %
+:- pred values_equal(value::in, value::in) is semidet.
+
+    % term_equal(T1, T2):
+    % Test structural equality of two terms.
+    % Uses values_equal for value terms.
+    %
+:- pred term_equal(term::in, term::in) is semidet.
+
+    % terms_equal(Ts1, Ts2):
+    % Test structural equality of two term lists.
+    %
+:- pred terms_equal(list(term)::in, list(term)::in) is semidet.
 
     % value_to_string(ST, Value) = String:
     % Convert a value to its display string representation (for print).
@@ -32,10 +51,88 @@
 :- import_module array.
 :- import_module assoc_list.
 :- import_module int.
-:- import_module list.
 :- import_module map.
 :- import_module pair.
 :- import_module string.
+
+%-----------------------------------------------------------------------%
+% Value equality
+%-----------------------------------------------------------------------%
+
+values_equal(intval(I), intval(I)).
+values_equal(stringval(Id), stringval(Id)).
+values_equal(arrayval(A1), arrayval(A2)) :-
+    arrays_equal(A1, A2).
+values_equal(mapval(M1), mapval(M2)) :-
+    maps_equal(M1, M2).
+values_equal(termval(T1), termval(T2)) :-
+    term_equal(T1, T2).
+values_equal(nilval, nilval).
+values_equal(consval(H1, T1), consval(H2, T2)) :-
+    values_equal(H1, H2),
+    values_equal(T1, T2).
+values_equal(closureval(Env1, Body1), closureval(Env2, Body2)) :-
+    terms_equal(Body1, Body2),
+    maps_equal(Env1, Env2).
+values_equal(bytecodeval(Ctx1, Addr), bytecodeval(Ctx2, Addr)) :-
+    arrays_equal(Ctx1, Ctx2).
+
+:- pred arrays_equal(array(value)::in, array(value)::in) is semidet.
+
+arrays_equal(A1, A2) :-
+    Size = array.size(A1),
+    Size = array.size(A2),
+    arrays_equal_loop(A1, A2, 0, Size).
+
+:- pred arrays_equal_loop(array(value)::in, array(value)::in,
+    int::in, int::in) is semidet.
+
+arrays_equal_loop(A1, A2, I, Size) :-
+    ( if I >= Size then
+        true
+    else
+        array.lookup(A1, I, V1),
+        array.lookup(A2, I, V2),
+        values_equal(V1, V2),
+        arrays_equal_loop(A1, A2, I + 1, Size)
+    ).
+
+:- pred maps_equal(map(string_id, value)::in, map(string_id, value)::in)
+    is semidet.
+
+maps_equal(M1, M2) :-
+    map.to_assoc_list(M1, AL1),
+    map.to_assoc_list(M2, AL2),
+    assoc_lists_equal(AL1, AL2).
+
+:- pred assoc_lists_equal(assoc_list(string_id, value)::in,
+    assoc_list(string_id, value)::in) is semidet.
+
+assoc_lists_equal([], []).
+assoc_lists_equal([K - V1 | Rest1], [K - V2 | Rest2]) :-
+    values_equal(V1, V2),
+    assoc_lists_equal(Rest1, Rest2).
+
+%-----------------------------------------------------------------------%
+% Term equality
+%-----------------------------------------------------------------------%
+
+term_equal(identifier(Id), identifier(Id)).
+term_equal(binder(Id), binder(Id)).
+term_equal(function(Ts1), function(Ts2)) :-
+    terms_equal(Ts1, Ts2).
+term_equal(generator(Ts1), generator(Ts2)) :-
+    terms_equal(Ts1, Ts2).
+term_equal(quoted(T1), quoted(T2)) :-
+    term_equal(T1, T2).
+term_equal(value(V1), value(V2)) :-
+    values_equal(V1, V2).
+term_equal(apply_term, apply_term).
+
+terms_equal([], []).
+terms_equal([T1 | Ts1], [T2 | Ts2]) :-
+    term_equal(T1, T2),
+    terms_equal(Ts1, Ts2).
 
 %-----------------------------------------------------------------------%
 % value_to_string: convert a value to its display representation
@@ -129,5 +226,5 @@ terms_to_write_string(ST, [T | Ts]) =
     term_to_write_string(ST, T) ++ " " ++ terms_to_write_string(ST, Ts).
 
 %-----------------------------------------------------------------------%
-:- end_module value_format.
+:- end_module values.
 %-----------------------------------------------------------------------%

@@ -22,11 +22,13 @@ froth/
 │   ├── bench.froth       # Benchmarking (bench)
 │   ├── eval.froth        # Meta-interpreter
 │   ├── preflight.froth   # Pre-flight checks (env/import detection)
+│   ├── node.froth        # Compiler node constructors
 │   ├── boundness.froth   # Boundness analysis for compiler
 │   ├── liveness.froth    # Liveness analysis for compiler
 │   ├── slots.froth       # Frame slot allocation for compiler
 │   ├── optimize.froth    # Closure optimization (restrict-closure-env)
-│   └── bytecode.froth    # Bytecode constants and utilities
+│   ├── bytecode.froth    # Bytecode instruction table and utilities
+│   └── ops.froth         # Operator table for bytecode
 ├── src/                  # Mercury source
 │   ├── froth.m           # Main entry point, REPL
 │   ├── lexer.m           # Tokenizer
@@ -34,7 +36,7 @@ froth/
 │   ├── eval.m            # Evaluator
 │   ├── operators.m       # Operator implementations
 │   ├── operator_table.m  # Operator metadata (arity, bytecode encoding)
-│   ├── value_format.m    # Value-to-string conversion
+│   ├── values.m          # Value equality and formatting
 │   ├── vm.m              # Bytecode virtual machine
 │   ├── datastack.m       # Stack implementation
 │   ├── bytecode.m        # Bytecode storage
@@ -45,7 +47,10 @@ froth/
 │   ├── *.expected        # Expected outputs
 │   └── lib/              # Test library files
 ├── FROTH.md              # Language reference
-├── FROTHLIB.md           # Standard library reference
+├── FROTH_LIBRARY.md      # Standard library reference
+├── FROTH_COMPILER.md     # Compiler infrastructure reference
+├── FROTH_BYTECODE.md     # Bytecode compiler design
+├── FROTH_GUIDE.md        # Coding guide and patterns
 ├── Makefile              # Build: make, make test, make clean
 └── run_tests.sh          # Test runner script
 ```
@@ -267,5 +272,7 @@ Froth could be described as "Forth with Scheme's scoping semantics" - it looks l
 ## Documentation
 
 - [FROTH.md](FROTH.md) - Language reference
-- [FROTHLIB.md](FROTHLIB.md) - Standard library reference
+- [FROTH_LIBRARY.md](FROTH_LIBRARY.md) - Standard library reference
+- [FROTH_COMPILER.md](FROTH_COMPILER.md) - Compiler infrastructure reference
 - [FROTH_BYTECODE.md](FROTH_BYTECODE.md) - Bytecode compiler design
+- [FROTH_GUIDE.md](FROTH_GUIDE.md) - Coding guide and patterns

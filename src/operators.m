@@ -136,7 +136,6 @@
 :- implementation.
 
 :- import_module assoc_list.
-:- import_module bool.
 :- import_module datastack.
 :- import_module exception.
 :- import_module int.
@@ -147,7 +146,7 @@
 :- import_module require.
 :- import_module string.
 :- import_module time.
-:- import_module value_format.
+:- import_module values.
 
 %-----------------------------------------------------------------------%
 % eval_operator: dispatch to operator implementation
@@ -328,7 +327,7 @@ eval_operator(OpTable, ST, Op, Env, !Array, !Ptr, !IO) :-
 
 operator_print(ST, !Array, !Ptr, !IO) :-
     datastack.pop("print", V, !Array, !Ptr),
-    io.write_string(value_format.value_to_string(ST, V), !IO).
+    io.write_string(values.value_to_string(ST, V), !IO).
 
 %-----------------------------------------------------------------------%
 % env: ( -- map ) Push the current environment as a map
@@ -515,86 +514,10 @@ operator_length(!Array, !Ptr) :-
 operator_eq(!Array, !Ptr) :-
     datastack.pop("=", V1, !Array, !Ptr),
     datastack.pop("=", V2, !Array, !Ptr),
-    ( if values_equal(V1, V2, Equal) then
-        ( Equal = yes, datastack.push(intval(0), !Array, !Ptr)
-        ; Equal = no, datastack.push(intval(1), !Array, !Ptr)
-        )
+    ( if values_equal(V1, V2) then
+        datastack.push(intval(0), !Array, !Ptr)
     else
-        throw(type_error("comparable values", V1))
-    ).
-
-:- pred values_equal(value::in, value::in, bool::out) is semidet.
-
-values_equal(intval(I1), intval(I2), Equal) :-
-    ( if I1 = I2 then Equal = yes else Equal = no ).
-values_equal(stringval(Id1), stringval(Id2), Equal) :-
-    ( if Id1 = Id2 then Equal = yes else Equal = no ).
-values_equal(arrayval(A1), arrayval(A2), Equal) :-
-    arrays_equal(A1, A2, Equal).
-values_equal(mapval(M1), mapval(M2), Equal) :-
-    maps_equal(M1, M2, Equal).
-values_equal(termval(T1), termval(T2), Equal) :-
-    ( if T1 = T2 then Equal = yes else Equal = no ).
-values_equal(nilval, nilval, yes).
-values_equal(consval(H1, T1), consval(H2, T2), Equal) :-
-    values_equal(H1, H2, HeadEq),
-    ( HeadEq = no, Equal = no
-    ; HeadEq = yes, values_equal(T1, T2, Equal)
-    ).
-values_equal(closureval(Env1, Body1), closureval(Env2, Body2), Equal) :-
-    ( if Body1 = Body2 then
-        maps_equal(Env1, Env2, Equal)
-    else
-        Equal = no
-    ).
-
-:- pred arrays_equal(array(value)::in, array(value)::in, bool::out) is semidet.
-
-arrays_equal(A1, A2, Equal) :-
-    Size1 = array.size(A1),
-    Size2 = array.size(A2),
-    ( if Size1 \= Size2 then
-        Equal = no
-    else
-        arrays_equal_loop(A1, A2, 0, Size1, Equal)
-    ).
-
-:- pred arrays_equal_loop(array(value)::in, array(value)::in, int::in, int::in,
-    bool::out) is semidet.
-
-arrays_equal_loop(A1, A2, I, Size, Equal) :-
-    ( if I >= Size then
-        Equal = yes
-    else
-        array.lookup(A1, I, V1),
-        array.lookup(A2, I, V2),
-        values_equal(V1, V2, ElemEqual),
-        ( ElemEqual = no, Equal = no
-        ; ElemEqual = yes, arrays_equal_loop(A1, A2, I + 1, Size, Equal)
-        )
-    ).
-
-% Convert map to assoc_list to perform bulk operations.
-:- pred maps_equal(map(string_id, value)::in, map(string_id, value)::in,
-    bool::out) is semidet.
-
-maps_equal(M1, M2, Equal) :-
-    map.to_assoc_list(M1, AL1),
-    map.to_assoc_list(M2, AL2),
-    assoc_lists_equal(AL1, AL2, Equal).
-
-:- pred assoc_lists_equal(assoc_list(string_id, value)::in,
-    assoc_list(string_id, value)::in, bool::out) is semidet.
-
-assoc_lists_equal([], [], yes).
-assoc_lists_equal([K1 - V1 | Rest1], [K2 - V2 | Rest2], Equal) :-
-    ( if K1 = K2 then
-        values_equal(V1, V2, ValEqual),
-        ( ValEqual = no, Equal = no
-        ; ValEqual = yes, assoc_lists_equal(Rest1, Rest2, Equal)
-        )
-    else
-        Equal = no
+        datastack.push(intval(1), !Array, !Ptr)
     ).
 
 %-----------------------------------------------------------------------%
@@ -659,7 +582,7 @@ operator_snd(!Array, !Ptr) :-
 
 operator_write(ST, !Array, !Ptr, !IO) :-
     datastack.pop("write", V, !Array, !Ptr),
-    io.write_string(value_format.value_to_write_string(ST, V), !IO).
+    io.write_string(values.value_to_write_string(ST, V), !IO).
 
 %-----------------------------------------------------------------------%
 % fwrite: ( value file -- ) Write value to file in executable form
@@ -668,8 +591,8 @@ operator_write(ST, !Array, !Ptr, !IO) :-
 operator_fwrite(ST, !Array, !Ptr, !IO) :-
     datastack.pop("fwrite", FileVal, !Array, !Ptr),
     datastack.pop("fwrite", V, !Array, !Ptr),
-    Filename = value_format.value_to_string(ST, FileVal),
-    Content = value_format.value_to_write_string(ST, V),
+    Filename = values.value_to_string(ST, FileVal),
+    Content = values.value_to_write_string(ST, V),
     io.open_output(Filename, Result, !IO),
     (
         Result = ok(Stream),
