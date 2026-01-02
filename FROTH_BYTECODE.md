@@ -90,3 +90,15 @@ The `free-vars` map tells which variables to capture. At runtime, these are look
 ## Limitations
 
 Compilation runs `preflight` and can fail for closurevals using dynamic constructs (`env`, `import`, `applyOperator`). Failed compilations leave the environment unchanged.
+
+## Known Bugs
+
+### Liveness: Incorrect `needs-frame` for capture-only variables
+
+When a bound variable is only used by being captured in a nested function (not used directly), the liveness pass incorrectly sets `needs-frame: 1` (no frame needed).
+
+```
+{ /x { x } }   ; liveness says needs-frame=1, but we need a frame for x
+```
+
+**Workaround:** Codegen detects used binders while building `bound-slots` and overrides `need-enter` if any binders have slots assigned.
