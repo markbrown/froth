@@ -83,6 +83,7 @@
 :- func oc_restoreReturnPtr = int.
 :- func oc_saveContextPtr = int.
 :- func oc_restoreContextPtr = int.
+:- func oc_pushQuotedApply = int.
 
 %-----------------------------------------------------------------------%
 
@@ -117,6 +118,7 @@ oc_saveReturnPtr = 13.
 oc_restoreReturnPtr = 14.
 oc_saveContextPtr = 15.
 oc_restoreContextPtr = 16.
+oc_pushQuotedApply = 18.
 
 %-----------------------------------------------------------------------%
 % VM execution
@@ -272,6 +274,11 @@ run(IP, RP, FP, Context, GenStack, !SP, !Store, OpTable, Env,
         else
             throw(type_error("array", V))
         )
+    else if Opcode = oc_pushQuotedApply then
+        % pushQuotedApply: push quoted apply term ('!)
+        datastack.push(termval(apply_term), !Stack, !SP),
+        run(IP + 1, RP, FP, Context, GenStack, !SP, !Store, OpTable, Env,
+            !Bytecode, !Stack, !Pool, !HashTable, !IO)
     else
         throw(vm_error("unknown opcode"))
     ).

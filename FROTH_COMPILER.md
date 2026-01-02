@@ -56,6 +56,7 @@ The `instruction-table` constant maps symbols to VM instruction codes. Available
 | `'restore-return-ptr` | 14 | Pop return pointer from stack |
 | `'save-context-ptr` | 15 | Push context pointer to stack |
 | `'restore-context-ptr` | 16 | Pop context pointer from stack |
+| `'push-quoted-apply` | 18 | Push quoted apply term (`'!`) |
 
 Track the current address manually:
 
