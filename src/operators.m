@@ -130,6 +130,8 @@
 :- pred operator_apply_operator(operator_table::in, string_table::in, env::in,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out, io::di, io::uo) is det.
+:- pred operator_wrap(array(value)::array_di, array(value)::array_uo,
+    int::in, int::out) is det.
 
 %-----------------------------------------------------------------------%
 
@@ -327,6 +329,9 @@ eval_operator(OpTable, ST, Op, Env, !Array, !Ptr, !IO) :-
     ;
         Op = op_apply_operator,
         operator_apply_operator(OpTable, ST, Env, !Array, !Ptr, !IO)
+    ;
+        Op = op_wrap,
+        operator_wrap(!Array, !Ptr)
     ).
 
 %-----------------------------------------------------------------------%
@@ -958,6 +963,25 @@ operator_apply_operator(OpTable, ST, Env, !Array, !Ptr, !IO) :-
         )
     else
         throw(type_error("quoted operator", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% wrap: ( value -- 'value ) Wrap a value as a quoted term (inverse of unwrap)
+%   int -> quoted int value
+%   string -> quoted string value
+%   quoted term -> quoted quote
+%-----------------------------------------------------------------------%
+
+operator_wrap(!Array, !Ptr) :-
+    datastack.pop("wrap", V, !Array, !Ptr),
+    ( if V = intval(_) then
+        datastack.push(termval(value(V)), !Array, !Ptr)
+    else if V = stringval(_) then
+        datastack.push(termval(value(V)), !Array, !Ptr)
+    else if V = termval(Term) then
+        datastack.push(termval(quoted(Term)), !Array, !Ptr)
+    else
+        throw(type_error("int, string, or quoted term", V))
     ).
 
 %-----------------------------------------------------------------------%

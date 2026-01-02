@@ -73,7 +73,8 @@
     ;       op_poke         % poke        ( value addr -- )
     ;       op_ref          % ref         ( value -- int )
     ;       op_deref        % deref       ( int -- value )
-    ;       op_apply_operator. % applyOperator ( 'op -- ... )
+    ;       op_apply_operator  % applyOperator ( 'op -- ... )
+    ;       op_wrap.           % wrap          ( value -- 'value )
 
 :- type operator_info
     --->    operator_info(

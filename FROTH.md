@@ -175,6 +175,7 @@ Evaluation maintains three pieces of state:
 | `close` | `( env body -- closure )` | Create closureval (map, function) or bytecodeval (array, int) |
 | `open` | `( closure -- env body )` | Decompose closureval to (map, function) or bytecodeval to (array, int) |
 | `unwrap` | `( 'x -- x )` | Extract inner from quoted value or quoted term |
+| `wrap` | `( x -- 'x )` | Wrap int, string, or quoted term as quoted value/quote |
 | `intern` | `( a -- int )` | Get intern id from string, identifier, or binder |
 | `idToString` | `( int -- string )` | Create string from intern id |
 | `idToIdent` | `( int -- 'ident )` | Create quoted identifier from intern id |
