@@ -143,6 +143,12 @@ eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, !ST, !BC,
         else if Info ^ oi_operator = op_poke then
             % poke is special: it modifies the bytecode store
             eval_poke(!Array, !Ptr, !BC)
+        else if Info ^ oi_operator = op_ref then
+            % ref is special: it modifies the constant pool
+            eval_ref(!Array, !Ptr, !Pool, !HT)
+        else if Info ^ oi_operator = op_deref then
+            % deref is special: it reads the constant pool
+            eval_deref(!Array, !Ptr, !.Pool)
         else
             operators.eval_operator(OpTable, !.ST, Info ^ oi_operator, !.Env,
                 !Array, !Ptr, !IO)
@@ -381,6 +387,53 @@ eval_poke(!Array, !Ptr, !BC) :-
         throw(type_error("int", ValueVal))
     else
         throw(type_error("int", AddrVal))
+    ).
+
+%-----------------------------------------------------------------------%
+% ref: ( value -- int ) Store value in constant pool, return index
+%-----------------------------------------------------------------------%
+
+:- pred eval_ref(
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out,
+    array(value)::array_di, array(value)::array_uo,
+    hash_table(value, int)::hash_table_di,
+    hash_table(value, int)::hash_table_uo) is det.
+
+eval_ref(!Array, !Ptr, !Pool, !HT) :-
+    datastack.pop("ref", V, !Array, !Ptr),
+    % Check if value is already in the pool (deduplication)
+    ( if hash_table.search(!.HT, V, ExistingIdx) then
+        % Already exists, return existing index
+        datastack.push(intval(ExistingIdx), !Array, !Ptr)
+    else
+        % New value: add to pool and hash table
+        Idx = array.size(!.Pool),
+        array.resize(Idx + 1, V, !Pool),
+        hash_table.det_insert(V, Idx, !HT),
+        datastack.push(intval(Idx), !Array, !Ptr)
+    ).
+
+%-----------------------------------------------------------------------%
+% deref: ( int -- value ) Retrieve value from constant pool
+%-----------------------------------------------------------------------%
+
+:- pred eval_deref(
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out,
+    array(value)::in) is det.
+
+eval_deref(!Array, !Ptr, Pool) :-
+    datastack.pop("deref", V, !Array, !Ptr),
+    ( if V = intval(Idx) then
+        ( if Idx >= 0, Idx < array.size(Pool) then
+            array.lookup(Pool, Idx, Value),
+            datastack.push(Value, !Array, !Ptr)
+        else
+            throw(index_out_of_bounds(Idx, array.size(Pool)))
+        )
+    else
+        throw(type_error("int", V))
     ).
 
 %-----------------------------------------------------------------------%

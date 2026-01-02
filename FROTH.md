@@ -184,4 +184,6 @@ Evaluation maintains three pieces of state:
 | `stack` | `( ... -- array )` | Convert entire stack to an array |
 | `peek` | `( addr -- int )` | Read value from bytecode store (0 if beyond size) |
 | `poke` | `( value addr -- )` | Write value to bytecode store (extends if needed) |
+| `ref` | `( value -- int )` | Store value in constant pool, return index (deduplicated) |
+| `deref` | `( int -- value )` | Retrieve value from constant pool by index |
 | `applyOperator` | `( 'op -- ... )` | Apply a quoted operator |

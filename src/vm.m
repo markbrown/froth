@@ -133,10 +133,20 @@ run(IP, RP, FP, Context, GenStack, !SP, !Store, OpTable, Env,
         % op n: execute operator n
         array.lookup(!.Bytecode, IP + 1, OpNum),
         ( if operator_table.int_to_operator(OpNum, Op) then
-            operators.eval_operator(OpTable, !.Store ^ vs_string_table, Op, Env,
-                !Stack, !SP, !IO),
-            run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, OpTable, Env,
-                !Bytecode, !Stack, !Pool, !HashTable, !IO)
+            ( if Op = op_ref then
+                vm_ref(!Stack, !SP, !Pool, !HashTable),
+                run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, OpTable, Env,
+                    !Bytecode, !Stack, !Pool, !HashTable, !IO)
+            else if Op = op_deref then
+                vm_deref(!Stack, !SP, !.Pool),
+                run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, OpTable, Env,
+                    !Bytecode, !Stack, !Pool, !HashTable, !IO)
+            else
+                operators.eval_operator(OpTable, !.Store ^ vs_string_table, Op, Env,
+                    !Stack, !SP, !IO),
+                run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, OpTable, Env,
+                    !Bytecode, !Stack, !Pool, !HashTable, !IO)
+            )
         else
             throw(vm_error("invalid operator number"))
         )
@@ -253,6 +263,50 @@ run(IP, RP, FP, Context, GenStack, !SP, !Store, OpTable, Env,
         )
     else
         throw(vm_error("unknown opcode"))
+    ).
+
+%-----------------------------------------------------------------------%
+% ref: ( value -- int ) Store value in constant pool, return index
+%-----------------------------------------------------------------------%
+
+:- pred vm_ref(
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out,
+    array(value)::array_di, array(value)::array_uo,
+    hash_table(value, int)::hash_table_di,
+    hash_table(value, int)::hash_table_uo) is det.
+
+vm_ref(!Stack, !SP, !Pool, !HashTable) :-
+    datastack.pop("ref", V, !Stack, !SP),
+    ( if hash_table.search(!.HashTable, V, ExistingIdx) then
+        datastack.push(intval(ExistingIdx), !Stack, !SP)
+    else
+        Idx = array.size(!.Pool),
+        array.resize(Idx + 1, V, !Pool),
+        hash_table.det_insert(V, Idx, !HashTable),
+        datastack.push(intval(Idx), !Stack, !SP)
+    ).
+
+%-----------------------------------------------------------------------%
+% deref: ( int -- value ) Retrieve value from constant pool
+%-----------------------------------------------------------------------%
+
+:- pred vm_deref(
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out,
+    array(value)::in) is det.
+
+vm_deref(!Stack, !SP, Pool) :-
+    datastack.pop("deref", V, !Stack, !SP),
+    ( if V = intval(Idx) then
+        ( if Idx >= 0, Idx < array.size(Pool) then
+            array.lookup(Pool, Idx, Value),
+            datastack.push(Value, !Stack, !SP)
+        else
+            throw(index_out_of_bounds(Idx, array.size(Pool)))
+        )
+    else
+        throw(type_error("int", V))
     ).
 
 %-----------------------------------------------------------------------%

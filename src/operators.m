@@ -317,6 +317,14 @@ eval_operator(OpTable, ST, Op, Env, !Array, !Ptr, !IO) :-
         % poke is handled specially in eval.m, should not reach here
         unexpected($pred, "poke should be handled in eval.m")
     ;
+        Op = op_ref,
+        % ref is handled specially in eval.m/vm.m, should not reach here
+        unexpected($pred, "ref should be handled in eval.m/vm.m")
+    ;
+        Op = op_deref,
+        % deref is handled specially in eval.m/vm.m, should not reach here
+        unexpected($pred, "deref should be handled in eval.m/vm.m")
+    ;
         Op = op_apply_operator,
         operator_apply_operator(OpTable, ST, Env, !Array, !Ptr, !IO)
     ).

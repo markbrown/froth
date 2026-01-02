@@ -71,6 +71,8 @@
     ;       op_is_closure   % isClosure   ( a -- int )
     ;       op_peek         % peek        ( addr -- int )
     ;       op_poke         % poke        ( value addr -- )
+    ;       op_ref          % ref         ( value -- int )
+    ;       op_deref        % deref       ( int -- value )
     ;       op_apply_operator. % applyOperator ( 'op -- ... )
 
 :- type operator_info
