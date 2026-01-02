@@ -5,12 +5,11 @@
 @FROTH_BYTECODE.md
 @FROTH_GUIDE.md
 
-**Do not** try to stage files
-**Do not** commit until requested
-
 Commit checklist:
 
-- `git status`
-- update docs if needed
-- ask user to stage changes if needed
-- `git diff --staged` to review changes if needed
+1. check git status
+2. **Do not** try to stage files
+3. **Do not** commit until requested
+4. update docs if needed
+5. ask user to stage changes if needed
+6. review staged diff if needed
