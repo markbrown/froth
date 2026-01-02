@@ -1,0 +1,1325 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read lib/codegen.froth (204 lines)
+  ⎿  Read tests/codegen.expected (12 lines)
+  ⎿  Read tests/codegen.froth (76 lines)
+  ⎿  Read FROTH_COMPILER.md (332 lines)
+  ⎿  Read src/vm.m (333 lines)
+  ⎿  Todo list read (7 items)
+
+> continue 
+
+● Let me check the current state of the codegen.froth file to understand the issue:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 204 lines
+
+● I see the bug! Looking at lines 51-57 in the binder handling:
+
+  need-enter {
+    ; Already entered frame
+    code
+  } {
+    ; Need to enter frame first
+    code [ocEnterFrame max-slots] concat!
+  } ?!
+
+  The branches are backwards! According to line 26, need-enter is 0 if we still need to emit enter-frame. With ?, condition 0 → then-branch. So when need-enter = 0 (need to emit), we're running the then-branch which just returns code without emitting enter-frame.
+
+  Let me fix this:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      49        node 'is-used @ {
+      50          ; is-used=0: used binder - maybe emit enter-frame, then
+           pop-local
+      51          need-enter {
+      52 -          ; Already entered frame                              
+      53 -          code                                                 
+      54 -        } {                                                    
+      55 -          ; Need to enter frame first                          
+      52 +          ; need-enter=0: Need to enter frame first            
+      53            code [ocEnterFrame max-slots] concat!
+      54 +        } {                                                    
+      55 +          ; need-enter=1: Already entered frame                
+      56 +          code                                                 
+      57          } ?!
+      58          node 'slot @ /slot
+      59          [ocPopLocal slot] concat! 1  ; code' need-enter'=1 (fra
+          me entered)
+
+● Now let me run the tests:
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Runtime error: type error: expected array, map, or quoted 
+     function/generator, got term
+
+● Still getting an error. Let me create a minimal test to isolate the issue:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test just codegen-term on a simple integer…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                                  
+     > > > stack: Runtime error: type error: expected closure, got array
+     >
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test codegen-term directly - look at what it returns…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > need-enter: 1
+     > code: 01
+     >
+
+● The return values look correct. code: 01 shows the array [0 1] (push-int 1), and need-enter: 1. Let me test codegen-seq:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test codegen-seq…)
+  ⎿ Froth REPL. Press Ctrl-D to exit.                                      
+    > > > Runtime error: type error: expected array, map, or quoted functio
+    n/generator, got term
+    … +2 lines (ctrl+o to expand)
+
+
+● Let me test the func access:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      '{ 1 2 } /func…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > func length: 2
+     > func 0 @: '1
+     … +2 lines (ctrl+o to expand)
+
+● Let me trace through step by step in the impl:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Manually trace codegen-seq-impl…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > > > idx: 0
+     > func #: 2
+     … +7 lines (ctrl+o to expand)
+
+● The term/node access works. Let me test codegen-term with those values:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test codegen-term with a term from a function…)
+  ⎿  Froth REPL. Press Ctrl-D to exit. 
+     > > > > > > > calling codegen-term
+     > > result:
+     … +3 lines (ctrl+o to expand)
+
+● Good, that works. Let me test calling codegen-seq-impl directly:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Debug codegen-seq-impl…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                
+     > > > > > > > Calling codegen-seq-impl
+     > Runtime error: undefined name: codegen-seq-impl
+     … +2 lines (ctrl+o to expand)
+
+● Ah, codegen-seq-impl is deleted from environment at end of file. Let me test through codegen-seq:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Debug through codegen-seq…)
+  ⎿ Froth REPL. Press Ctrl-D to exit.                                      
+    > > > > > > > Calling codegen-seq
+    > Runtime error: type error: expected array, map, or quoted function/ge
+    … +3 lines (ctrl+o to expand)
+
+
+● Let me check what type '1 is:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      '1 /term…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > isValue: 0
+     > isIdent: 1
+     … +4 lines (ctrl+o to expand)
+
+● Good, '1 is correctly a value term. Let me add debug output to trace the recursion:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test with a modified codegen-seq-impl that prints debug…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.          
+     > > 1:1: unclosed '{'
+     > >> idx=Runtime error: undefined name: idx
+     … +20 lines (ctrl+o to expand)
+
+● Let me write a test file instead:
+
+● Write(tests/debug_codegen.froth)
+  ⎿  Wrote 26 lines to tests/debug_codegen.froth                         
+      1 ; Debug codegen-seq
+      2 { /self /idx /max-slots /free-vars /body-nodes /func /need-enter 
+        /code
+      3   ">> idx=" print idx print " func#=" print func # println!
+      4   idx func # = {
+      5     "done, code=" print code writeln!
+      6     code
+      7   } {
+      8     func idx @ /term
+      9     body-nodes idx @ /node
+     … +16 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     >> idx=0 func#=2
+     term='1
+     node=$
+     calling codegen-term
+     back from codegen-term
+     code'=Runtime error: type error: expected closure, got term
+
+● The error shows code' got a term instead of an array. Let me test codegen-term directly with same args:
+
+● Bash(timeout 10 ./bin/froth <<'EOF' 2>&1
+      '1 /term…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                              
+     > > > > > > > > before:
+     > stack: Runtime error: type error: expected closure, got array
+     … +3 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth <<'EOF' 2>&1
+      '1 /term…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.     
+     > > > > > > > > > > x (need-enter'): 1
+     > y (code'): [ 0 1 ]
+     >
+
+● Let me simplify the debug test:
+
+● Update(tests/debug_codegen.froth)
+  ⎿  Added 26 lines, removed 23 lines                                    
+       1 -; Debug codegen-seq                                            
+       1 +; Debug codegen-seq - test calling codegen-term from within a f
+         +unction                                                        
+       2  
+       3 -{ /self /idx /max-slots /free-vars /body-nodes /func /need-ente
+         -r /code                                                        
+       4 -  ">> idx=" print idx print " func#=" print func # println!    
+       5 -  idx func # = {                                               
+       6 -    "done, code=" print code writeln!                          
+       7 -    code                                                       
+       8 -  } {                                                          
+       9 -    func idx @ /term                                           
+      10 -    body-nodes idx @ /node                                     
+      11 -    "term=" print term writeln!                                
+      12 -    "node=" print node writeln!                                
+      13 -    "calling codegen-term" println!                            
+      14 -    code need-enter term node free-vars max-slots codegen-term!
+      15 -    "back from codegen-term" println!                          
+      16 -    /need-enter' /code'                                        
+      17 -    "code'=" print code' writeln!                              
+      18 -    "need-enter'=" print need-enter' println!                  
+      19 -    code' need-enter' func body-nodes free-vars max-slots idx 1
+         - + self self!                                                  
+      20 -  } ?!                                                         
+      21 -} /debug-seq-impl                                              
+       3 +{ /max-slots /free-vars /node /term /need-enter /code          
+       4 +  "in test-fn, calling codegen-term" println!                  
+       5 +  code need-enter term node free-vars max-slots codegen-term!  
+       6 +  "back from codegen-term" println!                            
+       7 +  /ne /c                                                       
+       8 +  "c=" print c writeln!                                        
+       9 +  "ne=" print ne println!                                      
+      10 +  c ne                                                         
+      11 +} /test-fn                                                     
+      12  
+      23 -'{ 1 2 } /func                                                 
+      24 -[] 1 func [$ $] $ 0 0 debug-seq-impl debug-seq-impl!           
+      25 -"final: " print writeln!                                       
+      13 +'1 /term                                                       
+      14 +$ /node                                                        
+      15 +$ /free-vars                                                   
+      16 +0 /max-slots                                                   
+      17 +                                                               
+      18 +"test 1: direct call" println!                                 
+      19 +[] 1 term node free-vars max-slots codegen-term!               
+      20 +/ne1 /c1                                                       
+      21 +"c1=" print c1 writeln!                                        
+      22 +"ne1=" print ne1 println!                                      
+      23 +                                                               
+      24 +"test 2: call from inside a function" println!                 
+      25 +[] 1 term node free-vars max-slots test-fn!                    
+      26 +/ne2 /c2                                                       
+      27 +"c2=" print c2 writeln!                                        
+      28 +"ne2=" print ne2 println!                                      
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  test 1: direct call          
+     c1=[ 0 1 ]
+     ne1=1
+     … +7 lines (ctrl+o to expand)
+
+● Both work. Let me test with the actual codegen-seq:
+
+● Update(tests/debug_codegen.froth)
+  ⎿  Added 5 lines, removed 27 lines                                     
+       1 -; Debug codegen-seq - test calling codegen-term from within a f
+         -unction                                                        
+       1 +; Debug codegen-seq - test the actual codegen-seq              
+       2  
+       3 -{ /max-slots /free-vars /node /term /need-enter /code          
+       4 -  "in test-fn, calling codegen-term" println!                  
+       5 -  code need-enter term node free-vars max-slots codegen-term!  
+       6 -  "back from codegen-term" println!                            
+       7 -  /ne /c                                                       
+       8 -  "c=" print c writeln!                                        
+       9 -  "ne=" print ne println!                                      
+      10 -  c ne                                                         
+      11 -} /test-fn                                                     
+      12 -                                                               
+      13 -'1 /term                                                       
+      14 -$ /node                                                        
+      15 -$ /free-vars                                                   
+      16 -0 /max-slots                                                   
+      17 -                                                               
+      18 -"test 1: direct call" println!                                 
+      19 -[] 1 term node free-vars max-slots codegen-term!               
+      20 -/ne1 /c1                                                       
+      21 -"c1=" print c1 writeln!                                        
+      22 -"ne1=" print ne1 println!                                      
+      23 -                                                               
+      24 -"test 2: call from inside a function" println!                 
+      25 -[] 1 term node free-vars max-slots test-fn!                    
+      26 -/ne2 /c2                                                       
+      27 -"c2=" print c2 writeln!                                        
+      28 -"ne2=" print ne2 println!                                      
+       3 +"test: codegen-seq on { 1 2 }" println!                        
+       4 +'{ 1 2 } /func                                                 
+       5 +[] 1 func [$ $] $ 0 0 codegen-seq!                             
+       6 +"result: " print writeln!                                      
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     test: codegen-seq on { 1 2 }
+     Runtime error: type error: expected array, map, or quoted 
+     function/generator, got term
+
+● Let me add debug to the actual codegen-seq-impl to see what's happening:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 30 lines
+
+● Update(lib/codegen.froth)
+  ⎿  Added 5 lines                                                       
+      144  ; max-slots is the number of frame slots needed
+      145  ; need-enter tracks whether enter-frame has been emitted (0=ne
+           ed, 1=done)
+      146  { /self /idx /max-slots /free-vars /body-nodes /func /need-ent
+           er /code
+      147 +  "DBG: idx=" print idx print " func#=" print func # println! 
+      148    idx func # = {
+      149      ; Done - discard need-enter, return code
+      150 +    "DBG: done, code=" print code writeln!                    
+      151      code
+      152    } {
+      153      ; Get term and its corresponding node
+      154      func idx @ /term
+      155      body-nodes idx @ /node
+      156 +    "DBG: term=" print term writeln!                          
+      157      ; Process current term, get back (code' need-enter')
+      158      code need-enter term node free-vars max-slots codegen-term
+           !
+      159 +    "DBG: back from codegen-term" println!                    
+      160      /need-enter' /code'
+      161 +    "DBG: code'=" print code' writeln!                        
+      162      ; Recurse with updated state
+      163      code' need-enter' func body-nodes free-vars max-slots idx 
+           1 + self self!
+      164    } ?!
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     test: codegen-seq on { 1 2 }
+     DBG: idx=0 func#=2
+     DBG: term='1
+     DBG: back from codegen-term
+     DBG: code'=Runtime error: type error: expected closure, got term
+
+● The return binding is getting a term. Let me check what's on the stack:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 6 lines, removed 3 lines                                      
+      156      "DBG: term=" print term writeln!
+      157      ; Process current term, get back (code' need-enter')
+      158      code need-enter term node free-vars max-slots codegen-term
+           !
+      159 -    "DBG: back from codegen-term" println!                    
+      160 -    /need-enter' /code'                                       
+      161 -    "DBG: code'=" print code' writeln!                        
+      159 +    "DBG: back from codegen-term, popping 2 values" println!  
+      160 +    /val1 /val2                                               
+      161 +    "DBG: val1 (should be need-enter')=" print val1 writeln!  
+      162 +    "DBG: val2 (should be code')=" print val2 writeln!        
+      163 +    val1 /need-enter'                                         
+      164 +    val2 /code'                                               
+      165      ; Recurse with updated state
+      166      code' need-enter' func body-nodes free-vars max-slots idx 
+           1 + self self!
+      167    } ?!
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     test: codegen-seq on { 1 2 }
+     DBG: idx=0 func#=2
+     DBG: term='1
+     DBG: back from codegen-term, popping 2 values
+     DBG: val1 (should be need-enter')=1
+     DBG: val2 (should be code')=[ 0 1 ]
+     DBG: idx=1 func#=Runtime error: type error: expected array, map, or quoted 
+     function/generator, got term
+
+● The first iteration works but the second fails at func #. Let me add debug to show what func is:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line                                                        
+      144  ; max-slots is the number of frame slots needed
+      145  ; need-enter tracks whether enter-frame has been emitted (0=ne
+           ed, 1=done)
+      146  { /self /idx /max-slots /free-vars /body-nodes /func /need-ent
+           er /code
+      147 +  "DBG: func=" print func writeln!                            
+      148    "DBG: idx=" print idx print " func#=" print func # println!
+      149    idx func # = {
+      150      ; Done - discard need-enter, return code
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     test: codegen-seq on { 1 2 }
+     DBG: func='{ 1 2 }
+     DBG: idx=0 func#=2
+     DBG: term='1
+     DBG: back from codegen-term, popping 2 values
+     DBG: val1 (should be need-enter')=1
+     DBG: val2 (should be code')=[ 0 1 ]
+     DBG: func='func
+     DBG: idx=1 func#=Runtime error: type error: expected array, map, or quoted 
+     function/generator, got term
+
+● func becomes 'func on second iteration. Let me trace the recursive call:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 5 lines                                                       
+      164      val1 /need-enter'
+      165      val2 /code'
+      166      ; Recurse with updated state
+      167 +    "DBG: about to recurse, pushing:" println!                
+      168 +    "  code'=" print code' writeln!                           
+      169 +    "  need-enter'=" print need-enter' println!               
+      170 +    "  func=" print func writeln!                             
+      171 +    "  body-nodes=" print body-nodes writeln!                 
+      172      code' need-enter' func body-nodes free-vars max-slots idx 
+           1 + self self!
+      173    } ?!
+      174  } /codegen-seq-impl
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     test: codegen-seq on { 1 2 }
+     DBG: func='{ 1 2 }
+     DBG: idx=0 func#=2
+     DBG: term='1
+     DBG: back from codegen-term, popping 2 values
+     DBG: val1 (should be need-enter')=1
+     DBG: val2 (should be code')=[ 0 1 ]
+     DBG: about to recurse, pushing:
+       code'=Runtime error: type error: expected closure, got term
+
+● The error happens when printing code' after binding it. Let me check if codegen-term is returning extra values:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 9 lines, removed 11 lines                                     
+      157      "DBG: term=" print term writeln!
+      158      ; Process current term, get back (code' need-enter')
+      159      code need-enter term node free-vars max-slots codegen-term
+           !
+      160 -    "DBG: back from codegen-term, popping 2 values" println!  
+      161 -    /val1 /val2                                               
+      162 -    "DBG: val1 (should be need-enter')=" print val1 writeln!  
+      163 -    "DBG: val2 (should be code')=" print val2 writeln!        
+      164 -    val1 /need-enter'                                         
+      165 -    val2 /code'                                               
+      160 +    "DBG: back from codegen-term" println!                    
+      161 +    ; Debug: check stack depth before and after               
+      162 +    stack! /before-stack                                      
+      163 +    "DBG: stack before binding: " print before-stack writeln! 
+      164 +    /need-enter' /code'                                       
+      165 +    stack! /after-stack                                       
+      166 +    "DBG: stack after binding: " print after-stack writeln!   
+      167 +    "DBG: code'=" print code' writeln!                        
+      168 +    "DBG: need-enter'=" print need-enter' println!            
+      169      ; Recurse with updated state
+      167 -    "DBG: about to recurse, pushing:" println!                
+      168 -    "  code'=" print code' writeln!                           
+      169 -    "  need-enter'=" print need-enter' println!               
+      170 -    "  func=" print func writeln!                             
+      171 -    "  body-nodes=" print body-nodes writeln!                 
+      170      code' need-enter' func body-nodes free-vars max-slots idx 
+           1 + self self!
+      171    } ?!
+      172  } /codegen-seq-impl
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     test: codegen-seq on { 1 2 }
+     DBG: func='{ 1 2 }
+     DBG: idx=0 func#=2
+     DBG: term='1
+     DBG: back from codegen-term
+     Runtime error: type error: expected closure, got array
+
+● Let me try without stack!:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 5 lines                                       
+      158      ; Process current term, get back (code' need-enter')
+      159      code need-enter term node free-vars max-slots codegen-term
+           !
+      160      "DBG: back from codegen-term" println!
+      161 -    ; Debug: check stack depth before and after               
+      162 -    stack! /before-stack                                      
+      163 -    "DBG: stack before binding: " print before-stack writeln! 
+      161      /need-enter' /code'
+      165 -    stack! /after-stack                                       
+      166 -    "DBG: stack after binding: " print after-stack writeln!   
+      162      "DBG: code'=" print code' writeln!
+      163      "DBG: need-enter'=" print need-enter' println!
+      164 +    "DBG: func before recurse=" print func writeln!           
+      165      ; Recurse with updated state
+      166      code' need-enter' func body-nodes free-vars max-slots idx 
+           1 + self self!
+      167    } ?!
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     test: codegen-seq on { 1 2 }
+     DBG: func='{ 1 2 }
+     DBG: idx=0 func#=2
+     DBG: term='1
+     DBG: back from codegen-term
+     DBG: code'=Runtime error: type error: expected closure, got term
+
+● Let me test codegen-term directly with tracing:
+
+● Update(tests/debug_codegen.froth)
+  ⎿  Added 7 lines, removed 5 lines                                      
+      1 -; Debug codegen-seq - test the actual codegen-seq               
+      1 +; Debug codegen-term directly                                   
+      2  
+      3 -"test: codegen-seq on { 1 2 }" println!                         
+      4 -'{ 1 2 } /func                                                  
+      5 -[] 1 func [$ $] $ 0 0 codegen-seq!                              
+      6 -"result: " print writeln!                                       
+      3 +"test: codegen-term on '1" println!                             
+      4 +[] 1 '1 $ $ 0 codegen-term!                                     
+      5 +"after codegen-term:" println!                                  
+      6 +/a /b                                                           
+      7 +"a (should be need-enter')=" print a println!                   
+      8 +"b (should be code')=" print b writeln!                         
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  test: codegen-term on '1   
+     after codegen-term:
+     a (should be need-enter')=1
+     b (should be code')=[ 0 1 ]
+
+● Let me add debug to codegen-term itself:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines                                                       
+      29   'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
+      30   'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
+      31   'ocEnterFrame 'ocLeaveFrame] { /max-slots /free-vars /node /te
+          rm /need-enter /code
+      32 +  "CGT: entered, term=" print term writeln!                    
+      33 +  "CGT: code=" print code writeln!                             
+      34    term isValue {
+      35      ; Quoted literal value - unwrap and check type
+      36      term unwrap /val
+
+● Update(tests/debug_codegen.froth)
+  ⎿  Added 5 lines, removed 7 lines                                      
+      1 -; Debug codegen-term directly                                   
+      1 +; Debug codegen-seq                                             
+      2  
+      3 -"test: codegen-term on '1" println!                             
+      4 -[] 1 '1 $ $ 0 codegen-term!                                     
+      5 -"after codegen-term:" println!                                  
+      6 -/a /b                                                           
+      7 -"a (should be need-enter')=" print a println!                   
+      8 -"b (should be code')=" print b writeln!                         
+      3 +"test: codegen-seq on { 1 2 }" println!                         
+      4 +'{ 1 2 } /func                                                  
+      5 +[] 1 func [$ $] $ 0 0 codegen-seq!                              
+      6 +"result: " print writeln!                                       
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     test: codegen-seq on { 1 2 }
+     DBG: func='{ 1 2 }
+     DBG: idx=0 func#=2
+     DBG: term='1
+     CGT: entered, term=Runtime error: undefined name: writeln
+
+● writeln isn't in codegen-term's deps. Let me remove that debug and trace differently:
+
+● Update(lib/codegen.froth)
+  ⎿  Removed 2 lines                                                     
+      29   'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
+      30   'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
+      31   'ocEnterFrame 'ocLeaveFrame] { /max-slots /free-vars /node /te
+          rm /need-enter /code
+      32 -  "CGT: entered, term=" print term writeln!                    
+      33 -  "CGT: code=" print code writeln!                             
+      32    term isValue {
+      33      ; Quoted literal value - unwrap and check type
+      34      term unwrap /val
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     test: codegen-seq on { 1 2 }
+     DBG: func='{ 1 2 }
+     DBG: idx=0 func#=2
+     DBG: term='1
+     DBG: back from codegen-term
+     DBG: code'=Runtime error: type error: expected closure, got term
+
+● Let me check what concat! does:
+
+● Search(pattern: "def-fn! /concat", path: "lib", output_mode: "content")
+  ⎿  Found 1 line (ctrl+o to expand)
+
+● Let me create a minimal reproduction:
+
+● Update(tests/debug_codegen.froth)
+  ⎿  Added 25 lines, removed 4 lines                                     
+       1 -; Debug codegen-seq                                            
+       1 +; Minimal reproduction - simulate what codegen-seq-impl does   
+       2  
+       3 -"test: codegen-seq on { 1 2 }" println!                        
+       3 +; Set up the same args                                         
+       4  '{ 1 2 } /func
+       5 -[] 1 func [$ $] $ 0 0 codegen-seq!                             
+       6 -"result: " print writeln!                                      
+       5 +[$ $] /body-nodes                                              
+       6 +$ /free-vars                                                   
+       7 +0 /max-slots                                                   
+       8 +[] /code                                                       
+       9 +1 /need-enter                                                  
+      10 +0 /idx                                                         
+      11 +                                                               
+      12 +"Step 1: get term and node" println!                           
+      13 +func idx @ /term                                               
+      14 +body-nodes idx @ /node                                         
+      15 +"term=" print term writeln!                                    
+      16 +"node=" print node writeln!                                    
+      17 +                                                               
+      18 +"Step 2: call codegen-term" println!                           
+      19 +code need-enter term node free-vars max-slots codegen-term!    
+      20 +"Step 3: back from codegen-term" println!                      
+      21 +                                                               
+      22 +; Now bind the results                                         
+      23 +/ne /c                                                         
+      24 +"ne=" print ne println!                                        
+      25 +"c=" print c writeln!                                          
+      26 +                                                               
+      27 +"done" println!                                                
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Step 1: get term and node    
+     term='1
+     node=$
+     … +5 lines (ctrl+o to expand)
+
+● The minimal repro works! Let me check if something in codegen-seq-impl has a scope issue:
+
+● Update(tests/debug_codegen.froth)
+  ⎿  Added 14 lines, removed 24 lines                                    
+       1 -; Minimal reproduction - simulate what codegen-seq-impl does   
+       1 +; Test calling codegen-term from inside a closure              
+       2 +; This simulates what codegen-seq-impl does                    
+       3  
+       3 -; Set up the same args                                         
+       4 -'{ 1 2 } /func                                                 
+       5 -[$ $] /body-nodes                                              
+       6 -$ /free-vars                                                   
+       7 -0 /max-slots                                                   
+       8 -[] /code                                                       
+       9 -1 /need-enter                                                  
+      10 -0 /idx                                                         
+       4 +{ /max-slots /free-vars /node /term /need-enter /code          
+       5 +  "Inside wrapper, calling codegen-term" println!              
+       6 +  code need-enter term node free-vars max-slots codegen-term!  
+       7 +  "Back from codegen-term" println!                            
+       8 +  /ne /c                                                       
+       9 +  "ne=" print ne println!                                      
+      10 +  "c=" print c writeln!                                        
+      11 +  c ne                                                         
+      12 +} /test-wrapper                                                
+      13  
+      12 -"Step 1: get term and node" println!                           
+      13 -func idx @ /term                                               
+      14 -body-nodes idx @ /node                                         
+      15 -"term=" print term writeln!                                    
+      16 -"node=" print node writeln!                                    
+      17 -                                                               
+      18 -"Step 2: call codegen-term" println!                           
+      19 -code need-enter term node free-vars max-slots codegen-term!    
+      20 -"Step 3: back from codegen-term" println!                      
+      21 -                                                               
+      22 -; Now bind the results                                         
+      14 +"Calling test-wrapper" println!                                
+      15 +[] 1 '1 $ $ 0 test-wrapper!                                    
+      16  /ne /c
+      24 -"ne=" print ne println!                                        
+      25 -"c=" print c writeln!                                          
+      26 -                                                               
+      27 -"done" println!                                                
+      17 +"Result: ne=" print ne print " c=" print c writeln!            
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Calling test-wrapper                
+     Inside wrapper, calling codegen-term
+     Back from codegen-term
+     … +3 lines (ctrl+o to expand)
+
+● This works too! Let me test calling codegen-seq directly:
+
+● Update(tests/debug_codegen.froth)
+  ⎿  Added 5 lines, removed 17 lines                                     
+       1 -; Test calling codegen-term from inside a closure              
+       2 -; This simulates what codegen-seq-impl does                    
+       3 -                                                               
+       4 -{ /max-slots /free-vars /node /term /need-enter /code          
+       5 -  "Inside wrapper, calling codegen-term" println!              
+       6 -  code need-enter term node free-vars max-slots codegen-term!  
+       7 -  "Back from codegen-term" println!                            
+       8 -  /ne /c                                                       
+       9 -  "ne=" print ne println!                                      
+      10 -  "c=" print c writeln!                                        
+      11 -  c ne                                                         
+      12 -} /test-wrapper                                                
+      13 -                                                               
+      14 -"Calling test-wrapper" println!                                
+      15 -[] 1 '1 $ $ 0 test-wrapper!                                    
+      16 -/ne /c                                                         
+      17 -"Result: ne=" print ne print " c=" print c writeln!            
+       1 +; Test with single-term function first                         
+       2 +"Test 1: codegen-seq on { 1 }" println!                        
+       3 +'{ 1 } /func1                                                  
+       4 +[] 1 func1 [$] $ 0 0 codegen-seq!                              
+       5 +"result1=" print writeln!                                      
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Test 1: codegen-seq on { 1 }
+     DBG: func='{ 1 }
+     DBG: idx=0 func#=1
+     DBG: term='1
+     DBG: back from codegen-term
+     DBG: code'=Runtime error: type error: expected closure, got term
+
+● Let me check the current state of codegen.froth debug statements:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 30 lines
+
+● Let me split the debug line to see where the error occurs:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 4 lines, removed 1 line                                       
+      159      code need-enter term node free-vars max-slots codegen-term
+           !
+      160      "DBG: back from codegen-term" println!
+      161      /need-enter' /code'
+      162 -    "DBG: code'=" print code' writeln!                        
+      162 +    "DBG: about to print code'" println!                      
+      163 +    "DBG: code'=" print                                       
+      164 +    "DBG: after print, about to call writeln!" println!       
+      165 +    code' writeln!                                            
+      166      "DBG: need-enter'=" print need-enter' println!
+      167      "DBG: func before recurse=" print func writeln!
+      168      ; Recurse with updated state
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Test 1: codegen-seq on { 1 }
+     DBG: func='{ 1 }
+     DBG: idx=0 func#=1
+     DBG: term='1
+     DBG: back from codegen-term
+     DBG: about to print code'
+     DBG: code'=DBG: after print, about to call writeln!
+     Runtime error: type error: expected closure, got term
+
+● Let me try assigning to a temp variable first:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 3 lines                                      
+      160      "DBG: back from codegen-term" println!
+      161      /need-enter' /code'
+      162      "DBG: about to print code'" println!
+      163 -    "DBG: code'=" print                                       
+      164 -    "DBG: after print, about to call writeln!" println!       
+      165 -    code' writeln!                                            
+      163 +    code' /temp                                               
+      164 +    "DBG: temp=" print temp writeln!                          
+      165      "DBG: need-enter'=" print need-enter' println!
+      166      "DBG: func before recurse=" print func writeln!
+      167      ; Recurse with updated state
+  ⎿  Interrupted · What should Claude do instead?
+
+> Why is single-quote appearing after names like `code`? Quoted identifiers 
+are written `'x` 
+
+● You're right - that's a bug! In Froth, ' is the quote operator and comes before terms. Using code' would parse as code followed by ' (quote), not as a single identifier.
+
+  I should use names like new-code or code2 instead. Let me fix this:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 8 lines                                      
+      157      "DBG: term=" print term writeln!
+      158      ; Process current term, get back (code' need-enter')
+      159      code need-enter term node free-vars max-slots codegen-term
+           !
+      160 -    "DBG: back from codegen-term" println!                    
+      161 -    /need-enter' /code'                                       
+      162 -    "DBG: about to print code'" println!                      
+      163 -    code' /temp                                               
+      164 -    "DBG: temp=" print temp writeln!                          
+      165 -    "DBG: need-enter'=" print need-enter' println!            
+      166 -    "DBG: func before recurse=" print func writeln!           
+      160 +    /new-need-enter /new-code                                 
+      161      ; Recurse with updated state
+      168 -    code' need-enter' func body-nodes free-vars max-slots idx 
+          -1 + self self!                                                
+      162 +    new-code new-need-enter func body-nodes free-vars max-slot
+          +s idx 1 + self self!                                          
+      163    } ?!
+      164  } /codegen-seq-impl
+      165  
+
+● Now let me remove the debug statements:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 5 lines                                       
+      144  ; max-slots is the number of frame slots needed
+      145  ; need-enter tracks whether enter-frame has been emitted (0=ne
+           ed, 1=done)
+      146  { /self /idx /max-slots /free-vars /body-nodes /func /need-ent
+           er /code
+      147 -  "DBG: func=" print func writeln!                            
+      148 -  "DBG: idx=" print idx print " func#=" print func # println! 
+      147    idx func # = {
+      148      ; Done - discard need-enter, return code
+      151 -    "DBG: done, code=" print code writeln!                    
+      149      code
+      150    } {
+      151      ; Get term and its corresponding node
+      152      func idx @ /term
+      153      body-nodes idx @ /node
+      157 -    "DBG: term=" print term writeln!                          
+      158 -    ; Process current term, get back (code' need-enter')      
+      154 +    ; Process current term, get back (new-code new-need-enter)
+      155      code need-enter term node free-vars max-slots codegen-term
+           !
+      156      /new-need-enter /new-code
+      157      ; Recurse with updated state
+
+● Bash(timeout 10 ./bin/froth tests/debug_codegen.froth 2>&1)
+  ⎿  Test 1: codegen-seq on { 1 }
+     result1=[ 0 1 ]
+
+● That was the bug! Let me run the full codegen tests:
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  func-addr=0 next-addr=7      
+     bytecode: 0 1 0 2 0 3 2
+     func-addr2=7 next-addr2=12
+     … +8 lines (ctrl+o to expand)
+
+● Let me check against expected output:
+
+● Bash(diff <(timeout 10 ./bin/froth tests/codegen.froth 2>&1)
+      tests/codegen.expected)
+  ⎿  Error: Exit code 1
+     4c4
+     < bytecode2: 0 42 3 449 2 
+     ---
+     > bytecode2: 0 42 3 441 2
+
+● The only difference is the string intern ID (449 vs 441) - this varies based on load order. Let me update the expected file:
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth > tests/codegen.expected 2>&1)
+  ⎿  (No content)
+
+● Bash(rm tests/debug_codegen.froth)
+  ⎿  (No content)
+
+● Now let me add tests for bound variables to the codegen test file:
+
+● Read(tests/codegen.froth)
+  ⎿  Read 76 lines
+
+● Update(tests/codegen.froth)
+  ⎿  Added 44 lines                                                      
+       72  "context test: " print
+       73  [10 20] func-addr5 close ! println!
+       74  
+       75 +; Test 6: Bound variable - simple binder with usage           
+       76 +; { /x x } should emit: enter-frame 1, pop-local 0, push-local
+          + 0, leave-frame 1, return                                     
+       77 +; Instruction codes: enter-frame=8, pop-local=7, push-local=6,
+          + leave-frame=9, return=2                                      
+       78 +'{ /x x } /func6                                              
+       79 +func6 boundness! liveness! slots! /func6-node /func6-term     
+       80 +next-addr5 tree-empty! func6-term func6-node codegen!         
+       81 +/func6-addr /code-map6 /next-addr6                            
+       82 +"bytecode6: " print                                           
+       83 +next-addr5 next-addr6 dump-bytecode!                          
+       84 +nl!                                                           
+       85 +                                                              
+       86 +; Execute with context [] and arg 42 - should return 42       
+       87 +"bound test: " print                                          
+       88 +42 [] func6-addr close ! println!                             
+       89 +                                                              
+       90 +; Test 7: Dead binder                                         
+       91 +; { /x 99 } should emit: pop-unused, push-int 99, return      
+       92 +; Instruction codes: pop-unused=5, push-int=0, return=2       
+       93 +'{ /x 99 } /func7                                             
+       94 +func7 boundness! liveness! slots! /func7-node /func7-term     
+       95 +next-addr6 tree-empty! func7-term func7-node codegen!         
+       96 +/func7-addr /code-map7 /next-addr7                            
+       97 +"bytecode7: " print                                           
+       98 +next-addr6 next-addr7 dump-bytecode!                          
+       99 +nl!                                                           
+      100 +                                                              
+      101 +; Execute with arg 42 (discarded) - should return 99          
+      102 +"dead binder test: " print                                    
+      103 +42 [] func7-addr close ! println!                             
+      104 +                                                              
+      105 +; Test 8: Multiple binders with addition                      
+      106 +; { /x /y x y + } should emit: enter-frame 2, pop-local 0, pop
+          +-local 1, push-local 0, push-local 1, op +, leave-frame 2, ret
+          +urn                                                           
+      107 +'{ /x /y x y + } /func8                                       
+      108 +func8 boundness! liveness! slots! /func8-node /func8-term     
+      109 +next-addr7 tree-empty! func8-term func8-node codegen!         
+      110 +/func8-addr /code-map8 /next-addr8                            
+      111 +"bytecode8: " print                                           
+      112 +next-addr7 next-addr8 dump-bytecode!                          
+      113 +nl!                                                           
+      114 +                                                              
+      115 +; Execute with args 10 and 3 - should return 13 (10 + 3)      
+      116 +"multi-binder test: " print                                   
+      117 +10 3 [] func8-addr close ! println!                           
+      118 +                                                              
+      119  "done" println!
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  func-addr=0 next-addr=7       
+     bytecode: 0 1 0 2 0 3 2
+     func-addr2=7 next-addr2=12
+     … +14 lines (ctrl+o to expand)
+
+● All tests pass. Let me verify the bytecode is correct:
+
+  - Test 6 { /x x }: 8 1 7 0 6 0 9 1 2 = enter-frame 1, pop-local 0, push-local 0, leave-frame 1, return ✓
+  - Test 7 { /x 99 }: 5 0 99 2 = pop-unused, push-int 99, return ✓
+  - Test 8 { /x /y x y + }: 8 2 7 0 7 1 6 0 6 1 9 2 1 2 2 = enter-frame 2, pop-local 0, pop-local 1, push-local 0, push-local 1, leave-frame 2, op +, return ✓
+
+  Let me update the expected output:
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth > tests/codegen.expected 2>&1
+      && cat tests/codegen.expected)
+  ⎿  func-addr=0 next-addr=7       
+     bytecode: 0 1 0 2 0 3 2
+     func-addr2=7 next-addr2=12
+     … +14 lines (ctrl+o to expand)
+
+● The issue was using code' and need-enter' as variable names. In Froth, ' is the quote operator that precedes terms ('x), not a valid part of an identifier. So code' was being parsed as two tokens: code followed by ' (quote), which then quoted the next value on the stack.
+
+  Fixed by renaming to new-code and new-need-enter.
+
+  Summary of changes to codegen.froth:
+  1. Added instruction code lookups for push-local, pop-local, pop-unused, enter-frame, leave-frame
+  2. Added binder handling: used binders emit enter-frame (if first) + pop-local, dead binders emit pop-unused
+  3. Added bound identifier handling: emit push-local + leave-frame (if last frame access)
+  4. Threading need-enter flag through codegen-seq to emit enter-frame lazily
+  5. Extract max-slots and needs-frame from func-node
+
+  All tests pass - bound variable codegen is working:
+  - { /x x } → enter-frame 1, pop-local 0, push-local 0, leave-frame 1, return
+  - { /x 99 } → pop-unused, push-int 99, return
+  - { /x /y x y + } → enter-frame 2, pop-local 0, pop-local 1, push-local 0, push-local 1, leave-frame 2, op +, return
+
+> Update FROTH_GUIDE to note that error 
+
+● Read(FROTH_GUIDE.md)
+  ⎿  Read 274 lines
+
+● Update(FROTH_GUIDE.md)
+  ⎿  Added 23 lines                                                      
+      16  
+      17  Without `!`, the closure is just pushed onto the stack instead 
+          of being executed.
+      18  
+      19 +## Quote `'` is a Prefix Operator                              
+      20 +                                                               
+      21 +The quote operator `'` comes before the term it quotes, not aft
+         +er. Names like `code'` or `x'` are not valid identifiers—they p
+         +arse as two tokens:                                            
+      22 +                                                               
+      23 +```                                                            
+      24 +'x       ; quoted identifier (one token)                       
+      25 +x'       ; identifier x followed by quote (two tokens!)        
+      26 +                                                               
+      27 +code'    ; parses as: code '                                   
+      28 +new-code ; valid identifier with hyphen                        
+      29 +```                                                            
+      30 +                                                               
+      31 +If you want a "prime" variable name, use a suffix like `2` or a
+         + prefix like `new-`:                                           
+      32 +                                                               
+      33 +```                                                            
+      34 +; Wrong - x' is two tokens                                     
+      35 +/x x 1 + /x'                                                   
+      36 +                                                               
+      37 +; Correct alternatives                                         
+      38 +/x x 1 + /x2                                                   
+      39 +/x x 1 + /new-x                                                
+      40 +```                                                            
+      41 +                                                               
+      42  ## Boolean Convention: 0 is True
+      43  
+      44  Froth uses 0 for true and non-zero for false. This matches the 
+          Unix convention where 0 indicates success.
+
+● Done. Added a new section "Quote ' is a Prefix Operator" explaining that code' parses as two tokens and showing the correct alternatives (x2, new-x).
+
+> Quote is not technically an operator, it is a token read by the lexer. It 
+causes the parser to treat the next term as quoted in the parse tree. 
+
+● Update(FROTH_GUIDE.md)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      16  
+      17  Without `!`, the closure is just pushed onto the stack instead 
+          of being executed.
+      18  
+      19 -## Quote `'` is a Prefix Operator                              
+      19 +## Quote `'` is a Prefix                                       
+      20  
+      21 -The quote operator `'` comes before the term it quotes, not aft
+         -er. Names like `code'` or `x'` are not valid identifiers—they p
+         -arse as two tokens:                                            
+      21 +The quote token `'` comes before the term it quotes, not after.
+         + Names like `code'` or `x'` are not valid identifiers—they pars
+         +e as two tokens:                                               
+      22  
+      23  ```
+      24  'x       ; quoted identifier (one token)
+
+● Fixed - changed "Prefix Operator" to "Prefix" and "quote operator" to "quote token".
+
+> Note that `'x` is two tokens (lexical level) but a single term (parse 
+level) 
+
+● Update(FROTH_GUIDE.md)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      21  The quote token `'` comes before the term it quotes, not after.
+           Names like `code'` or `x'` are not valid identifiers—they pars
+          e as two tokens:
+      22  
+      23  ```
+      24 -'x       ; quoted identifier (one token)                       
+      25 -x'       ; identifier x followed by quote (two tokens!)        
+      24 +'x       ; quote + identifier = one quoted term                
+      25 +x'       ; identifier x followed by quote (two separate tokens!
+         +)                                                              
+      26  
+      27  code'    ; parses as: code '
+      28  new-code ; valid identifier with hyphen
+
+● Fixed - clarified that 'x is two tokens that combine into one quoted term.
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                     
+     Your branch is ahead of 'origin/master' by 2 commits.
+       (use "git push" to publish your local commits)
+     … +13 lines (ctrl+o to expand)
+
+● Bash(git diff --staged)
+  ⎿  diff --git a/FROTH_GUIDE.md b/FROTH_GUIDE.md
+     index c64f09a..2d9cf62 100644
+     --- a/FROTH_GUIDE.md
+     … +348 lines (ctrl+o to expand)
+
+● Bash(git log --oneline -5)
+  ⎿  bd6217e Add codegen support for context variables (free variables)
+     d53ddf5 add transcript 55
+     2b395b2 Add codegen support for quoted terms
+     … +2 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Add codegen support for bound variables (frame
+      operations)…)
+  ⎿ [master c88b2f7] Add codegen support for bound variables (frame operati
+    ons)
+     4 files changed, 155 insertions(+), 32 deletions(-)
+
+
+● Committed as c88b2f7.
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 165k/200k tokens (82%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 16.3k tokens (8.2%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 85.4k tokens (42.7%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 35k (17.7%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 118 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 5.9k tokens
+     └ FROTH_COMPILER.md: 4.3k tokens
+     └ FROTH_BYTECODE.md: 1.1k tokens
+     └ FROTH_GUIDE.md: 2.1k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> Let's review our compiler code and documentation for clarity and 
+consistency. 
+
+● Read(lib/codegen.froth)
+  ⎿  Read 204 lines
+
+● Read(FROTH_COMPILER.md)
+  ⎿  Read 332 lines
+
+● I see a few issues:
+
+  FROTH_COMPILER.md line 318 is outdated - it says codegen "Currently supports integer and string literals" but we now support much more:
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 12 lines, removed 4 lines                                     
+      315  - `new-code-map`: Updated with this function (and nested funct
+           ions when supported)
+      316  - `func-addr`: This function's bytecode entry point
+      317  
+      318 -Currently supports integer and string literals. Emits `push-in
+          -t` for integers, `push-string` for strings, and appends `retur
+          -n`.                                                           
+      318 +Supports:                                                     
+      319 +- Integer and string literals (`push-int`, `push-string`)     
+      320 +- Operators (`op`)                                            
+      321 +- Free variables (`push-context`)                             
+      322 +- Bound variables (`enter-frame`, `pop-local`, `push-local`, `
+          +leave-frame`)                                                 
+      323 +- Dead binders (`pop-unused`)                                 
+      324 +- Quoted identifiers, binders, apply, and values              
+      325  
+      326  ```
+      327 +; Simple literals (no analysis needed)                        
+      328  0 tree-empty! '{ 1 2 3 } $ codegen!
+      329  /func-addr /code-map /next-addr
+      330  ; Emits: push-int 1 push-int 2 push-int 3 return
+      324 -; func-addr=0, next-addr=7                                    
+      331  
+      326 -next-addr tree-empty! '{ 42 "hello" } $ codegen!              
+      332 +; With bound variables (needs full analysis)                  
+      333 +'{ /x x } boundness! liveness! slots! /node /func             
+      334 +next-addr tree-empty! func node codegen!                      
+      335  /func-addr2 /code-map2 /next-addr2
+      328 -; Emits: push-int 42 push-string <intern-id> return           
+      336 +; Emits: enter-frame 1 pop-local 0 push-local 0 leave-frame 1 
+          +return                                                        
+      337  ```
+      338  
+      339  The full pipeline: `0 tree-empty! func boundness! liveness! sl
+           ots! codegen!`
+
+● Let me verify the tests still pass:
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1 | diff -
+      tests/codegen.expected)
+  ⎿  (No content)
+
+● Tests pass. Let me also check FROTH_BYTECODE.md for consistency:
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 92 lines
+
+● Line 83 in FROTH_BYTECODE.md is incomplete - it doesn't mention enter-frame/leave-frame:
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      77  | Term | Codegen |
+      78  |------|---------|
+      79  | literal | `push-int` or `push-string` |
+      80 -| identifier (bound) | `push-local` slot |                     
+      80 +| identifier (bound) | `push-local` slot; `leave-frame` if last
+         + frame use |                                                   
+      81  | identifier (free) | `push-context` slot |
+      82  | identifier (operator) | `op` code |
+      83 -| binder | `pop-local` slot (or `pop-unused` if dead) |        
+      83 +| binder (used) | `enter-frame` if first; `pop-local` slot |   
+      84 +| binder (dead) | `pop-unused` |                               
+      85  | function | recurse, build context, push addr, `op close` |
+      86  | generator | `start-array`, codegen body, `end-array` |
+      87  | apply | `call` or `tail-call` (bytecodeval already on stack) 
+          |
+
+● Let me also check the code comments in codegen.froth for clarity. The ? branch comments could be clearer:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 6 lines, removed 7 lines                                      
+      45    term isBinder {
+      46      ; Binder - check if used or dead
+      47      node 'is-used in {
+      48 -      ; 'is-used exists - check its value                      
+      48        node 'is-used @ {
+      50 -        ; is-used=0: used binder - maybe emit enter-frame, then
+         - pop-local                                                     
+      49 +        ; Used binder (is-used=0) - maybe emit enter-frame, the
+         +n pop-local                                                    
+      50          need-enter {
+      52 -          ; need-enter=0: Need to enter frame first            
+      51 +          ; First binder (need-enter=0) - enter frame first    
+      52            code [ocEnterFrame max-slots] concat!
+      53          } {
+      55 -          ; need-enter=1: Already entered frame                
+      54 +          ; Already in frame                                   
+      55            code
+      56          } ?!
+      57          node 'slot @ /slot
+      59 -        [ocPopLocal slot] concat! 1  ; code' need-enter'=1 (fra
+         -me entered)                                                    
+      58 +        [ocPopLocal slot] concat! 1  ; now in frame (need-enter
+         +=1)                                                            
+      59        } {
+      61 -        ; is-used=1: dead binder - just pop-unused             
+      60 +        ; Dead binder (is-used=1) - just discard               
+      61          code [ocPopUnused] concat! need-enter
+      62        } ?!
+      63      } {
+      65 -      ; No 'is-used key - assume dead, pop-unused              
+      64 +      ; No 'is-used key - assume dead                          
+      65        code [ocPopUnused] concat! need-enter
+      66      } ?!
+      67    } {
+
+● Update(lib/codegen.froth)
+  ⎿  Added 5 lines, removed 6 lines                                      
+      73      } {
+      74        ; Regular identifier - check if bound or free
+      75        node 'is-bound in {
+      76 -        ; 'is-bound exists - check its value                   
+      76          node 'is-bound @ {
+      78 -          ; is-bound=0 means bound variable - emit push-local  
+      77 +          ; Bound variable (is-bound=0) - emit push-local      
+      78            node 'slot @ /slot
+      79            code [ocPushLocal slot] concat!
+      81 -          ; Check if we need to leave frame after this         
+      80 +          ; Check if this is the last frame access             
+      81            node 'leave-frame in {
+      82              node 'leave-frame @ {
+      84 -              ; leave-frame=0: emit leave-frame                
+      83 +              ; Last frame access (leave-frame=0) - exit frame 
+      84                [ocLeaveFrame max-slots] concat!
+      85              } { } ?!
+      86            } { } ?!
+      87            need-enter
+      88          } {
+      90 -          ; is-bound=1 means free variable - look up context sl
+         -ot                                                             
+      89 +          ; Free variable (is-bound=1) - look up context slot  
+      90            free-vars term @ /slot
+      91            code [ocPushContext slot] concat! need-enter
+      92          } ?!
+      93        } {
+      95 -        ; No 'is-bound key - skip (no analysis data)           
+      94 +        ; No analysis data - skip                              
+      95          code need-enter
+      96        } ?!
+      97      } ?!
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1 | diff -
+      tests/codegen.expected)
+  ⎿  (No content)
+
+● Tests pass. Summary of changes:
+
+  FROTH_COMPILER.md:
+  - Updated Codegen section to list all supported terms (was outdated, said only "integer and string literals")
+  - Added example showing bound variable codegen with full analysis pipeline
+
+  FROTH_BYTECODE.md:
+  - Split binder row into "binder (used)" and "binder (dead)"
+  - Added enter-frame if first for used binders
+  - Added leave-frame if last frame use for bound identifiers
+
+  lib/codegen.froth:
+  - Clarified comments to lead with semantic meaning rather than raw values
+  - e.g., "Used binder (is-used=0)" instead of "is-used=0: used binder"
+  - Simplified redundant comments
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                     
+     Your branch is ahead of 'origin/master' by 3 commits.
+       (use "git push" to publish your local commits)
+     … +12 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Update compiler docs and clarify codegen comments…)
+  ⎿  [master 9b80123] Update compiler docs and clarify codegen comments
+      3 files changed, 26 insertions(+), 19 deletions(-)
+
+● Committed as 9b80123.
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 184k/200k tokens (92%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 16.3k tokens (8.2%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 104.4k tokens (52.2%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛶   ⛶ Free space: 16k (8.2%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 118 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 5.9k tokens
+     └ FROTH_COMPILER.md: 4.3k tokens
+     └ FROTH_BYTECODE.md: 1.1k tokens
+     └ FROTH_GUIDE.md: 2.1k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
