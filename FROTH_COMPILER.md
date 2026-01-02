@@ -315,17 +315,25 @@ Takes a function term and its analysis node, generates bytecode at `addr`, and r
 - `new-code-map`: Updated with this function (and nested functions when supported)
 - `func-addr`: This function's bytecode entry point
 
-Currently supports integer and string literals. Emits `push-int` for integers, `push-string` for strings, and appends `return`.
+Supports:
+- Integer and string literals (`push-int`, `push-string`)
+- Operators (`op`)
+- Free variables (`push-context`)
+- Bound variables (`enter-frame`, `pop-local`, `push-local`, `leave-frame`)
+- Dead binders (`pop-unused`)
+- Quoted identifiers, binders, apply, and values
 
 ```
+; Simple literals (no analysis needed)
 0 tree-empty! '{ 1 2 3 } $ codegen!
 /func-addr /code-map /next-addr
 ; Emits: push-int 1 push-int 2 push-int 3 return
-; func-addr=0, next-addr=7
 
-next-addr tree-empty! '{ 42 "hello" } $ codegen!
+; With bound variables (needs full analysis)
+'{ /x x } boundness! liveness! slots! /node /func
+next-addr tree-empty! func node codegen!
 /func-addr2 /code-map2 /next-addr2
-; Emits: push-int 42 push-string <intern-id> return
+; Emits: enter-frame 1 pop-local 0 push-local 0 leave-frame 1 return
 ```
 
 The full pipeline: `0 tree-empty! func boundness! liveness! slots! codegen!`

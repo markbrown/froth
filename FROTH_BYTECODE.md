@@ -77,10 +77,11 @@ The `free-vars` map tells which variables to capture. At runtime, these are look
 | Term | Codegen |
 |------|---------|
 | literal | `push-int` or `push-string` |
-| identifier (bound) | `push-local` slot |
+| identifier (bound) | `push-local` slot; `leave-frame` if last frame use |
 | identifier (free) | `push-context` slot |
 | identifier (operator) | `op` code |
-| binder | `pop-local` slot (or `pop-unused` if dead) |
+| binder (used) | `enter-frame` if first; `pop-local` slot |
+| binder (dead) | `pop-unused` |
 | function | recurse, build context, push addr, `op close` |
 | generator | `start-array`, codegen body, `end-array` |
 | apply | `call` or `tail-call` (bytecodeval already on stack) |
