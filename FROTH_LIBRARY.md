@@ -54,6 +54,15 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `swap` | data | Swap top two elements |
 | `transform` | data | Recursively transform data structure |
 | `transform-values` | map | Transform each value in map |
+| `tree-empty` | tree23 | Create an empty tree |
+| `tree-fold` | tree23 | Apply fn to each key-value pair in order |
+| `tree-get` | tree23 | Get value by key |
+| `tree-has` | tree23 | Check if key exists |
+| `tree-is-empty` | tree23 | Check if tree is empty |
+| `tree-keys` | tree23 | Get all keys as array (in order) |
+| `tree-set` | tree23 | Set or update key-value pair |
+| `tree-size` | tree23 | Get number of entries |
+| `tree-values` | tree23 | Get all values as array (in key order) |
 | `writeln` | io | Write in executable form with newline |
 
 Unlike operators, functions must be followed by `!` to be applied (e.g., `println!`, `foldl!`).
@@ -250,6 +259,56 @@ a 1 "one" alist-set! /a        ; [ [1 "one"] ]
 a 2 "two" alist-set! /a        ; [ [1 "one"] [2 "two"] ]
 a 1 "ONE" alist-set! /a        ; [ [1 "ONE"] [2 "two"] ] (updated)
 a 1 alist-delete! /a           ; [ [2 "two"] ]
+```
+
+## Tree23 (tree23.froth)
+
+A 2-3 tree for balanced key-value storage with O(log n) operations. Keys must be integers; use `ref` to convert other values to integer keys.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `tree-empty` | `( -- tree )` | Create an empty tree |
+| `tree-is-empty` | `( tree -- 0 \| 1 )` | Check if empty (0 = yes) |
+| `tree-get` | `( tree key -- value 0 \| 1 )` | Get value by key |
+| `tree-has` | `( tree key -- 0 \| 1 )` | Check if key exists |
+| `tree-set` | `( tree key value -- tree' )` | Set or update key-value pair |
+| `tree-size` | `( tree -- n )` | Get number of entries |
+| `tree-keys` | `( tree -- array )` | Get all keys as array (in order) |
+| `tree-values` | `( tree -- array )` | Get all values as array (in key order) |
+| `tree-fold` | `( tree fn -- ... )` | Apply fn to each (key value) pair in order |
+
+Lookup functions return a success flag (0 = found, 1 = not found):
+
+```
+tree-empty! /t
+t 10 "ten" tree-set! /t
+t 5 "five" tree-set! /t
+t 15 "fifteen" tree-set! /t
+
+t 10 tree-get!                 ; "ten" 0 (found)
+t 7 tree-get!                  ; 1 (not found)
+t 5 tree-has!                  ; 0 (exists)
+t tree-size!                   ; 3
+```
+
+Keys are stored in sorted order:
+
+```
+t tree-keys!                   ; [5 10 15]
+t tree-values!                 ; ["five" "ten" "fifteen"]
+t { /v /k k print " " print v println! } tree-fold!
+; prints: 5 five, 10 ten, 15 fifteen
+```
+
+Use `ref` to map arbitrary values to integer keys:
+
+```
+tree-empty! /t
+"hello" ref /k1
+"world" ref /k2
+t k1 100 tree-set! /t
+t k2 200 tree-set! /t
+t k1 tree-get!                 ; 100 0
 ```
 
 ## Data (data.froth)

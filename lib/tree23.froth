@@ -1,0 +1,295 @@
+; tree23.froth - 2-3 tree (balanced search tree)
+;
+; A 2-3 tree maps integer keys to arbitrary values with O(log n) operations.
+; All leaves are at the same depth, guaranteeing balance.
+;
+; Representation:
+;   Empty tree: . (nil)
+;   2-node: [key val left right]           (length 4)
+;   3-node: [key1 val1 key2 val2 left mid right]  (length 7)
+;
+; Keys must be integers. Use `ref` to convert other values to integer keys.
+
+; tree-empty: ( -- tree )
+; Create an empty tree.
+{ . } /tree-empty
+
+; tree-is-empty: ( tree -- 0|1 )
+; Check if tree is empty. Returns 0 if empty.
+{ isNil } /tree-is-empty
+
+; tree-is-2node: ( node -- 0|1 )
+; Check if node is a 2-node. Returns 0 if 2-node.
+{ # 4 = } /tree-is-2node
+
+; tree-get-impl: ( self tree key -- value 0 | 1 )
+; Recursive implementation of tree-get.
+{ /key /tree /self
+  tree isNil { 1 } {
+    tree # 4 = {
+      ; 2-node: [k v left right]
+      tree 0 @ /k
+      key k = {
+        tree 1 @ 0
+      } {
+        self
+        key k < { tree 2 @ } { tree 3 @ } ?!
+        key self!
+      } ?!
+    } {
+      ; 3-node: [k1 v1 k2 v2 left mid right]
+      tree 0 @ /k1
+      tree 2 @ /k2
+      key k1 = {
+        tree 1 @ 0
+      } {
+        key k2 = {
+          tree 3 @ 0
+        } {
+          self
+          key k1 < { tree 4 @ } {
+            key k2 < { tree 5 @ } { tree 6 @ } ?!
+          } ?!
+          key self!
+        } ?!
+      } ?!
+    } ?!
+  } ?!
+} /tree-get-impl
+
+; tree-get: ( tree key -- value 0 | 1 )
+; Look up key in tree. Returns (value 0) if found, (1) if not found.
+['tree-get-impl] {
+  /key /tree
+  tree-get-impl tree key tree-get-impl!
+} def-fn! /tree-get
+
+; tree-has: ( tree key -- 0|1 )
+; Check if key exists in tree. Returns 0 if present.
+['tree-get 'drop] {
+  /key /tree
+  tree key tree-get!
+  { drop! 0 } { 1 } ?!
+} def-fn! /tree-has
+
+; make-2node: ( key val left right -- node )
+{ /right /left /val /key
+  [ key val left right ]
+} /make-2node
+
+; make-3node: ( key1 val1 key2 val2 left mid right -- node )
+{ /right /mid /left /val2 /key2 /val1 /key1
+  [ key1 val1 key2 val2 left mid right ]
+} /make-3node
+
+; tree-insert-impl: ( self tree key val -- node 0 | left key val right 1 )
+; Insert key-val into tree, returning either updated node or split result.
+['make-2node 'make-3node] {
+  /val /key /tree /self
+
+  tree isNil {
+    ; Empty: create leaf 2-node with nil children
+    key val . . make-2node! 0
+  } {
+    tree # 4 = {
+      ; 2-node: [k v left right]
+      tree 0 @ /k  tree 1 @ /v
+      tree 2 @ /left  tree 3 @ /right
+
+      key k = {
+        ; Update existing key
+        key val left right make-2node! 0
+      } {
+        key k < {
+          ; Insert into left subtree
+          self left key val self!
+          { /new-left
+            k v new-left right make-2node! 0
+          } { /sr /sv /sk /sl
+            ; Split from left: absorb into 3-node
+            sk sv k v sl sr right make-3node! 0
+          } ?!
+        } {
+          ; Insert into right subtree
+          self right key val self!
+          { /new-right
+            k v left new-right make-2node! 0
+          } { /sr /sv /sk /sl
+            ; Split from right: absorb into 3-node
+            k v sk sv left sl sr make-3node! 0
+          } ?!
+        } ?!
+      } ?!
+    } {
+      ; 3-node: [k1 v1 k2 v2 left mid right]
+      tree 0 @ /k1  tree 1 @ /v1
+      tree 2 @ /k2  tree 3 @ /v2
+      tree 4 @ /left  tree 5 @ /mid  tree 6 @ /right
+
+      key k1 = {
+        ; Update k1
+        key val k2 v2 left mid right make-3node! 0
+      } {
+        key k2 = {
+          ; Update k2
+          k1 v1 key val left mid right make-3node! 0
+        } {
+          key k1 < {
+            ; Insert into left subtree
+            self left key val self!
+            { /new-left
+              k1 v1 k2 v2 new-left mid right make-3node! 0
+            } { /sr /sv /sk /sl
+              ; Split from left: must split this node too
+              sk sv sl sr make-2node! /left-new
+              k2 v2 mid right make-2node! /right-new
+              left-new k1 v1 right-new 1
+            } ?!
+          } {
+            key k2 < {
+              ; Insert into middle subtree
+              self mid key val self!
+              { /new-mid
+                k1 v1 k2 v2 left new-mid right make-3node! 0
+              } { /sr /sv /sk /sl
+                ; Split from middle: split this node, promote middle key
+                k1 v1 left sl make-2node! /left-new
+                k2 v2 sr right make-2node! /right-new
+                left-new sk sv right-new 1
+              } ?!
+            } {
+              ; Insert into right subtree
+              self right key val self!
+              { /new-right
+                k1 v1 k2 v2 left mid new-right make-3node! 0
+              } { /sr /sv /sk /sl
+                ; Split from right: must split this node too
+                k1 v1 left mid make-2node! /left-new
+                sk sv sl sr make-2node! /right-new
+                left-new k2 v2 right-new 1
+              } ?!
+            } ?!
+          } ?!
+        } ?!
+      } ?!
+    } ?!
+  } ?!
+} def-fn! /tree-insert-impl
+
+; tree-set: ( tree key val -- tree' )
+; Insert or update key-value pair. Returns new tree.
+['tree-insert-impl 'make-2node] {
+  /val /key /tree
+  tree-insert-impl tree key val tree-insert-impl!
+  { } { /right /val2 /key2 /left
+    ; Root split: create new root
+    key2 val2 left right make-2node!
+  } ?!
+} def-fn! /tree-set
+
+; tree-size-impl: ( self tree -- n )
+{ /tree /self
+  tree isNil { 0 } {
+    tree # 4 = {
+      ; 2-node: 1 + left + right
+      self tree 2 @ self!
+      self tree 3 @ self!
+      + 1 +
+    } {
+      ; 3-node: 2 + left + mid + right
+      self tree 4 @ self!
+      self tree 5 @ self!
+      self tree 6 @ self!
+      + + 2 +
+    } ?!
+  } ?!
+} /tree-size-impl
+
+; tree-size: ( tree -- n )
+; Count number of entries in tree.
+['tree-size-impl] {
+  /tree tree-size-impl tree tree-size-impl!
+} def-fn! /tree-size
+
+; tree-keys-impl: ( self tree -- array )
+{ /tree /self
+  tree isNil { [ ] } {
+    tree # 4 = {
+      ; 2-node: left keys, then key, then right keys
+      [
+        self tree 2 @ self! { } foldl!
+        tree 0 @
+        self tree 3 @ self! { } foldl!
+      ]
+    } {
+      ; 3-node: left, k1, mid, k2, right
+      [
+        self tree 4 @ self! { } foldl!
+        tree 0 @
+        self tree 5 @ self! { } foldl!
+        tree 2 @
+        self tree 6 @ self! { } foldl!
+      ]
+    } ?!
+  } ?!
+} /tree-keys-impl
+
+; tree-keys: ( tree -- array )
+; Get all keys as an array (in order).
+['tree-keys-impl 'foldl] {
+  /tree tree-keys-impl tree tree-keys-impl!
+} def-fn! /tree-keys
+
+; tree-values-impl: ( self tree -- array )
+{ /tree /self
+  tree isNil { [ ] } {
+    tree # 4 = {
+      ; 2-node
+      [
+        self tree 2 @ self! { } foldl!
+        tree 1 @
+        self tree 3 @ self! { } foldl!
+      ]
+    } {
+      ; 3-node
+      [
+        self tree 4 @ self! { } foldl!
+        tree 1 @
+        self tree 5 @ self! { } foldl!
+        tree 3 @
+        self tree 6 @ self! { } foldl!
+      ]
+    } ?!
+  } ?!
+} /tree-values-impl
+
+; tree-values: ( tree -- array )
+; Get all values as an array (in key order).
+['tree-values-impl 'foldl] {
+  /tree tree-values-impl tree tree-values-impl!
+} def-fn! /tree-values
+
+; tree-fold-impl: ( self tree fn -- ... )
+{ /fn /tree /self
+  tree isNil { } {
+    tree # 4 = {
+      ; 2-node
+      self tree 2 @ fn self!
+      tree 0 @ tree 1 @ fn!
+      self tree 3 @ fn self!
+    } {
+      ; 3-node
+      self tree 4 @ fn self!
+      tree 0 @ tree 1 @ fn!
+      self tree 5 @ fn self!
+      tree 2 @ tree 3 @ fn!
+      self tree 6 @ fn self!
+    } ?!
+  } ?!
+} /tree-fold-impl
+
+; tree-fold: ( tree fn -- ... )
+; Apply fn to each (key value) pair in order.
+['tree-fold-impl] {
+  /fn /tree tree-fold-impl tree fn tree-fold-impl!
+} def-fn! /tree-fold

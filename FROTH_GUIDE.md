@@ -192,6 +192,49 @@ array {
 } foldl!
 ```
 
+### Recursive Functions
+
+Closures capture the environment at definition time. This means a function can't directly call itself because it isn't bound yet when the closure is created:
+
+```
+; This doesn't work - factorial isn't bound when closure is created
+{ /n
+  n 0 = { 1 } { n 1 - factorial! n * } ?!
+} /factorial
+5 factorial!             ; error: undefined name: factorial
+```
+
+Use Y-combinator style: pass the function to itself as an argument:
+
+```
+; Define with /self as FIRST binder (it will be popped last)
+{ /self /n
+  n 0 = { 1 } {
+    n 1 - self self! n *
+  } ?!
+} /fact-impl
+
+; Wrapper: push impl, args, impl again, then call
+{ /n fact-impl n fact-impl! } /factorial
+5 factorial!             ; 120
+```
+
+The pattern is: `{ /self /args body }` with recursive calls `args self self!`. The first `self` becomes `/self` in the next call (passed through the stack), and `self!` makes the call.
+
+For tree traversal with multiple recursive calls:
+
+```
+{ /self /tree
+  tree isNil { 0 } {
+    tree 2 @ self self!    ; left subtree
+    tree 3 @ self self!    ; right subtree
+    + 1 +                   ; count this node
+  } ?!
+} /count-impl
+
+{ /tree count-impl tree count-impl! } /tree-count
+```
+
 ### Using def-fn! for Minimal Environments
 
 When defining library functions, use `def-fn!` to capture only needed dependencies:
@@ -204,3 +247,13 @@ When defining library functions, use `def-fn!` to capture only needed dependenci
 ```
 
 This prevents environment bloat and is required for compilation. Note: operators like `+`, `=`, `?` don't need to be listed—only closures from the standard library.
+
+For recursive functions with `def-fn!`, include the impl function in the dependencies of the wrapper:
+
+```
+{ /self /n
+  n 0 = { 1 } { n 1 - self self! n * } ?!
+} /fact-impl
+
+['fact-impl] { /n fact-impl n fact-impl! } def-fn! /factorial
+```
