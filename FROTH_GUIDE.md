@@ -68,11 +68,14 @@ Binders pop values in reverse order (last-in, first-out):
 1 2 3 /a /b /c    ; c=3, b=2, a=1
 ```
 
-When defining a function, list parameters in the order they're passed:
+When defining a function, the first binder gets the top of stack (last argument pushed):
 
 ```
 { /a /b a b - } /subtract
-5 3 subtract!     ; computes 5 - 3 = 2, not 3 - 5
+5 3 subtract!     ; a=3, b=5, computes 3 - 5 = -2
+
+{ /b /a a b - } /subtract2
+5 3 subtract2!    ; a=5, b=3, computes 5 - 3 = 2
 ```
 
 ## The `?` Operator Consumes the Condition
@@ -233,6 +236,17 @@ For tree traversal with multiple recursive calls:
 } /count-impl
 
 { /tree count-impl tree count-impl! } /tree-count
+```
+
+### Inspecting Closures
+
+Use `open` to decompose a closure into its environment and body:
+
+```
+{ 1 2 + } /f
+f open /body /env
+env #              ; number of bindings captured
+body               ; the quoted function body
 ```
 
 ### Using def-fn! for Minimal Environments

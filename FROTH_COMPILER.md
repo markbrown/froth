@@ -134,7 +134,7 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 | `new-binder-node` | `( -- node )` | Create binder node (/name) |
 | `new-apply-node` | `( -- node )` | Create apply node (!) |
 | `new-closure-node` | `( -- node )` | Create closure node ({ }) |
-| `new-generator-node` | `( -- node )` | Create generator node (< >) |
+| `new-generator-node` | `( -- node )` | Create generator node ([ ]) |
 
 **Value conventions:**
 - Keys use 0 for "yes/true" and 1 for "no/false" (Froth convention)

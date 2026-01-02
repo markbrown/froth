@@ -81,13 +81,13 @@ When a closure is created with `{ ... }`, it captures the entire current environ
 { 1 } /a
 { a! 1 + } /b
 
-; Without def-fn: c captures full env (47+ bindings)
+; Without def-fn: c captures full env (many bindings)
 { b! 1 + } /c-full
-c-full closureEnv #           ; 47
+c-full open /body /env env #  ; many bindings
 
 ; With def-fn: c captures only b (1 binding)
 ['b] { b! 1 + } def-fn! /c-lean
-c-lean closureEnv #           ; 1
+c-lean open /body /env env #  ; 1
 
 ; Both produce the same result
 c-full!                       ; 3
@@ -401,11 +401,11 @@ Restricts a closure's captured environment to only the variables that are actual
 
 ```
 1 /a 2 /b { a } /f        ; f captures both a and b
-f closureEnv #             ; 2 (or more with stdlib)
+f open /body /env env #    ; many bindings (includes stdlib)
 f restrict-closure-env!
 { /opt
-  opt closureEnv #         ; 1 (only 'a)
-  opt!                     ; 1 (still works)
+  opt open /body /env env # ; 1 (only 'a)
+  opt!                      ; 1 (still works)
 } { "failed" } ?!
 ```
 
