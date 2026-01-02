@@ -49,7 +49,8 @@ The `instruction-table` constant maps symbols to VM instruction codes. Available
 | `'leave-frame` | 9 | Deallocate frame |
 | `'start-array` | 10 | Begin array generator |
 | `'end-array` | 11 | End array generator |
-| `'call` | 12 | Call bytecode closure |
+| `'call` | 12 | Call bytecode closure (sets RP) |
+| `'tail-call` | 17 | Tail call bytecode closure (preserves RP) |
 | `'save-return-ptr` | 13 | Push return pointer to stack |
 | `'restore-return-ptr` | 14 | Pop return pointer from stack |
 | `'save-context-ptr` | 15 | Push context pointer to stack |

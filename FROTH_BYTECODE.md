@@ -92,6 +92,7 @@ end-array          ; collect values since saved SP into array
 
 ; Control
 call               ; pop closure, set RP to next instruction, jump
+tail-call          ; pop closure, preserve RP, jump
 return             ; jump to RP (or exit VM if RP = -1)
 ```
 
@@ -111,10 +112,10 @@ push-local <ctx-slot>
 restore-context-ptr
 ```
 
-**Tail call (no saves needed):**
+**Tail call:**
 ```
 <push closure>
-call
+tail-call
 ```
 
 ## Bytecode Store
@@ -123,6 +124,32 @@ call
 - `peek addr` returns value at addr (0 if beyond size)
 - `poke value addr` writes value, extending array if needed
 - Bytecode is never freed (like the string table)
+
+## Constant Pool
+
+Separate from the bytecode store, the constant pool stores complex values that can't be inlined as immediate operands.
+
+- `ref value` stores a value and returns its index (with deduplication)
+- `deref index` retrieves a value by index
+- Pool persists across bytecode calls within a session
+- Values are deduplicated: storing the same value twice returns the same index
+
+Use cases:
+- String literals (store intern ID, but complex strings may need pool)
+- Array literals
+- Map literals
+- Nested closures captured as constants
+
+```
+42 ref /idx           ; store 42, get index (e.g., 0)
+42 ref                ; returns same index (deduplicated)
+idx deref             ; retrieves 42
+
+[1 2 3] ref /arr-idx  ; store array
+arr-idx deref         ; retrieves [1 2 3]
+```
+
+For codegen, the compiler can use `ref` at compile time to store constants, then emit `push-int <index>` followed by `op deref` to load them at runtime.
 
 ## Compiled Closure Representation
 

@@ -78,6 +78,7 @@
 :- func oc_startArray = int.
 :- func oc_endArray = int.
 :- func oc_call = int.
+:- func oc_tailCall = int.
 :- func oc_saveReturnPtr = int.
 :- func oc_restoreReturnPtr = int.
 :- func oc_saveContextPtr = int.
@@ -111,6 +112,7 @@ oc_leaveFrame = 9.
 oc_startArray = 10.
 oc_endArray = 11.
 oc_call = 12.
+oc_tailCall = 17.
 oc_saveReturnPtr = 13.
 oc_restoreReturnPtr = 14.
 oc_saveContextPtr = 15.
@@ -229,6 +231,15 @@ run(IP, RP, FP, Context, GenStack, !SP, !Store, OpTable, Env,
         datastack.pop("call", V, !Stack, !SP),
         ( if V = bytecodeval(CalleeContext, CodeAddr) then
             run(CodeAddr, IP + 1, FP, CalleeContext, GenStack, !SP, !Store,
+                OpTable, Env, !Bytecode, !Stack, !Pool, !HashTable, !IO)
+        else
+            throw(type_error("bytecode closure", V))
+        )
+    else if Opcode = oc_tailCall then
+        % tail-call: pop closure, preserve RP, switch context, jump
+        datastack.pop("tail-call", V, !Stack, !SP),
+        ( if V = bytecodeval(CalleeContext, CodeAddr) then
+            run(CodeAddr, RP, FP, CalleeContext, GenStack, !SP, !Store,
                 OpTable, Env, !Bytecode, !Stack, !Pool, !HashTable, !IO)
         else
             throw(type_error("bytecode closure", V))
