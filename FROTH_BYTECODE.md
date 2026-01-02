@@ -26,14 +26,24 @@ compile ( addr body-map env-map id -- new-addr new-body-map new-env-map )
 
 **Parameters:**
 - `addr`: Next available bytecode address
-- `body-map`: Map from body ref IDs to bytecode addresses (for deduplication)
-- `env-map`: Environment being updated (closurevals replaced with bytecodevals)
+- `body-map`: Tree23 from body ref IDs (integers) to bytecode addresses (for deduplication)
+- `env-map`: Map from identifiers to values (closurevals replaced with bytecodevals)
 - `id`: Quoted identifier of the function to compile
 
 **Returns:**
 - `new-addr`: Next available bytecode address after compilation
-- `new-body-map`: Updated body-map with newly compiled functions
+- `new-body-map`: Updated tree23 with newly compiled functions
 - `new-env-map`: Updated environment with compiled bytecodevals
+
+**Initialization:**
+- `body-map` starts as `tree-empty!`
+- `env-map` starts as the environment to compile (e.g., `env`)
+- `addr` starts at 0 (or next available address)
+
+```
+0 tree-empty! env 'my-function compile!
+/new-env /new-body-map /new-addr
+```
 
 **Algorithm outline:**
 
@@ -42,12 +52,12 @@ compile ( addr body-map env-map id -- new-addr new-body-map new-env-map )
 3. If already a bytecodeval, return unchanged (already compiled)
 4. `open` the closure to get its captured environment and body term
 5. Run `preflight` on body; if it fails, emit error and return unchanged
-6. Use `ref` on body term to get a unique ID for this function body
-7. Check `body-map`: if this body ID already has a bytecode address, reuse it
+6. Use `ref` on body term to get a unique integer ID for this function body
+7. Use `tree-get` on `body-map`: if this body ID already has a bytecode address, reuse it
 8. Otherwise:
    a. Run analysis passes (`boundness`, `liveness`, `slots`)
    b. Emit bytecode for the body at `addr`, collecting nested function dependencies
-   c. Update `body-map` with the mapping from body ID to `addr`
+   c. Use `tree-set` to update `body-map` with the mapping from body ID to `addr`
    d. Recursively compile nested dependencies (function literals in the body)
    e. Backpatch any forward references to nested function addresses
 9. Construct context array from captured environment:
@@ -70,7 +80,7 @@ The same closure body may appear in multiple places:
 - Library functions captured in many environments
 - The same lambda defined multiple times
 
-By using `ref` on the body term, we get a unique ID. The `body-map` tracks which bodies have already been compiled, allowing code sharing between closures that have the same body but different captured environments.
+By using `ref` on the body term, we get a unique integer ID. The `body-map` is a tree23 (since Froth maps only support identifier keys, not integers) that tracks which bodies have already been compiled. This allows code sharing between closures that have the same body but different captured environments.
 
 ## Frame Slot Allocation
 
