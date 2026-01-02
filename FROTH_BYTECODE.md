@@ -16,6 +16,62 @@ The compiler consists of analysis passes that produce metadata for code generati
 
 See FROTH_COMPILER.md for documentation of the analysis passes (`preflight`, `boundness`, `liveness`, `slots`) and bytecode helpers (`instruction-table`, `operator-table`, `emit-at`, `emit-all-at`).
 
+## Compilation Algorithm
+
+The `compile` function compiles a named closure and its dependencies:
+
+```
+compile ( addr body-map env-map id -- new-addr new-body-map new-env-map )
+```
+
+**Parameters:**
+- `addr`: Next available bytecode address
+- `body-map`: Map from body ref IDs to bytecode addresses (for deduplication)
+- `env-map`: Environment being updated (closurevals replaced with bytecodevals)
+- `id`: Quoted identifier of the function to compile
+
+**Returns:**
+- `new-addr`: Next available bytecode address after compilation
+- `new-body-map`: Updated body-map with newly compiled functions
+- `new-env-map`: Updated environment with compiled bytecodevals
+
+**Algorithm outline:**
+
+1. Look up `id` in `env-map`
+2. If not present or not a closureval, emit error message and return unchanged
+3. If already a bytecodeval, return unchanged (already compiled)
+4. `open` the closure to get its captured environment and body term
+5. Run `preflight` on body; if it fails, emit error and return unchanged
+6. Use `ref` on body term to get a unique ID for this function body
+7. Check `body-map`: if this body ID already has a bytecode address, reuse it
+8. Otherwise:
+   a. Run analysis passes (`boundness`, `liveness`, `slots`)
+   b. Emit bytecode for the body at `addr`, collecting nested function dependencies
+   c. Update `body-map` with the mapping from body ID to `addr`
+   d. Recursively compile nested dependencies (function literals in the body)
+   e. Backpatch any forward references to nested function addresses
+9. Construct context array from captured environment:
+   - For each free variable, look up its value in the captured environment
+   - If the value is a closureval, recursively compile it first
+   - Place the (now compiled) value in the context array at the appropriate slot
+10. Create `bytecodeval(context, code-addr)` using `close`
+11. Update `env-map` to replace the closureval with the new bytecodeval
+12. Return updated `addr`, `body-map`, and `env-map`
+
+**Two kinds of dependencies:**
+
+- **Nested functions**: Function literals in the body (e.g., `{ ... }` terms). These need their body compiled so we have a bytecode address to emit. The context for these is constructed at runtime.
+
+- **Captured closures**: Closurevals in the captured environment. These need both their body compiled AND their context constructed at compile time, since the context becomes part of the bytecodeval stored in our context array.
+
+**Deduplication via body-map:**
+
+The same closure body may appear in multiple places:
+- Library functions captured in many environments
+- The same lambda defined multiple times
+
+By using `ref` on the body term, we get a unique ID. The `body-map` tracks which bodies have already been compiled, allowing code sharing between closures that have the same body but different captured environments.
+
 ## Frame Slot Allocation
 
 Slots are allocated on-demand as terms are processed:
