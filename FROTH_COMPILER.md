@@ -22,6 +22,7 @@ This document describes the compiler infrastructure for Froth, including bytecod
 | `new-quote-node` | node | Create quote node with defaults |
 | `preflight` | preflight | Check for env/import/applyOperator usage |
 | `slots` | slots | Allocate frame slots for function |
+| `codegen` | codegen | Generate bytecode for a function |
 
 ## Bytecode (bytecode.froth)
 
@@ -158,7 +159,7 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 - `'ctx-save-slot`: frame slot for saving context pointer (set by slots)
 - `'rp-save-slot`: frame slot for saving return pointer (set by slots)
 
-**Closure node keys:**
+**Function node keys:**
 - `'body`: array of node maps (parallel to body terms)
 - `'free-vars`: map: identifier -> context slot number
 - `'bound-set`: map: identifier -> nil (set of bound vars)
@@ -294,3 +295,36 @@ map 'max-slots @               ; 3 - generator uses slot 2 for z
 map 'max-slots @               ; 1 - slot 0 reused for RP save
 map 'body @ 5 @ 'rp-save-slot @ ; 0 - apply saves RP to slot 0
 ```
+
+## Codegen (codegen.froth)
+
+Bytecode generation for the compiler.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `codegen` | `(addr code-map func func-node -- next-addr new-code-map func-addr)` | Generate bytecode for a function |
+
+Takes a function term and its analysis node, generates bytecode at `addr`, and returns the next available address, updated code-map, and the function's entry point.
+
+- `addr`: Next available bytecode address
+- `code-map`: Tree23 from function ref IDs to bytecode addresses (for deduplication)
+- `func`: Quoted function term to generate code for
+- `func-node`: Analysis results from boundness/liveness/slots (can be empty map for simple cases)
+- `next-addr`: Next available address after code is emitted
+- `new-code-map`: Updated with this function (and nested functions when supported)
+- `func-addr`: This function's bytecode entry point
+
+Currently supports integer and string literals. Emits `push-int` for integers, `push-string` for strings, and appends `return`.
+
+```
+0 tree-empty! '{ 1 2 3 } $ codegen!
+/func-addr /code-map /next-addr
+; Emits: push-int 1 push-int 2 push-int 3 return
+; func-addr=0, next-addr=7
+
+next-addr tree-empty! '{ 42 "hello" } $ codegen!
+/func-addr2 /code-map2 /next-addr2
+; Emits: push-int 42 push-string <intern-id> return
+```
+
+The full pipeline: `0 tree-empty! func boundness! liveness! slots! codegen!`

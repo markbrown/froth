@@ -1,0 +1,66 @@
+; codegen.froth - Bytecode code generation
+
+; Get instruction codes
+instruction-table 'push-int @ /ocPushInt
+instruction-table 'push-string @ /ocPushString
+instruction-table 'return @ /ocReturn
+
+; codegen-term: (code term -- code')
+; Generate bytecode for a single term, append to code array.
+; Currently only handles integers and strings.
+['concat 'ocPushInt 'ocPushString] { /term /code
+  term isValue {
+    ; Quoted literal value - unwrap and check type
+    term unwrap /val
+    val isInt {
+      code [ocPushInt val] concat!
+    } {
+    val isString {
+      code [ocPushString val intern] concat!
+    } {
+      ; Unsupported value type
+      code
+    } ?! } ?!
+  } {
+    ; Unsupported term type - skip for now
+    code
+  } ?!
+} def-fn! /codegen-term
+
+; codegen-seq: (code func idx -- code')
+; Process terms from idx to end of func.
+{ /self /idx /func /code
+  idx func # = {
+    ; Done
+    code
+  } {
+    ; Process current term, recurse
+    code func idx @ codegen-term!
+    func idx 1 + self self!
+  } ?!
+} /codegen-seq-impl
+
+['codegen-seq-impl 'codegen-term] { /idx /func /code
+  code func idx codegen-seq-impl codegen-seq-impl!
+} def-fn! /codegen-seq
+
+; codegen: (addr code-map func func-node -- next-addr new-code-map func-addr)
+; Generate bytecode for a function.
+; Walks body left-to-right, collects bytecode, emits at addr.
+['codegen-seq 'concat 'emit-all-at 'ocReturn] { /func-node /func /code-map /addr
+  ; Collect bytecode for each term in function body
+  [] func 0 codegen-seq! /body-code
+
+  ; Add return instruction
+  body-code [ocReturn] concat! /final-code
+
+  ; Emit at addr
+  final-code addr emit-all-at! /next-addr
+
+  ; Return (next-addr new-code-map func-addr)
+  ; code-map unchanged since we don't handle nested functions yet
+  next-addr code-map addr
+} def-fn! /codegen
+
+; Clean up impl
+env 'codegen-seq-impl delete restore
