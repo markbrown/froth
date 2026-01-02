@@ -21,6 +21,7 @@
 :- import_module dir.
 :- import_module eval.
 :- import_module exception.
+:- import_module hash_table.
 :- import_module io.file.
 :- import_module lexer.
 :- import_module list.
@@ -31,6 +32,7 @@
 :- import_module string.
 :- import_module types.
 :- import_module univ.
+:- import_module values.
 
 %-----------------------------------------------------------------------%
 % Command line options
@@ -121,6 +123,15 @@ parse_args_loop([Arg | Rest], Opts0, Result) :-
 init_tables(ST, OpTable) :-
     operator_table.init_operators(empty_string_table, ST, OpTable).
 
+    % Initialize the constant pool and its deduplication hash table.
+    %
+:- pred init_pool(array(value)::array_uo,
+    hash_table(value, int)::hash_table_uo) is det.
+
+init_pool(Pool, HT) :-
+    Pool = array.make_empty_array,
+    HT = hash_table.init(values.value_hash_pred, 8, 0.9).
+
 %-----------------------------------------------------------------------%
 % Standard library loading
 %-----------------------------------------------------------------------%
@@ -189,10 +200,12 @@ eval_stdlib(StdlibPath, Result, !IO) :-
             (
                 ParseResult = ok(Terms),
                 datastack.init(Array0, Ptr0),
+                init_pool(Pool0, HT0),
                 try_io(eval_terms_wrapper(OpTable, LibDir, ST1, BC0,
-                    Terms, map.init, Array0, Ptr0), EvalResult, !IO),
+                    Terms, map.init, Array0, Ptr0, Pool0, HT0), EvalResult, !IO),
                 (
-                    EvalResult = succeeded({ST, BC, Env, _Array, _Ptr}),
+                    EvalResult = succeeded({ST, BC, Env, _Array, _Ptr,
+                        _Pool, _HT}),
                     Result = stdlib_ok(OpTable, ST, BC, Env)
                 ;
                     EvalResult = exception(Exn),
@@ -250,13 +263,15 @@ run_with_options(Opts, !IO) :-
     ( if Opts ^ opt_no_stdlib = yes then
         init_without_stdlib(OpTable, ST0, BC0, Env0),
         datastack.init(Array0, Ptr0),
-        run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, !IO)
+        init_pool(Pool0, HT0),
+        run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, Pool0, HT0, !IO)
     else
         init_with_stdlib(InitResult, !IO),
         (
             InitResult = init_ok(OpTable, ST0, BC0, Env0),
             datastack.init(Array0, Ptr0),
-            run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, !IO)
+            init_pool(Pool0, HT0),
+            run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, Pool0, HT0, !IO)
         ;
             InitResult = init_error,
             io.set_exit_status(1, !IO)
@@ -269,22 +284,25 @@ run_with_options(Opts, !IO) :-
 
 :- pred run_actions(options::in, operator_table::in,
     string_table::in, array(int)::array_di, env::in,
-    array(value)::array_di, int::in, io::di, io::uo) is cc_multi.
+    array(value)::array_di, int::in,
+    array(value)::array_di, hash_table(value, int)::hash_table_di,
+    io::di, io::uo) is cc_multi.
 
-run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, !IO) :-
+run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, Pool0, HT0, !IO) :-
     Actions = Opts ^ opt_actions,
     (
         Actions = [],
         % No actions: start REPL
-        start_repl(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, !IO)
+        start_repl(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, Pool0, HT0, !IO)
     ;
         Actions = [_ | _],
         execute_actions(Actions, OpTable, ST0, ST, BC0, BC,
-            Env0, Env, Array0, Array, Ptr0, Ptr, yes, Success, !IO),
+            Env0, Env, Array0, Array, Ptr0, Ptr, Pool0, Pool, HT0, HT,
+            yes, Success, !IO),
         (
             Success = yes,
             ( if Opts ^ opt_interactive = yes then
-                start_repl(Opts, OpTable, ST, BC, Env, Array, Ptr, !IO)
+                start_repl(Opts, OpTable, ST, BC, Env, Array, Ptr, Pool, HT, !IO)
             else
                 true
             )
@@ -300,10 +318,13 @@ run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, !IO) :-
     env::in, env::out,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out,
+    array(value)::array_di, array(value)::array_uo,
+    hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     bool::in, bool::out, io::di, io::uo) is cc_multi.
 
-execute_actions([], _, !ST, !BC, !Env, !Array, !Ptr, !Success, !IO).
-execute_actions([Action | Rest], OpTable, !ST, !BC, !Env, !Array, !Ptr, !Success, !IO) :-
+execute_actions([], _, !ST, !BC, !Env, !Array, !Ptr, !Pool, !HT, !Success, !IO).
+execute_actions([Action | Rest], OpTable, !ST, !BC, !Env, !Array, !Ptr,
+        !Pool, !HT, !Success, !IO) :-
     (
         !.Success = no
         % Skip remaining actions if we already failed
@@ -311,12 +332,15 @@ execute_actions([Action | Rest], OpTable, !ST, !BC, !Env, !Array, !Ptr, !Success
         !.Success = yes,
         (
             Action = exec_code(Code),
-            execute_code(OpTable, Code, !ST, !BC, !Env, !Array, !Ptr, !Success, !IO)
+            execute_code(OpTable, Code, !ST, !BC, !Env, !Array, !Ptr,
+                !Pool, !HT, !Success, !IO)
         ;
             Action = exec_file(File),
-            execute_file(OpTable, File, !ST, !BC, !Env, !Array, !Ptr, !Success, !IO)
+            execute_file(OpTable, File, !ST, !BC, !Env, !Array, !Ptr,
+                !Pool, !HT, !Success, !IO)
         ),
-        execute_actions(Rest, OpTable, !ST, !BC, !Env, !Array, !Ptr, !Success, !IO)
+        execute_actions(Rest, OpTable, !ST, !BC, !Env, !Array, !Ptr,
+            !Pool, !HT, !Success, !IO)
     ).
 
 :- pred execute_code(operator_table::in, string::in,
@@ -325,10 +349,12 @@ execute_actions([Action | Rest], OpTable, !ST, !BC, !Env, !Array, !Ptr, !Success
     env::in, env::out,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out,
+    array(value)::array_di, array(value)::array_uo,
+    hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     bool::in, bool::out, io::di, io::uo) is cc_multi.
 
 execute_code(OpTable, Code, ST0, ST, BC0, BC, Env0, Env,
-        Array0, Array, Ptr0, Ptr, _, Success, !IO) :-
+        Array0, Array, Ptr0, Ptr, Pool0, Pool, HT0, HT, _, Success, !IO) :-
     lexer.tokenize(Code, ST0, LexResult),
     (
         LexResult = ok(Tokens, ST1),
@@ -337,9 +363,9 @@ execute_code(OpTable, Code, ST0, ST, BC0, BC, Env0, Env,
             ParseResult = ok(Terms),
             % Use "." as BaseDir for code strings (current directory)
             try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, Terms,
-                Env0, Array0, Ptr0), EvalResult, !IO),
+                Env0, Array0, Ptr0, Pool0, HT0), EvalResult, !IO),
             (
-                EvalResult = succeeded({ST, BC, Env, Array, Ptr}),
+                EvalResult = succeeded({ST, BC, Env, Array, Ptr, Pool, HT}),
                 Success = yes
             ;
                 EvalResult = exception(Exn),
@@ -349,6 +375,7 @@ execute_code(OpTable, Code, ST0, ST, BC0, BC, Env0, Env,
                     ST = ST1, Env = Env0,
                     bytecode.init(BC),
                     datastack.init(Array, Ptr),
+                    init_pool(Pool, HT),
                     Success = no
                 else
                     rethrow(EvalResult)
@@ -359,6 +386,7 @@ execute_code(OpTable, Code, ST0, ST, BC0, BC, Env0, Env,
             report_parse_error(ParseError, !IO),
             ST = ST1, Env = Env0,
             BC = BC0, Array = Array0, Ptr = Ptr0,
+            Pool = Pool0, HT = HT0,
             Success = no
         )
     ;
@@ -366,6 +394,7 @@ execute_code(OpTable, Code, ST0, ST, BC0, BC, Env0, Env,
         report_lex_error(LexError, !IO),
         ST = ST0, Env = Env0,
         BC = BC0, Array = Array0, Ptr = Ptr0,
+        Pool = Pool0, HT = HT0,
         Success = no
     ).
 
@@ -375,10 +404,12 @@ execute_code(OpTable, Code, ST0, ST, BC0, BC, Env0, Env,
     env::in, env::out,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out,
+    array(value)::array_di, array(value)::array_uo,
+    hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     bool::in, bool::out, io::di, io::uo) is cc_multi.
 
 execute_file(OpTable, Filename, ST0, ST, BC0, BC, Env0, Env,
-        Array0, Array, Ptr0, Ptr, _, Success, !IO) :-
+        Array0, Array, Ptr0, Ptr, Pool0, Pool, HT0, HT, _, Success, !IO) :-
     io.read_named_file_as_string(Filename, ReadResult, !IO),
     (
         ReadResult = ok(Content),
@@ -390,9 +421,9 @@ execute_file(OpTable, Filename, ST0, ST, BC0, BC, Env0, Env,
             (
                 ParseResult = ok(Terms),
                 try_io(eval_terms_wrapper(OpTable, BaseDir, ST1, BC0,
-                    Terms, Env0, Array0, Ptr0), EvalResult, !IO),
+                    Terms, Env0, Array0, Ptr0, Pool0, HT0), EvalResult, !IO),
                 (
-                    EvalResult = succeeded({ST, BC, Env, Array, Ptr}),
+                    EvalResult = succeeded({ST, BC, Env, Array, Ptr, Pool, HT}),
                     Success = yes
                 ;
                     EvalResult = exception(Exn),
@@ -402,6 +433,7 @@ execute_file(OpTable, Filename, ST0, ST, BC0, BC, Env0, Env,
                         ST = ST1, Env = Env0,
                         bytecode.init(BC),
                         datastack.init(Array, Ptr),
+                        init_pool(Pool, HT),
                         Success = no
                     else
                         rethrow(EvalResult)
@@ -412,6 +444,7 @@ execute_file(OpTable, Filename, ST0, ST, BC0, BC, Env0, Env,
                 report_parse_error(ParseError, !IO),
                 ST = ST1, Env = Env0,
                 BC = BC0, Array = Array0, Ptr = Ptr0,
+                Pool = Pool0, HT = HT0,
                 Success = no
             )
         ;
@@ -419,6 +452,7 @@ execute_file(OpTable, Filename, ST0, ST, BC0, BC, Env0, Env,
             report_lex_error(LexError, !IO),
             ST = ST0, Env = Env0,
             BC = BC0, Array = Array0, Ptr = Ptr0,
+            Pool = Pool0, HT = HT0,
             Success = no
         )
     ;
@@ -427,6 +461,7 @@ execute_file(OpTable, Filename, ST0, ST, BC0, BC, Env0, Env,
             [s(Filename), s(io.error_message(Error))], !IO),
         ST = ST0, Env = Env0,
         BC = BC0, Array = Array0, Ptr = Ptr0,
+        Pool = Pool0, HT = HT0,
         Success = no
     ).
 
@@ -436,29 +471,32 @@ execute_file(OpTable, Filename, ST0, ST, BC0, BC, Env0, Env,
 
 :- pred start_repl(options::in, operator_table::in, string_table::in,
     array(int)::array_di, env::in, array(value)::array_di, int::in,
+    array(value)::array_di, hash_table(value, int)::hash_table_di,
     io::di, io::uo) is cc_multi.
 
-start_repl(Opts, OpTable, ST, BC, Env, Array, Ptr, !IO) :-
+start_repl(Opts, OpTable, ST, BC, Env, Array, Ptr, Pool, HT, !IO) :-
     ( if Opts ^ opt_quiet = no then
         io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO)
     else
         true
     ),
-    repl_loop(OpTable, ST, BC, Env, Array, Ptr, !IO).
+    repl_loop(OpTable, ST, BC, Env, Array, Ptr, Pool, HT, !IO).
 
 :- pred repl_loop(operator_table::in, string_table::in,
     array(int)::array_di, env::in,
-    array(value)::array_di, int::in, io::di, io::uo) is cc_multi.
+    array(value)::array_di, int::in,
+    array(value)::array_di, hash_table(value, int)::hash_table_di,
+    io::di, io::uo) is cc_multi.
 
-repl_loop(OpTable, ST0, BC0, Env0, Array0, Ptr0, !IO) :-
+repl_loop(OpTable, ST0, BC0, Env0, Array0, Ptr0, Pool0, HT0, !IO) :-
     io.write_string("> ", !IO),
     io.flush_output(!IO),
     io.read_line_as_string(ReadResult, !IO),
     (
         ReadResult = ok(Line),
         repl_eval(OpTable, Line, ST0, ST, BC0, BC, Env0, Env,
-            Array0, Array, Ptr0, Ptr, !IO),
-        repl_loop(OpTable, ST, BC, Env, Array, Ptr, !IO)
+            Array0, Array, Ptr0, Ptr, Pool0, Pool, HT0, HT, !IO),
+        repl_loop(OpTable, ST, BC, Env, Array, Ptr, Pool, HT, !IO)
     ;
         ReadResult = eof,
         io.nl(!IO)
@@ -474,10 +512,13 @@ repl_loop(OpTable, ST0, BC0, Env0, Array0, Ptr0, !IO) :-
     array(int)::array_di, array(int)::array_uo,
     env::in, env::out,
     array(value)::array_di, array(value)::array_uo,
-    int::in, int::out, io::di, io::uo) is cc_multi.
+    int::in, int::out,
+    array(value)::array_di, array(value)::array_uo,
+    hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
+    io::di, io::uo) is cc_multi.
 
 repl_eval(OpTable, Input, ST0, ST, BC0, BC, Env0, Env,
-        Array0, Array, Ptr0, Ptr, !IO) :-
+        Array0, Array, Ptr0, Ptr, Pool0, Pool, HT0, HT, !IO) :-
     lexer.tokenize(Input, ST0, LexResult),
     (
         LexResult = ok(Tokens, ST1),
@@ -485,9 +526,9 @@ repl_eval(OpTable, Input, ST0, ST, BC0, BC, Env0, Env,
         (
             ParseResult = ok(Terms),
             try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, Terms,
-                Env0, Array0, Ptr0), Result, !IO),
+                Env0, Array0, Ptr0, Pool0, HT0), Result, !IO),
             (
-                Result = succeeded({ST, BC, Env, Array, Ptr})
+                Result = succeeded({ST, BC, Env, Array, Ptr, Pool, HT})
             ;
                 Result = exception(Exn),
                 ( if univ_to_type(Exn, EvalError) then
@@ -495,7 +536,8 @@ repl_eval(OpTable, Input, ST0, ST, BC0, BC, Env0, Env,
                         [s(types.format_error(ST1, EvalError))], !IO),
                     ST = ST1, Env = Env0,
                     bytecode.init(BC),
-                    datastack.init(Array, Ptr)
+                    datastack.init(Array, Ptr),
+                    init_pool(Pool, HT)
                 else
                     rethrow(Result)
                 )
@@ -504,13 +546,15 @@ repl_eval(OpTable, Input, ST0, ST, BC0, BC, Env0, Env,
             ParseResult = error(ParseError),
             report_parse_error(ParseError, !IO),
             ST = ST1, Env = Env0,
-            BC = BC0, Array = Array0, Ptr = Ptr0
+            BC = BC0, Array = Array0, Ptr = Ptr0,
+            Pool = Pool0, HT = HT0
         )
     ;
         LexResult = error(LexError),
         report_lex_error(LexError, !IO),
         ST = ST0, Env = Env0,
-        BC = BC0, Array = Array0, Ptr = Ptr0
+        BC = BC0, Array = Array0, Ptr = Ptr0,
+        Pool = Pool0, HT = HT0
     ).
 
 %-----------------------------------------------------------------------%
@@ -541,13 +585,15 @@ print_usage(!IO) :-
 :- pred eval_terms_wrapper(operator_table::in, string::in, string_table::in,
     array(int)::array_di, list(term)::in, env::in,
     array(value)::array_di, int::in,
-    {string_table, array(int), env, array(value), int}::out,
+    array(value)::array_di, hash_table(value, int)::hash_table_di,
+    {string_table, array(int), env, array(value), int,
+        array(value), hash_table(value, int)}::out,
     io::di, io::uo) is det.
 
 eval_terms_wrapper(OpTable, BaseDir, ST0, BC0, Terms, Env0, Array0, Ptr0,
-        {ST, BC, Env, Array, Ptr}, !IO) :-
+        Pool0, HT0, {ST, BC, Env, Array, Ptr, Pool, HT}, !IO) :-
     eval.eval_terms(OpTable, BaseDir, Terms, Env0, Env, Array0, Array,
-        Ptr0, Ptr, ST0, ST, BC0, BC, !IO).
+        Ptr0, Ptr, ST0, ST, BC0, BC, Pool0, Pool, HT0, HT, !IO).
 
 %-----------------------------------------------------------------------%
 % Error reporting

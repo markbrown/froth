@@ -44,6 +44,12 @@
     %
 :- func term_to_string(string_table, term) = string.
 
+    % value_hash_pred(Value, Hash):
+    % Compute a hash value for use in hash tables.
+    % Currently a placeholder that only hashes simple types properly.
+    %
+:- pred value_hash_pred(value::in, int::out) is det.
+
 %-----------------------------------------------------------------------%
 
 :- implementation.
@@ -224,6 +230,20 @@ term_to_write_string(_, apply_term) = "!".
 terms_to_write_string(_, []) = "".
 terms_to_write_string(ST, [T | Ts]) =
     term_to_write_string(ST, T) ++ " " ++ terms_to_write_string(ST, Ts).
+
+%-----------------------------------------------------------------------%
+% value_hash_pred: compute hash for hash table deduplication
+%-----------------------------------------------------------------------%
+
+value_hash_pred(intval(I), I).
+value_hash_pred(stringval(Id), Id).
+value_hash_pred(arrayval(_), 0).
+value_hash_pred(mapval(_), 0).
+value_hash_pred(termval(_), 0).
+value_hash_pred(nilval, 0).
+value_hash_pred(consval(_, _), 0).
+value_hash_pred(closureval(_, _), 0).
+value_hash_pred(bytecodeval(_, Addr), Addr).
 
 %-----------------------------------------------------------------------%
 :- end_module values.
