@@ -16,6 +16,29 @@ Standard library functions like `nl`, `println`, and `writeln` are closures, not
 
 Without `!`, the closure is just pushed onto the stack instead of being executed.
 
+## Quote `'` is a Prefix
+
+The quote token `'` comes before the term it quotes, not after. Names like `code'` or `x'` are not valid identifiers—they parse as two tokens:
+
+```
+'x       ; quote + identifier = one quoted term
+x'       ; identifier x followed by quote (two separate tokens!)
+
+code'    ; parses as: code '
+new-code ; valid identifier with hyphen
+```
+
+If you want a "prime" variable name, use a suffix like `2` or a prefix like `new-`:
+
+```
+; Wrong - x' is two tokens
+/x x 1 + /x'
+
+; Correct alternatives
+/x x 1 + /x2
+/x x 1 + /new-x
+```
+
 ## Boolean Convention: 0 is True
 
 Froth uses 0 for true and non-zero for false. This matches the Unix convention where 0 indicates success.

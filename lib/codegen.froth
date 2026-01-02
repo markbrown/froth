@@ -7,55 +7,94 @@ instruction-table 'op @ /ocOp
 instruction-table 'return @ /ocReturn
 instruction-table 'push-quoted-apply @ /ocPushQuotedApply
 instruction-table 'push-context @ /ocPushContext
+instruction-table 'push-local @ /ocPushLocal
+instruction-table 'pop-local @ /ocPopLocal
+instruction-table 'pop-unused @ /ocPopUnused
+instruction-table 'enter-frame @ /ocEnterFrame
+instruction-table 'leave-frame @ /ocLeaveFrame
 
 ; Get operator codes for quoted term construction
 operator-table 'idToIdent @ /opIdToIdent
 operator-table 'idToBinder @ /opIdToBinder
 operator-table 'wrap @ /opWrap
 
-; codegen-term: (code term node free-vars -- code')
+; codegen-term: (code need-enter term node free-vars max-slots -- code' need-enter')
 ; Generate bytecode for a single term, append to code array.
 ; node is the analysis node for this term (from boundness/liveness/slots)
 ; free-vars maps identifiers to context slot numbers
+; max-slots is the number of frame slots needed (for enter-frame/leave-frame)
+; need-enter is 0 if we still need to emit enter-frame, 1 if already emitted
+; Returns updated code and need-enter flag
 ['concat 'ocPushInt 'ocPushString 'ocOp 'operator-table
  'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
- 'ocPushContext] { /free-vars /node /term /code
+ 'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
+ 'ocEnterFrame 'ocLeaveFrame] { /max-slots /free-vars /node /term /need-enter /code
   term isValue {
     ; Quoted literal value - unwrap and check type
     term unwrap /val
     val isInt {
-      code [ocPushInt val] concat!
+      code [ocPushInt val] concat! need-enter
     } {
     val isString {
-      code [ocPushString val intern] concat!
+      code [ocPushString val intern] concat! need-enter
     } {
       ; Unsupported value type
-      code
+      code need-enter
     } ?! } ?!
+  } {
+  term isBinder {
+    ; Binder - check if used or dead
+    node 'is-used in {
+      ; 'is-used exists - check its value
+      node 'is-used @ {
+        ; is-used=0: used binder - maybe emit enter-frame, then pop-local
+        need-enter {
+          ; need-enter=0: Need to enter frame first
+          code [ocEnterFrame max-slots] concat!
+        } {
+          ; need-enter=1: Already entered frame
+          code
+        } ?!
+        node 'slot @ /slot
+        [ocPopLocal slot] concat! 1  ; code' need-enter'=1 (frame entered)
+      } {
+        ; is-used=1: dead binder - just pop-unused
+        code [ocPopUnused] concat! need-enter
+      } ?!
+    } {
+      ; No 'is-used key - assume dead, pop-unused
+      code [ocPopUnused] concat! need-enter
+    } ?!
   } {
   term isIdent {
     term isOperator {
       ; Operator - emit op instruction with opcode
       operator-table term @ /opcode
-      code [ocOp opcode] concat!
+      code [ocOp opcode] concat! need-enter
     } {
       ; Regular identifier - check if bound or free
-      ; 'in' returns 0 if found, 1 if not found
       node 'is-bound in {
         ; 'is-bound exists - check its value
-        ; is-bound=0 means bound, is-bound=1 means free
-        ; ? takes then-branch when cond=0, else-branch when cond=non-zero
         node 'is-bound @ {
-          ; is-bound=0 means bound variable - skip for now (needs frame support)
-          code
+          ; is-bound=0 means bound variable - emit push-local
+          node 'slot @ /slot
+          code [ocPushLocal slot] concat!
+          ; Check if we need to leave frame after this
+          node 'leave-frame in {
+            node 'leave-frame @ {
+              ; leave-frame=0: emit leave-frame
+              [ocLeaveFrame max-slots] concat!
+            } { } ?!
+          } { } ?!
+          need-enter
         } {
           ; is-bound=1 means free variable - look up context slot
           free-vars term @ /slot
-          code [ocPushContext slot] concat!
+          code [ocPushContext slot] concat! need-enter
         } ?!
       } {
         ; No 'is-bound key - skip (no analysis data)
-        code
+        code need-enter
       } ?!
     } ?!
   } {
@@ -65,59 +104,63 @@ operator-table 'wrap @ /opWrap
     inner isIdent {
       ; 'identifier -> push-int id, op idToIdent
       inner intern /id
-      code [ocPushInt id ocOp opIdToIdent] concat!
+      code [ocPushInt id ocOp opIdToIdent] concat! need-enter
     } {
     inner isBinder {
       ; '/binder -> push-int id, op idToBinder
       inner intern /id
-      code [ocPushInt id ocOp opIdToBinder] concat!
+      code [ocPushInt id ocOp opIdToBinder] concat! need-enter
     } {
     inner isApply {
       ; '! -> push-quoted-apply
-      code [ocPushQuotedApply] concat!
+      code [ocPushQuotedApply] concat! need-enter
     } {
     inner isValue {
       ; 'value -> push value, op wrap
       inner unwrap /val
       val isInt {
-        code [ocPushInt val ocOp opWrap] concat!
+        code [ocPushInt val ocOp opWrap] concat! need-enter
       } {
       val isString {
-        code [ocPushString val intern ocOp opWrap] concat!
+        code [ocPushString val intern ocOp opWrap] concat! need-enter
       } {
         ; Unsupported quoted value type
-        code
+        code need-enter
       } ?! } ?!
     } {
       ; Quoted function, generator, or nested quote - skip for now
-      code
+      code need-enter
     } ?! } ?! } ?! } ?!
   } {
     ; Other term type - skip for now
-    code
-  } ?! } ?! } ?!
+    code need-enter
+  } ?! } ?! } ?! } ?!
 } def-fn! /codegen-term
 
-; codegen-seq: (code func body-nodes free-vars idx -- code')
+; codegen-seq: (code need-enter func body-nodes free-vars max-slots idx -- code')
 ; Process terms from idx to end of func.
 ; body-nodes is an array of analysis nodes parallel to func terms
 ; free-vars maps identifiers to context slot numbers
-{ /self /idx /free-vars /body-nodes /func /code
+; max-slots is the number of frame slots needed
+; need-enter tracks whether enter-frame has been emitted (0=need, 1=done)
+{ /self /idx /max-slots /free-vars /body-nodes /func /need-enter /code
   idx func # = {
-    ; Done
+    ; Done - discard need-enter, return code
     code
   } {
     ; Get term and its corresponding node
     func idx @ /term
     body-nodes idx @ /node
-    ; Process current term, recurse
-    code term node free-vars codegen-term!
-    func body-nodes free-vars idx 1 + self self!
+    ; Process current term, get back (new-code new-need-enter)
+    code need-enter term node free-vars max-slots codegen-term!
+    /new-need-enter /new-code
+    ; Recurse with updated state
+    new-code new-need-enter func body-nodes free-vars max-slots idx 1 + self self!
   } ?!
 } /codegen-seq-impl
 
-['codegen-seq-impl 'codegen-term] { /idx /free-vars /body-nodes /func /code
-  code func body-nodes free-vars idx codegen-seq-impl codegen-seq-impl!
+['codegen-seq-impl 'codegen-term] { /idx /max-slots /free-vars /body-nodes /func /need-enter /code
+  code need-enter func body-nodes free-vars max-slots idx codegen-seq-impl codegen-seq-impl!
 } def-fn! /codegen-seq
 
 ; codegen: (addr code-map func func-node -- next-addr new-code-map func-addr)
@@ -135,8 +178,15 @@ operator-table 'wrap @ /opWrap
   } ?! /body-nodes
   func-node 'free-vars in { func-node 'free-vars @ } { $ } ?! /free-vars
 
+  ; Extract frame info
+  ; max-slots: number of frame slots needed (default 0)
+  func-node 'max-slots in { func-node 'max-slots @ } { 0 } ?! /max-slots
+  ; needs-frame: 0 if frame needed, 1 if not (default 1 = no frame)
+  ; need-enter: inverse of needs-frame (0 = need to emit enter-frame, 1 = already done/not needed)
+  func-node 'needs-frame in { func-node 'needs-frame @ } { 1 } ?! /need-enter
+
   ; Collect bytecode for each term in function body
-  [] func body-nodes free-vars 0 codegen-seq! /body-code
+  [] need-enter func body-nodes free-vars max-slots 0 codegen-seq! /body-code
 
   ; Add return instruction
   body-code [ocReturn] concat! /final-code
