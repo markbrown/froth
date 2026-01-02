@@ -12,34 +12,41 @@ instruction-table 'pop-local @ /ocPopLocal
 instruction-table 'pop-unused @ /ocPopUnused
 instruction-table 'enter-frame @ /ocEnterFrame
 instruction-table 'leave-frame @ /ocLeaveFrame
+instruction-table 'start-array @ /ocStartArray
+instruction-table 'end-array @ /ocEndArray
 
-; Get operator codes for quoted term construction
+; Get operator codes for quoted term construction and closure creation
 operator-table 'idToIdent @ /opIdToIdent
 operator-table 'idToBinder @ /opIdToBinder
 operator-table 'wrap @ /opWrap
+operator-table 'close @ /opClose
 
-; codegen-term: (code need-enter term node free-vars max-slots -- code' need-enter')
+; codegen-term: (codegen-fn addr code-map code need-enter term node outer-free-vars outer-bound-slots max-slots -- addr' code-map' code' need-enter')
 ; Generate bytecode for a single term, append to code array.
+; codegen-fn is passed for recursive compilation of nested functions
 ; node is the analysis node for this term (from boundness/liveness/slots)
-; free-vars maps identifiers to context slot numbers
+; outer-free-vars maps identifiers to context slot numbers in the current function
+; outer-bound-slots maps identifiers to frame slot numbers in the current function
 ; max-slots is the number of frame slots needed (for enter-frame/leave-frame)
 ; need-enter is 0 if we still need to emit enter-frame, 1 if already emitted
-; Returns updated code and need-enter flag
+; Returns updated addr, code-map, code, and need-enter flag
 ['concat 'ocPushInt 'ocPushString 'ocOp 'operator-table
  'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
  'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
- 'ocEnterFrame 'ocLeaveFrame] { /max-slots /free-vars /node /term /need-enter /code
+ 'ocEnterFrame 'ocLeaveFrame
+ 'ocStartArray 'ocEndArray 'opClose 'foldl 'reduce] {
+  /max-slots /outer-bound-slots /outer-free-vars /node /term /need-enter /code /code-map /addr /codegen-fn
   term isValue {
     ; Quoted literal value - unwrap and check type
     term unwrap /val
     val isInt {
-      code [ocPushInt val] concat! need-enter
+      addr code-map code [ocPushInt val] concat! need-enter
     } {
     val isString {
-      code [ocPushString val intern] concat! need-enter
+      addr code-map code [ocPushString val intern] concat! need-enter
     } {
       ; Unsupported value type
-      code need-enter
+      addr code-map code need-enter
     } ?! } ?!
   } {
   term isBinder {
@@ -55,21 +62,22 @@ operator-table 'wrap @ /opWrap
           code
         } ?!
         node 'slot @ /slot
-        [ocPopLocal slot] concat! 1  ; now in frame (need-enter=1)
+        [ocPopLocal slot] concat! /new-code
+        addr code-map new-code 1  ; now in frame (need-enter=1)
       } {
         ; Dead binder (is-used=1) - just discard
-        code [ocPopUnused] concat! need-enter
+        addr code-map code [ocPopUnused] concat! need-enter
       } ?!
     } {
       ; No 'is-used key - assume dead
-      code [ocPopUnused] concat! need-enter
+      addr code-map code [ocPopUnused] concat! need-enter
     } ?!
   } {
   term isIdent {
     term isOperator {
       ; Operator - emit op instruction with opcode
       operator-table term @ /opcode
-      code [ocOp opcode] concat! need-enter
+      addr code-map code [ocOp opcode] concat! need-enter
     } {
       ; Regular identifier - check if bound or free
       node 'is-bound in {
@@ -84,15 +92,16 @@ operator-table 'wrap @ /opWrap
               [ocLeaveFrame max-slots] concat!
             } { } ?!
           } { } ?!
-          need-enter
+          /new-code
+          addr code-map new-code need-enter
         } {
           ; Free variable (is-bound=1) - look up context slot
-          free-vars term @ /slot
-          code [ocPushContext slot] concat! need-enter
+          outer-free-vars term @ /slot
+          addr code-map code [ocPushContext slot] concat! need-enter
         } ?!
       } {
         ; No analysis data - skip
-        code need-enter
+        addr code-map code need-enter
       } ?!
     } ?!
   } {
@@ -102,69 +111,125 @@ operator-table 'wrap @ /opWrap
     inner isIdent {
       ; 'identifier -> push-int id, op idToIdent
       inner intern /id
-      code [ocPushInt id ocOp opIdToIdent] concat! need-enter
+      addr code-map code [ocPushInt id ocOp opIdToIdent] concat! need-enter
     } {
     inner isBinder {
       ; '/binder -> push-int id, op idToBinder
       inner intern /id
-      code [ocPushInt id ocOp opIdToBinder] concat! need-enter
+      addr code-map code [ocPushInt id ocOp opIdToBinder] concat! need-enter
     } {
     inner isApply {
       ; '! -> push-quoted-apply
-      code [ocPushQuotedApply] concat! need-enter
+      addr code-map code [ocPushQuotedApply] concat! need-enter
     } {
     inner isValue {
       ; 'value -> push value, op wrap
       inner unwrap /val
       val isInt {
-        code [ocPushInt val ocOp opWrap] concat! need-enter
+        addr code-map code [ocPushInt val ocOp opWrap] concat! need-enter
       } {
       val isString {
-        code [ocPushString val intern ocOp opWrap] concat! need-enter
+        addr code-map code [ocPushString val intern ocOp opWrap] concat! need-enter
       } {
         ; Unsupported quoted value type
-        code need-enter
+        addr code-map code need-enter
       } ?! } ?!
     } {
       ; Quoted function, generator, or nested quote - skip for now
-      code need-enter
+      addr code-map code need-enter
     } ?! } ?! } ?! } ?!
   } {
-    ; Other term type - skip for now
-    code need-enter
-  } ?! } ?! } ?! } ?!
+  term isFunc {
+    ; Nested function - compile it and emit code to build closure at runtime
+    ; node is the function-node for this nested function
+
+    ; First, recursively compile the nested function using codegen-fn
+    codegen-fn addr code-map term node codegen-fn! /nested-addr /new-code-map /new-addr
+
+    ; Build context array at runtime: [start-array, push each captured var, end-array]
+    ; The nested function's free-vars tells us what to capture
+    ; For each captured var, check if it's bound or free in OUTER scope
+    node 'free-vars in { node 'free-vars @ } { $ } ?! /nested-free-vars
+
+    ; Get the number of context slots needed
+    nested-free-vars keys # /num-captures
+
+    num-captures 0 = {
+      ; No captures - just push empty array and address
+      code [ocStartArray ocEndArray ocPushInt nested-addr ocOp opClose] concat!
+    } {
+      ; Build array of (slot, ident) pairs, then sort by slot to emit in order
+      ; First collect all free vars with their context slots
+      nested-free-vars keys /the-keys
+      [ the-keys { /ident nested-free-vars ident @ /slot [slot ident] } foldl! ] /pairs
+
+      ; Sort pairs by slot (simple insertion sort for small arrays)
+      ; For now, assume they're already in order (slots assigned 0, 1, 2, ...)
+      ; TODO: proper sort if needed
+
+      ; Start building the context array
+      code [ocStartArray] concat! /ctx-code
+
+      ; For each captured variable, emit push instruction
+      ; Use reduce to accumulate the bytecode
+      pairs ctx-code {
+        /pair /acc
+        pair 1 @ /ident
+        ; Check if this var is bound or free in outer scope
+        outer-bound-slots ident in {
+          ; Bound in outer - push from frame
+          outer-bound-slots ident @ /outer-slot
+          acc [ocPushLocal outer-slot] concat!
+        } {
+          ; Free in outer - push from context
+          outer-free-vars ident @ /outer-slot
+          acc [ocPushContext outer-slot] concat!
+        } ?!
+      } reduce! /ctx-code2
+
+      ; End array, push address, close
+      ctx-code2 [ocEndArray ocPushInt nested-addr ocOp opClose] concat!
+    } ?! /new-code
+
+    new-addr new-code-map new-code need-enter
+  } {
+    ; Other term type (generator, apply) - skip for now
+    addr code-map code need-enter
+  } ?! } ?! } ?! } ?! } ?!
 } def-fn! /codegen-term
 
-; codegen-seq: (code need-enter func body-nodes free-vars max-slots idx -- code')
+; codegen-seq: (codegen-fn addr code-map code need-enter func body-nodes outer-free-vars outer-bound-slots max-slots idx -- addr' code-map' code')
 ; Process terms from idx to end of func.
+; codegen-fn is passed for recursive compilation of nested functions
 ; body-nodes is an array of analysis nodes parallel to func terms
-; free-vars maps identifiers to context slot numbers
+; outer-free-vars maps identifiers to context slot numbers
+; outer-bound-slots maps identifiers to frame slot numbers
 ; max-slots is the number of frame slots needed
 ; need-enter tracks whether enter-frame has been emitted (0=need, 1=done)
-{ /self /idx /max-slots /free-vars /body-nodes /func /need-enter /code
+{ /self /idx /max-slots /outer-bound-slots /outer-free-vars /body-nodes /func /need-enter /code /code-map /addr /codegen-fn
   idx func # = {
-    ; Done - discard need-enter, return code
-    code
+    ; Done - discard need-enter, return (addr code-map code)
+    addr code-map code
   } {
     ; Get term and its corresponding node
     func idx @ /term
     body-nodes idx @ /node
-    ; Process current term, get back (new-code new-need-enter)
-    code need-enter term node free-vars max-slots codegen-term!
-    /new-need-enter /new-code
+    ; Process current term, get back (addr' code-map' code' need-enter')
+    codegen-fn addr code-map code need-enter term node outer-free-vars outer-bound-slots max-slots codegen-term!
+    /new-need-enter /new-code /new-code-map /new-addr
     ; Recurse with updated state
-    new-code new-need-enter func body-nodes free-vars max-slots idx 1 + self self!
+    codegen-fn new-addr new-code-map new-code new-need-enter func body-nodes outer-free-vars outer-bound-slots max-slots idx 1 + self self!
   } ?!
 } /codegen-seq-impl
 
-['codegen-seq-impl 'codegen-term] { /idx /max-slots /free-vars /body-nodes /func /need-enter /code
-  code need-enter func body-nodes free-vars max-slots idx codegen-seq-impl codegen-seq-impl!
+['codegen-seq-impl 'codegen-term] { /idx /max-slots /outer-bound-slots /outer-free-vars /body-nodes /func /need-enter /code /code-map /addr /codegen-fn
+  codegen-fn addr code-map code need-enter func body-nodes outer-free-vars outer-bound-slots max-slots idx codegen-seq-impl codegen-seq-impl!
 } def-fn! /codegen-seq
 
-; codegen: (addr code-map func func-node -- next-addr new-code-map func-addr)
-; Generate bytecode for a function.
-; Walks body left-to-right, collects bytecode, emits at addr.
-['codegen-seq 'concat 'emit-all-at 'ocReturn 'foldl 'drop] { /func-node /func /code-map /addr
+; codegen-impl: (self addr code-map func func-node -- next-addr new-code-map func-addr)
+; Implementation of codegen with Y-combinator pattern for recursion.
+; self is this function, passed for recursive calls to nested functions.
+['codegen-seq 'concat 'emit-all-at 'ocReturn 'foldl 'drop] { /func-node /func /code-map /addr /self
   ; Extract analysis info from func-node (or create empty defaults)
   ; 'in' returns 0 if found, 1 if not found
   func-node 'body in {
@@ -183,19 +248,55 @@ operator-table 'wrap @ /opWrap
   ; need-enter: inverse of needs-frame (0 = need to emit enter-frame, 1 = already done/not needed)
   func-node 'needs-frame in { func-node 'needs-frame @ } { 1 } ?! /need-enter
 
+  ; Build bound-slots map: identifier -> frame slot for each used binder
+  ; Also track whether any binders are used (to determine if frame is needed)
+  ; Scan body-nodes for binder nodes that have 'slot set
+  ; Carry (map, idx, has-used-binder) through foldl
+  ; Note: convert binder term /x to quoted identifier 'x for map key
+  $ 0 1  ; initial: map=empty, idx=0, has-used-binder=1 (no)
+  body-nodes {
+    /node /has-used /idx /map
+    func idx @ /term
+    term isBinder {
+      node 'slot in {
+        node 'slot @ /slot
+        term intern idToIdent /ident  ; convert /x to 'x
+        map slot ident : idx 1 + 0  ; has-used-binder=0 (yes)
+      } { map idx 1 + has-used } ?!
+    } { map idx 1 + has-used } ?!
+  } foldl!
+  /has-used-binder
+  drop!  ; discard final idx
+  /bound-slots
+
+  ; Override need-enter if we have used binders but liveness said no frame needed
+  ; has-used-binder: 0 = yes there is a used binder, 1 = no used binders
+  ; If there is a used binder, we need a frame (need-enter=0)
+  has-used-binder { 0 } { need-enter } ?! /need-enter
+
   ; Collect bytecode for each term in function body
-  [] need-enter func body-nodes free-vars max-slots 0 codegen-seq! /body-code
+  ; codegen-seq returns (addr' code-map' code)
+  ; Pass self as codegen-fn for recursive compilation of nested functions
+  self addr code-map [] need-enter func body-nodes free-vars bound-slots max-slots 0 codegen-seq!
+  /body-code /new-code-map /next-emit-addr
 
   ; Add return instruction
   body-code [ocReturn] concat! /final-code
 
-  ; Emit at addr
-  final-code addr emit-all-at! /next-addr
+  ; Emit at next-emit-addr (nested functions may have already used addr..next-emit-addr-1)
+  final-code next-emit-addr emit-all-at! /next-addr
 
   ; Return (next-addr new-code-map func-addr)
-  ; code-map unchanged since we don't handle nested functions yet
-  next-addr code-map addr
+  ; func-addr is where we emitted this function's code
+  next-addr new-code-map next-emit-addr
+} def-fn! /codegen-impl
+
+; codegen: (addr code-map func func-node -- next-addr new-code-map func-addr)
+; Generate bytecode for a function.
+; Walks body left-to-right, collects bytecode, emits at addr.
+['codegen-impl] { /func-node /func /code-map /addr
+  codegen-impl addr code-map func func-node codegen-impl!
 } def-fn! /codegen
 
 ; Clean up impl
-env 'codegen-seq-impl delete restore
+env 'codegen-seq-impl delete 'codegen-impl delete restore
