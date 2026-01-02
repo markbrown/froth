@@ -1,0 +1,1601 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read src/eval.m (383 lines)
+  ⎿  Read src/vm.m (261 lines)
+  ⎿  Read README.md (279 lines)
+  ⎿  Read src/values.m (231 lines)
+  ⎿  Read tests/eq_type_error.expected (2 lines)
+
+> Let's extend eval.m so that it threads around the arguments we have just 
+added to vm.m. Is there anything you need to know before proceeding? 
+
+● Looking at the current structure, I have a few questions:
+
+  1. Pool/HashTable lifetime: Should Pool and HashTable persist across multiple bytecode closure calls within a session? Currently eval_apply creates fresh ones each call and discards them. To persist, we'd thread them through all eval predicates.
+  2. vm_store vs separate ST: Currently eval.m threads ST separately and constructs vm_store only when calling run. Should we:
+    - Keep it this way (simpler eval.m signatures, construct vm_store in eval_apply)
+    - Switch to threading vm_store throughout eval.m (more consistent but larger change)
+  3. Initial creation: Where should the initial Pool and HashTable be created? I assume in froth.m at startup, similar to how the initial string table is created.
+  4. Which predicates need threading? I believe:
+    - Need Pool/HashTable: eval_terms, eval_term, eval_identifier, eval_generator, eval_apply, eval_import
+    - Don't need them: eval_binder, eval_function, eval_peek, eval_poke, eval_restore
+
+  Is this understanding correct?
+
+> yes, they should persist across calls 
+
+● I'll thread Pool and HashTable through the eval predicates. Let me start by updating eval.m.
+
+● Read(src/eval.m)
+  ⎿  Read 383 lines
+
+● Now I'll update eval.m to thread Pool and HashTable through all the necessary predicates. This is a substantial change, so I'll do it in several edits.
+
+  First, let me add hash_table to the interface imports and update the eval_terms signature:
+
+● Update(src/eval.m)
+  ⎿  Added 5 lines, removed 1 line                                       
+       7  :- interface.
+       8  
+       9  :- import_module array.
+      10 +:- import_module hash_table.                                   
+      11  :- import_module io.
+      12  :- import_module list.
+      13  :- import_module types.
+     ...
+      15  %--------------------------------------------------------------
+          ---------%
+      16  
+      17      % eval_terms(OpTable, BaseDir, Terms, !Env, !Stack, !StackP
+          tr,
+      17 -    %            !ST, !Bytecode, !IO):                         
+      18 +    %            !ST, !Bytecode, !Pool, !HT, !IO):             
+      19      % Evaluate a list of terms, updating the environment and st
+          ack.
+      20      % OpTable is read-only (fixed at engine startup).
+      21      % BaseDir is used to resolve relative paths in imports.
+      22      % StringTable is threaded through (may grow with dynamic im
+          ports).
+      23      % Bytecode array is threaded through (may grow with poke).
+      24 +    % Pool and HT are the constant pool and its deduplication h
+         +ash table.                                                     
+      25      % Stack is represented as an array and pointer (for efficie
+          nt operations).
+      26      % Throws eval_error on failure.
+      27      %
+     ...
+      31      int::in, int::out,
+      32      string_table::in, string_table::out,
+      33      array(int)::array_di, array(int)::array_uo,
+      34 +    array(value)::array_di, array(value)::array_uo,            
+      35 +    hash_table(value, int)::hash_table_di, hash_table(value, in
+         +t)::hash_table_uo,                                             
+      36      io::di, io::uo) is det.
+      37  
+      38      % Environment operations.
+
+● Now update the eval_terms implementation:
+
+● Update(src/eval.m)
+  ⎿  Added 5 lines, removed 4 lines                                      
+      72  % Main evaluation
+      73  %--------------------------------------------------------------
+          ---------%
+      74  
+      75 -eval_terms(_, _, [], !Env, !Array, !Ptr, !ST, !BC, !IO).       
+      76 -eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !Array, !Ptr
+         -, !ST, !BC, !IO) :-                                            
+      77 -    eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, 
+         -!BC, !IO),                                                     
+      78 -    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST
+         -, !BC, !IO).                                                   
+      75 +eval_terms(_, _, [], !Env, !Array, !Ptr, !ST, !BC, !Pool, !HT, 
+         +!IO).                                                          
+      76 +eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !Array, !Ptr
+         +, !ST, !BC,                                                    
+      77 +        !Pool, !HT, !IO) :-                                    
+      78 +    eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, 
+         +!BC, !Pool, !HT, !IO),                                         
+      79 +    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST
+         +, !BC, !Pool, !HT, !IO).                                       
+      80  
+      81  :- pred eval_term(operator_table::in, string::in, term::in, env
+          ::in, env::out,
+      82      array(value)::array_di, array(value)::array_uo,
+
+● Now update eval_term signature and implementation:
+
+● Update(src/eval.m)
+  ⎿  Added 8 lines, removed 4 lines                                      
+      82      array(value)::array_di, array(value)::array_uo,
+      83      int::in, int::out, string_table::in, string_table::out,
+      84      array(int)::array_di, array(int)::array_uo,
+      85 +    array(value)::array_di, array(value)::array_uo,            
+      86 +    hash_table(value, int)::hash_table_di, hash_table(value, in
+         +t)::hash_table_uo,                                             
+      87      io::di, io::uo) is det.
+      88  
+      87 -eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC,
+         - !IO) :-                                                       
+      89 +eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC,
+         + !Pool, !HT, !IO) :-                                           
+      90      (
+      91          Term = identifier(NameId),
+      90 -        eval_identifier(OpTable, BaseDir, NameId, !Env, !Array,
+         - !Ptr, !ST, !BC, !IO)                                          
+      92 +        eval_identifier(OpTable, BaseDir, NameId, !Env, !Array,
+         + !Ptr, !ST, !BC,                                               
+      93 +            !Pool, !HT, !IO)                                   
+      94      ;
+      95          Term = binder(NameId),
+      96          eval_binder(NameId, !Env, !Array, !Ptr)
+     ...
+       99          eval_function(Terms, !.Env, !Array, !Ptr)
+      100      ;
+      101          Term = generator(Terms),
+       99 -        eval_generator(OpTable, BaseDir, Terms, !Env, !Array, 
+          -!Ptr, !ST, !BC, !IO)                                          
+      102 +        eval_generator(OpTable, BaseDir, Terms, !Env, !Array, 
+          +!Ptr, !ST, !BC,                                               
+      103 +            !Pool, !HT, !IO)                                  
+      104      ;
+      105          Term = quoted(T),
+      106          datastack.push(termval(T), !Array, !Ptr)
+     ...
+      109          datastack.push(V, !Array, !Ptr)
+      110      ;
+      111          Term = apply_term,
+      108 -        eval_apply(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, 
+          -!BC, !IO)                                                     
+      112 +        eval_apply(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, 
+          +!BC, !Pool, !HT, !IO)                                         
+      113      ).
+      114  
+      115  %-------------------------------------------------------------
+           ----------%
+
+● Now update eval_identifier:
+
+● Update(src/eval.m)
+  ⎿  Added 6 lines, removed 2 lines                                      
+      122      int::in, int::out,
+      123      string_table::in, string_table::out,
+      124      array(int)::array_di, array(int)::array_uo,
+      125 +    array(value)::array_di, array(value)::array_uo,           
+      126 +    hash_table(value, int)::hash_table_di, hash_table(value, i
+          +nt)::hash_table_uo,                                           
+      127      io::di, io::uo) is det.
+      128  
+      127 -eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, 
+          -!ST, !BC, !IO) :-                                             
+      129 +eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, 
+          +!ST, !BC,                                                     
+      130 +        !Pool, !HT, !IO) :-                                   
+      131      ( if get_env(NameId, V, !.Env) then
+      132          datastack.push(V, !Array, !Ptr)
+      133      else if map.search(OpTable, NameId, Info) then
+      134          ( if Info ^ oi_operator = op_import then
+      135              % import is special: it can modify Env and ST
+      133 -            eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, 
+          -!ST, !BC, !IO)                                                
+      136 +            eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, 
+          +!ST, !BC,                                                     
+      137 +                !Pool, !HT, !IO)                              
+      138          else if Info ^ oi_operator = op_restore then
+      139              % restore is special: it replaces the current Env
+      140              eval_restore(!Env, !Array, !Ptr)
+
+● Now update eval_generator:
+
+● Update(src/eval.m)
+  ⎿  Added 6 lines, removed 2 lines                                      
+      187      int::in, int::out,
+      188      string_table::in, string_table::out,
+      189      array(int)::array_di, array(int)::array_uo,
+      190 +    array(value)::array_di, array(value)::array_uo,           
+      191 +    hash_table(value, int)::hash_table_di, hash_table(value, i
+          +nt)::hash_table_uo,                                           
+      192      io::di, io::uo) is det.
+      193  
+      192 -eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          -T, !BC, !IO) :-                                               
+      194 +eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          +T, !BC,                                                       
+      195 +        !Pool, !HT, !IO) :-                                   
+      196      % Save current stack pointer
+      197      SavedPtr = !.Ptr,
+      198      % Evaluate generator terms (they push values onto the stac
+           k)
+      196 -    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          -T, !BC, !IO),                                                 
+      199 +    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          +T, !BC,                                                       
+      200 +        !Pool, !HT, !IO),                                     
+      201      % Extract values pushed by the generator as an array
+      202      datastack.extract_range(!.Array, SavedPtr, !.Ptr, ResultAr
+           ray),
+      203      % Restore stack pointer and push the result array
+
+● Now update eval_apply to use the threaded Pool and HT instead of creating fresh ones:
+
+● Update(src/eval.m)
+  ⎿  Added 8 lines, removed 6 lines                                      
+      212      array(value)::array_di, array(value)::array_uo,
+      213      int::in, int::out, string_table::in, string_table::out,
+      214      array(int)::array_di, array(int)::array_uo,
+      215 +    array(value)::array_di, array(value)::array_uo,           
+      216 +    hash_table(value, int)::hash_table_di, hash_table(value, i
+          +nt)::hash_table_uo,                                           
+      217      io::di, io::uo) is det.
+      218  
+      217 -eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC,
+          - !IO) :-                                                      
+      219 +eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC,
+          + !Pool, !HT, !IO) :-                                          
+      220      datastack.pop("!", V, !Array, !Ptr),
+      221      ( if V = closureval(ClosureEnv, Terms) then
+      222          % Evaluate with closure's env, then discard env change
+           s (lexical scoping)
+      221 -        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Ar
+          -ray, !Ptr, !ST, !BC, !IO)                                     
+      223 +        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Ar
+          +ray, !Ptr, !ST, !BC,                                          
+      224 +            !Pool, !HT, !IO)                                  
+      225      else if V = bytecodeval(Context, CodeAddr) then
+      226          % Execute bytecode closure via VM
+      227          % RP=-1 means return to eval_apply (sentinel value)
+      228          % FP starts at top of stack array (frame grows downwar
+           d)
+      229          % GenStack starts empty (no active generators)
+      230          FP = array.size(!.Array),
+      228 -        Store0 = vm.vm_store(0, !.ST),                        
+      229 -        Pool0 = array.make_empty_array,                       
+      230 -        HashTable0 = hash_table.init(value_hash_pred, 8, 0.9),
+      231 +        PP0 = array.size(!.Pool),                             
+      232 +        Store0 = vm.vm_store(PP0, !.ST),                      
+      233          vm.run(CodeAddr, -1, FP, Context, [], !Ptr, Store0, St
+           ore,
+      232 -            OpTable, Env, !BC, !Array, Pool0, _Pool, HashTable
+          -0, _HashTable, !IO),                                          
+      234 +            OpTable, Env, !BC, !Array, !Pool, !HT, !IO),      
+      235          !:ST = Store ^ vm.vs_string_table
+      236      else
+      237          throw(type_error("closure", V))
+
+● Now update eval_import:
+
+● Update(src/eval.m)
+  ⎿  Added 5 lines, removed 2 lines                                      
+      261      int::in, int::out,
+      262      string_table::in, string_table::out,
+      263      array(int)::array_di, array(int)::array_uo,
+      264 +    array(value)::array_di, array(value)::array_uo,           
+      265 +    hash_table(value, int)::hash_table_di, hash_table(value, i
+          +nt)::hash_table_uo,                                           
+      266      io::di, io::uo) is det.
+      267  
+      266 -eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !I
+          -O) :-                                                         
+      268 +eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !P
+          +ool, !HT, !IO) :-                                             
+      269      datastack.pop("import", V, !Array, !Ptr),
+      270      RelFilename = values.value_to_string(!.ST, V),
+      271      % Resolve relative paths using BaseDir
+     ...
+      284              parser.parse(Tokens, ParseResult),
+      285              (
+      286                  ParseResult = ok(Terms),
+      285 -                eval_terms(OpTable, NewBaseDir, Terms, !Env, !
+          -Array, !Ptr, !ST, !BC, !IO)                                   
+      287 +                eval_terms(OpTable, NewBaseDir, Terms, !Env, !
+          +Array, !Ptr, !ST, !BC,                                        
+      288 +                    !Pool, !HT, !IO)                          
+      289              ;
+      290                  ParseResult = error(ParseError),
+      291                  throw_parse_error(Filename, ParseError)
+
+● Now I need to update froth.m to create the initial Pool and HashTable. Let me read it:
+
+● Read(src/froth.m)
+  ⎿  Read 608 lines
+
+● This is a substantial change. I need to:
+  1. Add hash_table import
+  2. Update eval_terms_wrapper to accept Pool and HT
+  3. Thread Pool and HT through all execution paths
+
+  Let me start with the imports and eval_terms_wrapper:
+
+● Update(src/froth.m)
+  ⎿  Added 1 line                                                        
+      21  :- import_module dir.
+      22  :- import_module eval.
+      23  :- import_module exception.
+      24 +:- import_module hash_table.                                   
+      25  :- import_module io.file.
+      26  :- import_module lexer.
+      27  :- import_module list.
+
+● Now update eval_terms_wrapper:
+
+● Update(src/froth.m)
+  ⎿  Added 5 lines, removed 3 lines                                      
+      542  :- pred eval_terms_wrapper(operator_table::in, string::in, str
+           ing_table::in,
+      543      array(int)::array_di, list(term)::in, env::in,
+      544      array(value)::array_di, int::in,
+      545 -    {string_table, array(int), env, array(value), int}::out,  
+      545 +    array(value)::array_di, hash_table(value, int)::hash_table
+          +_di,                                                          
+      546 +    {string_table, array(int), env, array(value), int,        
+      547 +        array(value), hash_table(value, int)}::out,           
+      548      io::di, io::uo) is det.
+      549  
+      550  eval_terms_wrapper(OpTable, BaseDir, ST0, BC0, Terms, Env0, Ar
+           ray0, Ptr0,
+      549 -        {ST, BC, Env, Array, Ptr}, !IO) :-                    
+      551 +        Pool0, HT0, {ST, BC, Env, Array, Ptr, Pool, HT}, !IO) 
+          +:-                                                            
+      552      eval.eval_terms(OpTable, BaseDir, Terms, Env0, Env, Array0
+           , Array,
+      551 -        Ptr0, Ptr, ST0, ST, BC0, BC, !IO).                    
+      553 +        Ptr0, Ptr, ST0, ST, BC0, BC, Pool0, Pool, HT0, HT, !IO
+          +).                                                            
+      554  
+      555  %-------------------------------------------------------------
+           ----------%
+      556  % Error reporting
+
+● Now I need to add a helper for creating initial Pool/HT and update all callers. Let me add a helper near init_tables:
+
+● Update(src/froth.m)
+  ⎿  Added 24 lines                                                      
+      122  init_tables(ST, OpTable) :-
+      123      operator_table.init_operators(empty_string_table, ST, OpTa
+           ble).
+      124  
+      125 +    % Initialize the constant pool and its deduplication hash 
+          +table.                                                        
+      126 +    %                                                         
+      127 +:- pred init_pool(array(value)::array_uo,                     
+      128 +    hash_table(value, int)::hash_table_uo) is det.            
+      129 +                                                              
+      130 +init_pool(Pool, HT) :-                                        
+      131 +    Pool = array.make_empty_array,                            
+      132 +    HT = hash_table.init(value_hash_pred, 8, 0.9).            
+      133 +                                                              
+      134 +    % Placeholder hash predicate for values.                  
+      135 +    % TODO: implement proper hashing when ref/deref are added.
+      136 +    %                                                         
+      137 +:- pred value_hash_pred(value::in, int::out) is det.          
+      138 +                                                              
+      139 +value_hash_pred(intval(I), I).                                
+      140 +value_hash_pred(stringval(Id), Id).                           
+      141 +value_hash_pred(arrayval(_), 0).                              
+      142 +value_hash_pred(mapval(_), 0).                                
+      143 +value_hash_pred(termval(_), 0).                               
+      144 +value_hash_pred(nilval, 0).                                   
+      145 +value_hash_pred(consval(_, _), 0).                            
+      146 +value_hash_pred(closureval(_, _), 0).                         
+      147 +value_hash_pred(bytecodeval(_, Addr), Addr).                  
+      148 +                                                              
+      149  %-------------------------------------------------------------
+           ----------%
+      150  % Standard library loading
+      151  %-------------------------------------------------------------
+           ----------%
+
+● Now update eval_stdlib:
+
+● Update(src/froth.m)
+  ⎿  Added 4 lines, removed 2 lines                                      
+      214              (
+      215                  ParseResult = ok(Terms),
+      216                  datastack.init(Array0, Ptr0),
+      217 +                init_pool(Pool0, HT0),                        
+      218                  try_io(eval_terms_wrapper(OpTable, LibDir, ST1
+           , BC0,
+      218 -                    Terms, map.init, Array0, Ptr0), EvalResult
+          -, !IO),                                                       
+      219 +                    Terms, map.init, Array0, Ptr0, Pool0, HT0)
+          +, EvalResult, !IO),                                           
+      220                  (
+      220 -                    EvalResult = succeeded({ST, BC, Env, _Arra
+          -y, _Ptr}),                                                    
+      221 +                    EvalResult = succeeded({ST, BC, Env, _Arra
+          +y, _Ptr,                                                      
+      222 +                        _Pool, _HT}),                         
+      223                      Result = stdlib_ok(OpTable, ST, BC, Env)
+      224                  ;
+      225                      EvalResult = exception(Exn),
+
+● Now update run_with_options to create initial Pool/HT:
+
+● Update(src/froth.m)
+  ⎿  Added 4 lines, removed 2 lines                                      
+      277      ( if Opts ^ opt_no_stdlib = yes then
+      278          init_without_stdlib(OpTable, ST0, BC0, Env0),
+      279          datastack.init(Array0, Ptr0),
+      280 -        run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr
+          -0, !IO)                                                       
+      280 +        init_pool(Pool0, HT0),                                
+      281 +        run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr
+          +0, Pool0, HT0, !IO)                                           
+      282      else
+      283          init_with_stdlib(InitResult, !IO),
+      284          (
+      285              InitResult = init_ok(OpTable, ST0, BC0, Env0),
+      286              datastack.init(Array0, Ptr0),
+      286 -            run_actions(Opts, OpTable, ST0, BC0, Env0, Array0,
+          - Ptr0, !IO)                                                   
+      287 +            init_pool(Pool0, HT0),                            
+      288 +            run_actions(Opts, OpTable, ST0, BC0, Env0, Array0,
+          + Ptr0, Pool0, HT0, !IO)                                       
+      289          ;
+      290              InitResult = init_error,
+      291              io.set_exit_status(1, !IO)
+
+● Now update run_actions:
+
+● Update(src/froth.m)
+  ⎿  Added 8 lines, removed 5 lines                                      
+      298  
+      299  :- pred run_actions(options::in, operator_table::in,
+      300      string_table::in, array(int)::array_di, env::in,
+      301 -    array(value)::array_di, int::in, io::di, io::uo) is cc_mul
+          -ti.                                                           
+      301 +    array(value)::array_di, int::in,                          
+      302 +    array(value)::array_di, hash_table(value, int)::hash_table
+          +_di,                                                          
+      303 +    io::di, io::uo) is cc_multi.                              
+      304  
+      303 -run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, !IO) 
+          -:-                                                            
+      305 +run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, Pool0
+          +, HT0, !IO) :-                                                
+      306      Actions = Opts ^ opt_actions,
+      307      (
+      308          Actions = [],
+      309          % No actions: start REPL
+      308 -        start_repl(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0
+          -, !IO)                                                        
+      310 +        start_repl(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0
+          +, Pool0, HT0, !IO)                                            
+      311      ;
+      312          Actions = [_ | _],
+      313          execute_actions(Actions, OpTable, ST0, ST, BC0, BC,
+      312 -            Env0, Env, Array0, Array, Ptr0, Ptr, yes, Success,
+          - !IO),                                                        
+      314 +            Env0, Env, Array0, Array, Ptr0, Ptr, Pool0, Pool, 
+          +HT0, HT,                                                      
+      315 +            yes, Success, !IO),                               
+      316          (
+      317              Success = yes,
+      318              ( if Opts ^ opt_interactive = yes then
+      316 -                start_repl(Opts, OpTable, ST, BC, Env, Array, 
+          -Ptr, !IO)                                                     
+      319 +                start_repl(Opts, OpTable, ST, BC, Env, Array, 
+          +Ptr, Pool, HT, !IO)                                           
+      320              else
+      321                  true
+      322              )
+
+● Now update execute_actions:
+
+● Update(src/froth.m)
+  ⎿  Added 11 lines, removed 5 lines                                     
+      332      env::in, env::out,
+      333      array(value)::array_di, array(value)::array_uo,
+      334      int::in, int::out,
+      335 +    array(value)::array_di, array(value)::array_uo,           
+      336 +    hash_table(value, int)::hash_table_di, hash_table(value, i
+          +nt)::hash_table_uo,                                           
+      337      bool::in, bool::out, io::di, io::uo) is cc_multi.
+      338  
+      337 -execute_actions([], _, !ST, !BC, !Env, !Array, !Ptr, !Success,
+          - !IO).                                                        
+      338 -execute_actions([Action | Rest], OpTable, !ST, !BC, !Env, !Arr
+          -ay, !Ptr, !Success, !IO) :-                                   
+      339 +execute_actions([], _, !ST, !BC, !Env, !Array, !Ptr, !Pool, !H
+          +T, !Success, !IO).                                            
+      340 +execute_actions([Action | Rest], OpTable, !ST, !BC, !Env, !Arr
+          +ay, !Ptr,                                                     
+      341 +        !Pool, !HT, !Success, !IO) :-                         
+      342      (
+      343          !.Success = no
+      344          % Skip remaining actions if we already failed
+     ...
+      346          !.Success = yes,
+      347          (
+      348              Action = exec_code(Code),
+      346 -            execute_code(OpTable, Code, !ST, !BC, !Env, !Array
+          -, !Ptr, !Success, !IO)                                        
+      349 +            execute_code(OpTable, Code, !ST, !BC, !Env, !Array
+          +, !Ptr,                                                       
+      350 +                !Pool, !HT, !Success, !IO)                    
+      351          ;
+      352              Action = exec_file(File),
+      349 -            execute_file(OpTable, File, !ST, !BC, !Env, !Array
+          -, !Ptr, !Success, !IO)                                        
+      353 +            execute_file(OpTable, File, !ST, !BC, !Env, !Array
+          +, !Ptr,                                                       
+      354 +                !Pool, !HT, !Success, !IO)                    
+      355          ),
+      351 -        execute_actions(Rest, OpTable, !ST, !BC, !Env, !Array,
+          - !Ptr, !Success, !IO)                                         
+      356 +        execute_actions(Rest, OpTable, !ST, !BC, !Env, !Array,
+          + !Ptr,                                                        
+      357 +            !Pool, !HT, !Success, !IO)                        
+      358      ).
+      359  
+      360  :- pred execute_code(operator_table::in, string::in,
+
+● Now update execute_code:
+
+● Update(src/froth.m)
+  ⎿  Added 8 lines, removed 3 lines                                      
+      363      env::in, env::out,
+      364      array(value)::array_di, array(value)::array_uo,
+      365      int::in, int::out,
+      366 +    array(value)::array_di, array(value)::array_uo,           
+      367 +    hash_table(value, int)::hash_table_di, hash_table(value, i
+          +nt)::hash_table_uo,                                           
+      368      bool::in, bool::out, io::di, io::uo) is cc_multi.
+      369  
+      370  execute_code(OpTable, Code, ST0, ST, BC0, BC, Env0, Env,
+      369 -        Array0, Array, Ptr0, Ptr, _, Success, !IO) :-         
+      371 +        Array0, Array, Ptr0, Ptr, Pool0, Pool, HT0, HT, _, Suc
+          +cess, !IO) :-                                                 
+      372      lexer.tokenize(Code, ST0, LexResult),
+      373      (
+      374          LexResult = ok(Tokens, ST1),
+     ...
+      377              ParseResult = ok(Terms),
+      378              % Use "." as BaseDir for code strings (current dir
+           ectory)
+      379              try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, 
+           Terms,
+      378 -                Env0, Array0, Ptr0), EvalResult, !IO),        
+      380 +                Env0, Array0, Ptr0, Pool0, HT0), EvalResult, !
+          +IO),                                                          
+      381              (
+      380 -                EvalResult = succeeded({ST, BC, Env, Array, Pt
+          -r}),                                                          
+      382 +                EvalResult = succeeded({ST, BC, Env, Array, Pt
+          +r, Pool, HT}),                                                
+      383                  Success = yes
+      384              ;
+      385                  EvalResult = exception(Exn),
+     ...
+      389                      ST = ST1, Env = Env0,
+      390                      bytecode.init(BC),
+      391                      datastack.init(Array, Ptr),
+      392 +                    init_pool(Pool, HT),                      
+      393                      Success = no
+      394                  else
+      395                      rethrow(EvalResult)
+     ...
+      400              report_parse_error(ParseError, !IO),
+      401              ST = ST1, Env = Env0,
+      402              BC = BC0, Array = Array0, Ptr = Ptr0,
+      403 +            Pool = Pool0, HT = HT0,                           
+      404              Success = no
+      405          )
+      406      ;
+     ...
+      408          report_lex_error(LexError, !IO),
+      409          ST = ST0, Env = Env0,
+      410          BC = BC0, Array = Array0, Ptr = Ptr0,
+      411 +        Pool = Pool0, HT = HT0,                               
+      412          Success = no
+      413      ).
+      414  
+
+● Now update execute_file:
+
+● Update(src/froth.m)
+  ⎿  Added 9 lines, removed 3 lines                                      
+      418      env::in, env::out,
+      419      array(value)::array_di, array(value)::array_uo,
+      420      int::in, int::out,
+      421 +    array(value)::array_di, array(value)::array_uo,           
+      422 +    hash_table(value, int)::hash_table_di, hash_table(value, i
+          +nt)::hash_table_uo,                                           
+      423      bool::in, bool::out, io::di, io::uo) is cc_multi.
+      424  
+      425  execute_file(OpTable, Filename, ST0, ST, BC0, BC, Env0, Env,
+      424 -        Array0, Array, Ptr0, Ptr, _, Success, !IO) :-         
+      426 +        Array0, Array, Ptr0, Ptr, Pool0, Pool, HT0, HT, _, Suc
+          +cess, !IO) :-                                                 
+      427      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      428      (
+      429          ReadResult = ok(Content),
+     ...
+      435              (
+      436                  ParseResult = ok(Terms),
+      437                  try_io(eval_terms_wrapper(OpTable, BaseDir, ST
+           1, BC0,
+      436 -                    Terms, Env0, Array0, Ptr0), EvalResult, !I
+          -O),                                                           
+      438 +                    Terms, Env0, Array0, Ptr0, Pool0, HT0), Ev
+          +alResult, !IO),                                               
+      439                  (
+      438 -                    EvalResult = succeeded({ST, BC, Env, Array
+          -, Ptr}),                                                      
+      440 +                    EvalResult = succeeded({ST, BC, Env, Array
+          +, Ptr, Pool, HT}),                                            
+      441                      Success = yes
+      442                  ;
+      443                      EvalResult = exception(Exn),
+     ...
+      447                          ST = ST1, Env = Env0,
+      448                          bytecode.init(BC),
+      449                          datastack.init(Array, Ptr),
+      450 +                        init_pool(Pool, HT),                  
+      451                          Success = no
+      452                      else
+      453                          rethrow(EvalResult)
+     ...
+      458                  report_parse_error(ParseError, !IO),
+      459                  ST = ST1, Env = Env0,
+      460                  BC = BC0, Array = Array0, Ptr = Ptr0,
+      461 +                Pool = Pool0, HT = HT0,                       
+      462                  Success = no
+      463              )
+      464          ;
+     ...
+      466              report_lex_error(LexError, !IO),
+      467              ST = ST0, Env = Env0,
+      468              BC = BC0, Array = Array0, Ptr = Ptr0,
+      469 +            Pool = Pool0, HT = HT0,                           
+      470              Success = no
+      471          )
+      472      ;
+     ...
+      475              [s(Filename), s(io.error_message(Error))], !IO),
+      476          ST = ST0, Env = Env0,
+      477          BC = BC0, Array = Array0, Ptr = Ptr0,
+      478 +        Pool = Pool0, HT = HT0,                               
+      479          Success = no
+      480      ).
+      481  
+
+● Now update start_repl:
+
+● Update(src/froth.m)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      485  
+      486  :- pred start_repl(options::in, operator_table::in, string_tab
+           le::in,
+      487      array(int)::array_di, env::in, array(value)::array_di, int
+           ::in,
+      488 +    array(value)::array_di, hash_table(value, int)::hash_table
+          +_di,                                                          
+      489      io::di, io::uo) is cc_multi.
+      490  
+      490 -start_repl(Opts, OpTable, ST, BC, Env, Array, Ptr, !IO) :-    
+      491 +start_repl(Opts, OpTable, ST, BC, Env, Array, Ptr, Pool, HT, !
+          +IO) :-                                                        
+      492      ( if Opts ^ opt_quiet = no then
+      493          io.write_string("Froth REPL. Press Ctrl-D to exit.\n",
+            !IO)
+      494      else
+      495          true
+      496      ),
+      496 -    repl_loop(OpTable, ST, BC, Env, Array, Ptr, !IO).         
+      497 +    repl_loop(OpTable, ST, BC, Env, Array, Ptr, Pool, HT, !IO)
+          +.                                                             
+      498  
+      499  :- pred repl_loop(operator_table::in, string_table::in,
+      500      array(int)::array_di, env::in,
+
+● Now update repl_loop:
+
+● Update(src/froth.m)
+  ⎿  Added 6 lines, removed 4 lines                                      
+      498  
+      499  :- pred repl_loop(operator_table::in, string_table::in,
+      500      array(int)::array_di, env::in,
+      501 -    array(value)::array_di, int::in, io::di, io::uo) is cc_mul
+          -ti.                                                           
+      501 +    array(value)::array_di, int::in,                          
+      502 +    array(value)::array_di, hash_table(value, int)::hash_table
+          +_di,                                                          
+      503 +    io::di, io::uo) is cc_multi.                              
+      504  
+      503 -repl_loop(OpTable, ST0, BC0, Env0, Array0, Ptr0, !IO) :-      
+      505 +repl_loop(OpTable, ST0, BC0, Env0, Array0, Ptr0, Pool0, HT0, !
+          +IO) :-                                                        
+      506      io.write_string("> ", !IO),
+      507      io.flush_output(!IO),
+      508      io.read_line_as_string(ReadResult, !IO),
+      509      (
+      510          ReadResult = ok(Line),
+      511          repl_eval(OpTable, Line, ST0, ST, BC0, BC, Env0, Env,
+      510 -            Array0, Array, Ptr0, Ptr, !IO),                   
+      511 -        repl_loop(OpTable, ST, BC, Env, Array, Ptr, !IO)      
+      512 +            Array0, Array, Ptr0, Ptr, Pool0, Pool, HT0, HT, !I
+          +O),                                                           
+      513 +        repl_loop(OpTable, ST, BC, Env, Array, Ptr, Pool, HT, 
+          +!IO)                                                          
+      514      ;
+      515          ReadResult = eof,
+      516          io.nl(!IO)
+
+● Now update repl_eval:
+
+● Update(src/froth.m)
+  ⎿  Added 13 lines, removed 7 lines                                     
+      526      array(int)::array_di, array(int)::array_uo,
+      527      env::in, env::out,
+      528      array(value)::array_di, array(value)::array_uo,
+      529 -    int::in, int::out, io::di, io::uo) is cc_multi.           
+      529 +    int::in, int::out,                                        
+      530 +    array(value)::array_di, array(value)::array_uo,           
+      531 +    hash_table(value, int)::hash_table_di, hash_table(value, i
+          +nt)::hash_table_uo,                                           
+      532 +    io::di, io::uo) is cc_multi.                              
+      533  
+      534  repl_eval(OpTable, Input, ST0, ST, BC0, BC, Env0, Env,
+      532 -        Array0, Array, Ptr0, Ptr, !IO) :-                     
+      535 +        Array0, Array, Ptr0, Ptr, Pool0, Pool, HT0, HT, !IO) :
+          +-                                                             
+      536      lexer.tokenize(Input, ST0, LexResult),
+      537      (
+      538          LexResult = ok(Tokens, ST1),
+     ...
+      540          (
+      541              ParseResult = ok(Terms),
+      542              try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, 
+           Terms,
+      540 -                Env0, Array0, Ptr0), Result, !IO),            
+      543 +                Env0, Array0, Ptr0, Pool0, HT0), Result, !IO),
+      544              (
+      542 -                Result = succeeded({ST, BC, Env, Array, Ptr}) 
+      545 +                Result = succeeded({ST, BC, Env, Array, Ptr, P
+          +ool, HT})                                                     
+      546              ;
+      547                  Result = exception(Exn),
+      548                  ( if univ_to_type(Exn, EvalError) then
+     ...
+      550                          [s(types.format_error(ST1, EvalError))
+           ], !IO),
+      551                      ST = ST1, Env = Env0,
+      552                      bytecode.init(BC),
+      550 -                    datastack.init(Array, Ptr)                
+      553 +                    datastack.init(Array, Ptr),               
+      554 +                    init_pool(Pool, HT)                       
+      555                  else
+      556                      rethrow(Result)
+      557                  )
+     ...
+      560              ParseResult = error(ParseError),
+      561              report_parse_error(ParseError, !IO),
+      562              ST = ST1, Env = Env0,
+      559 -            BC = BC0, Array = Array0, Ptr = Ptr0              
+      563 +            BC = BC0, Array = Array0, Ptr = Ptr0,             
+      564 +            Pool = Pool0, HT = HT0                            
+      565          )
+      566      ;
+      567          LexResult = error(LexError),
+      568          report_lex_error(LexError, !IO),
+      569          ST = ST0, Env = Env0,
+      565 -        BC = BC0, Array = Array0, Ptr = Ptr0                  
+      570 +        BC = BC0, Array = Array0, Ptr = Ptr0,                 
+      571 +        Pool = Pool0, HT = HT0                                
+      572      ).
+      573  
+      574  %-------------------------------------------------------------
+           ----------%
+
+● Now I need to remove the duplicate value_hash_pred from eval.m since it's now in froth.m:
+
+● Update(src/eval.m)
+  ⎿  Removed 15 lines                                                    
+      237          throw(type_error("closure", V))
+      238      ).
+      239  
+      240 -    % Placeholder hash predicate for values.                  
+      241 -    % TODO: implement proper hashing when ref/deref are added.
+      242 -    %                                                         
+      243 -:- pred value_hash_pred(value::in, int::out) is det.          
+      244 -                                                              
+      245 -value_hash_pred(intval(I), I).                                
+      246 -value_hash_pred(stringval(Id), Id).                           
+      247 -value_hash_pred(arrayval(_), 0).                              
+      248 -value_hash_pred(mapval(_), 0).                                
+      249 -value_hash_pred(termval(_), 0).                               
+      250 -value_hash_pred(nilval, 0).                                   
+      251 -value_hash_pred(consval(_, _), 0).                            
+      252 -value_hash_pred(closureval(_, _), 0).                         
+      253 -value_hash_pred(bytecodeval(_, Addr), Addr).                  
+      254 -                                                              
+      240  %-------------------------------------------------------------
+           ----------%
+      241  % import: ( filename -- ) Load and evaluate a file
+      242  %-------------------------------------------------------------
+           ----------%
+
+● Now let's build and run the tests:
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth     
+     Making Mercury/int3s/froth.int3
+     Making Mercury/int3s/eval.int3
+     … +22 lines (ctrl+o to expand)
+
+● Good, it compiles! Let me fix the warning about the redundant import:
+
+● Update(src/eval.m)
+  ⎿  Removed 1 line                                                      
+      48  :- import_module datastack.
+      49  :- import_module dir.
+      50  :- import_module exception.
+      51 -:- import_module hash_table.                                   
+      51  :- import_module int.
+      52  :- import_module lexer.
+      53  :- import_module map.
+
+● Now rebuild and run the tests:
+
+● Bash(make && ./run_tests.sh 2>&1 | tail -20)
+  ⎿  cd src && mmc --make froth    
+     cp src/froth bin/
+     PASS: print_int
+     … +24 lines (ctrl+o to expand)
+
+● All 62 tests pass. The Pool and HashTable are now threaded through the entire evaluation chain:
+
+  Summary of changes:
+
+  1. eval.m:
+    - Added hash_table import to interface
+    - Extended eval_terms signature to include Pool and HT
+    - Updated all internal predicates (eval_term, eval_identifier, eval_generator, eval_apply, eval_import) to thread Pool and HT
+    - eval_apply now uses the threaded Pool/HT instead of creating fresh ones for each bytecode call
+  2. froth.m:
+    - Added hash_table import
+    - Added init_pool helper to create initial empty Pool and HashTable
+    - Moved value_hash_pred here (removed from eval.m)
+    - Updated eval_terms_wrapper to include Pool and HT in both parameters and result tuple
+    - Updated all execution paths to create initial Pool/HT and thread them through:
+        - eval_stdlib
+      - run_with_options → run_actions → execute_actions → execute_code/execute_file
+      - start_repl → repl_loop → repl_eval
+
+  The constant pool infrastructure is now in place and persists across bytecode calls within a session. The next step would be implementing the ref and deref operators.
+
+> Can you move value_hash_pred to values.m? 
+
+● Read(src/values.m)
+  ⎿  Read 231 lines
+
+● Update(src/values.m)
+  ⎿  Error editing file
+
+● Read(src/values.m)
+  ⎿  Read 50 lines
+
+● Update(src/values.m)
+  ⎿  Added 6 lines                                                       
+      44      %
+      45  :- func term_to_string(string_table, term) = string.
+      46  
+      47 +    % value_hash_pred(Value, Hash):                            
+      48 +    % Compute a hash value for use in hash tables.             
+      49 +    % Currently a placeholder that only hashes simple types pro
+         +perly.                                                         
+      50 +    %                                                          
+      51 +:- pred value_hash_pred(value::in, int::out) is det.           
+      52 +                                                               
+      53  %--------------------------------------------------------------
+          ---------%
+      54  
+      55  :- implementation.
+
+● Now add the implementation at the end:
+
+● Update(src/values.m)
+  ⎿  Added 14 lines                                                      
+      232      term_to_write_string(ST, T) ++ " " ++ terms_to_write_strin
+           g(ST, Ts).
+      233  
+      234  %-------------------------------------------------------------
+           ----------%
+      235 +% value_hash_pred: compute hash for hash table deduplication  
+      236 +%-------------------------------------------------------------
+          +----------%                                                   
+      237 +                                                              
+      238 +value_hash_pred(intval(I), I).                                
+      239 +value_hash_pred(stringval(Id), Id).                           
+      240 +value_hash_pred(arrayval(_), 0).                              
+      241 +value_hash_pred(mapval(_), 0).                                
+      242 +value_hash_pred(termval(_), 0).                               
+      243 +value_hash_pred(nilval, 0).                                   
+      244 +value_hash_pred(consval(_, _), 0).                            
+      245 +value_hash_pred(closureval(_, _), 0).                         
+      246 +value_hash_pred(bytecodeval(_, Addr), Addr).                  
+      247 +                                                              
+      248 +%-------------------------------------------------------------
+          +----------%                                                   
+      249  :- end_module values.
+      250  %-------------------------------------------------------------
+           ----------%
+
+● Now update froth.m to remove value_hash_pred and import values:
+
+● Update(src/froth.m)
+  ⎿  Added 1 line                                                        
+      32  :- import_module string.
+      33  :- import_module types.
+      34  :- import_module univ.
+      35 +:- import_module values.                                       
+      36  
+      37  %--------------------------------------------------------------
+          ---------%
+      38  % Command line options
+
+● Now remove value_hash_pred and update init_pool:
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 16 lines                                      
+      130  
+      131  init_pool(Pool, HT) :-
+      132      Pool = array.make_empty_array,
+      133 -    HT = hash_table.init(value_hash_pred, 8, 0.9).            
+      133 +    HT = hash_table.init(values.value_hash_pred, 8, 0.9).     
+      134  
+      135 -    % Placeholder hash predicate for values.                  
+      136 -    % TODO: implement proper hashing when ref/deref are added.
+      137 -    %                                                         
+      138 -:- pred value_hash_pred(value::in, int::out) is det.          
+      139 -                                                              
+      140 -value_hash_pred(intval(I), I).                                
+      141 -value_hash_pred(stringval(Id), Id).                           
+      142 -value_hash_pred(arrayval(_), 0).                              
+      143 -value_hash_pred(mapval(_), 0).                                
+      144 -value_hash_pred(termval(_), 0).                               
+      145 -value_hash_pred(nilval, 0).                                   
+      146 -value_hash_pred(consval(_, _), 0).                            
+      147 -value_hash_pred(closureval(_, _), 0).                         
+      148 -value_hash_pred(bytecodeval(_, Addr), Addr).                  
+      149 -                                                              
+      135  %-------------------------------------------------------------
+           ----------%
+      136  % Standard library loading
+      137  %-------------------------------------------------------------
+           ----------%
+
+● Now rebuild and test:
+
+● Bash(make && ./run_tests.sh 2>&1 | tail -10)
+  ⎿  cd src && mmc --make froth    
+     cp src/froth bin/
+     PASS: term_access
+     … +22 lines (ctrl+o to expand)
+
+● Done. All 62 tests pass. The value_hash_pred is now in values.m where it belongs with the other value-related predicates.
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                               
+     Your branch is up to date with 'origin/master'.
+     … +14 lines (ctrl+o to expand)
+
+● Bash(git log --oneline -5)
+  ⎿  0ba64ac Add values.m module with equality predicates    
+     52ccf67 Update documentation for clarity and consistency
+     c0e19ee Refactor bytecode constants to use table maps
+     … +2 lines (ctrl+o to expand)
+
+● Bash(git diff --staged --stat)
+  ⎿   src/eval.m   |  64 +++++++++++++++++-------                    
+      src/froth.m  | 118 ++++++++++++++++++++++++++++++--------------
+      src/values.m |  20 ++++++++
+     … +3 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Add constant pool infrastructure for bytecode compiler…)
+  ⎿ [master d1cc264] Add constant pool infrastructure for bytecode compiler
+     4 files changed, 241 insertions(+), 119 deletions(-)
+
+
+● Bash(git log --oneline -3)
+  ⎿  d1cc264 Add constant pool infrastructure for bytecode compiler
+     0ba64ac Add values.m module with equality predicates
+     52ccf67 Update documentation for clarity and consistency
+
+● Committed as d1cc264. The constant pool infrastructure is now in place, ready for implementing ref and deref operators.
+
+> implement ref and deref 
+
+● I'll implement ref and deref operators. Let me first check the current operator definitions:
+
+● Bash(grep -n "op_peek\|op_poke"
+      /home/mark/Documents/projects/froth/src/types.m)
+  ⎿  72:    ;       op_peek         % peek        ( addr -- int )  
+     73:    ;       op_poke         % poke        ( value addr -- )
+
+● Bash(grep -n "op_peek\|op_poke"
+      /home/mark/Documents/projects/froth/src/operator_table.m)
+  ⎿  109:operator("peek", op_peek).  
+     110:operator("poke", op_poke).
+     168:operator_arity(op_peek) = 1.
+     … +5 lines (ctrl+o to expand)
+
+● Read(src/types.m)
+  ⎿  Read 20 lines
+
+● Update(src/types.m)
+  ⎿  Added 2 lines                                                       
+      71      ;       op_is_closure   % isClosure   ( a -- int )
+      72      ;       op_peek         % peek        ( addr -- int )
+      73      ;       op_poke         % poke        ( value addr -- )
+      74 +    ;       op_ref          % ref         ( value -- int )     
+      75 +    ;       op_deref        % deref       ( int -- value )     
+      76      ;       op_apply_operator. % applyOperator ( 'op -- ... )
+      77  
+      78  :- type operator_info
+
+● Now update operator_table.m:
+
+● Read(src/operator_table.m)
+  ⎿  Read 15 lines
+
+● Update(src/operator_table.m)
+  ⎿  Added 2 lines                                                       
+      108  operator("isClosure", op_is_closure).
+      109  operator("peek", op_peek).
+      110  operator("poke", op_poke).
+      111 +operator("ref", op_ref).                                      
+      112 +operator("deref", op_deref).                                  
+      113  operator("applyOperator", op_apply_operator).
+      114  
+      115  %-------------------------------------------------------------
+           ----------%
+
+● Read(src/operator_table.m)
+  ⎿  Read 15 lines
+
+● Update(src/operator_table.m)
+  ⎿  Added 3 lines, removed 1 line                                       
+      169  operator_arity(op_is_closure) = 1.
+      170  operator_arity(op_peek) = 1.
+      171  operator_arity(op_poke) = 2.
+      172 +operator_arity(op_ref) = 1.                                   
+      173 +operator_arity(op_deref) = 1.                                 
+      174  operator_arity(op_apply_operator) = 1.
+      175  
+      176  %-------------------------------------------------------------
+           ----------%
+      177  % Operator to/from integer conversion for bytecode
+      178  %-------------------------------------------------------------
+           ----------%
+      179  
+      178 -num_operators = 54.                                           
+      180 +num_operators = 56.                                           
+      181  
+      182  operator_to_int(op_print) = 0.
+      183  operator_to_int(op_env) = 1.
+
+● Read(src/operator_table.m)
+  ⎿  Read 20 lines
+
+● Update(src/operator_table.m)
+  ⎿  Added 3 lines, removed 1 line                                       
+      232  operator_to_int(op_is_closure) = 50.
+      233  operator_to_int(op_peek) = 51.
+      234  operator_to_int(op_poke) = 52.
+      235 -operator_to_int(op_apply_operator) = 53.                      
+      235 +operator_to_int(op_ref) = 53.                                 
+      236 +operator_to_int(op_deref) = 54.                               
+      237 +operator_to_int(op_apply_operator) = 55.                      
+      238  
+      239  int_to_operator(0, op_print).
+      240  int_to_operator(1, op_env).
+
+● Read(src/operator_table.m)
+  ⎿  Read 20 lines
+
+● Update(src/operator_table.m)
+  ⎿  Added 3 lines, removed 1 line                                       
+      289  int_to_operator(50, op_is_closure).
+      290  int_to_operator(51, op_peek).
+      291  int_to_operator(52, op_poke).
+      292 -int_to_operator(53, op_apply_operator).                       
+      292 +int_to_operator(53, op_ref).                                  
+      293 +int_to_operator(54, op_deref).                                
+      294 +int_to_operator(55, op_apply_operator).                       
+      295  
+      296  %-------------------------------------------------------------
+           ----------%
+      297  % init_operators: intern all operator names and build the oper
+           ator table
+
+● Read(src/operator_table.m)
+  ⎿  Read 30 lines
+
+● Update(src/operator_table.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      312          "idToString", "idToIdent", "idToBinder", "isOperator",
+            "arity",
+      313          "stack", "import", "time", "restore",
+      314          "close", "open", "isClosure",
+      315 -        "peek", "poke", "applyOperator"                       
+      315 +        "peek", "poke", "ref", "deref", "applyOperator"       
+      316      ],
+      317      list.foldl2(intern_operator, OpNames, map.init, OpTable, !
+           ST).
+      318  
+
+● Now I need to implement the operators in eval.m. Let me look at eval_identifier:
+
+● Read(src/eval.m)
+  ⎿  Read 35 lines
+
+● Update(src/eval.m)
+  ⎿  Added 6 lines                                                       
+      143          else if Info ^ oi_operator = op_poke then
+      144              % poke is special: it modifies the bytecode store
+      145              eval_poke(!Array, !Ptr, !BC)
+      146 +        else if Info ^ oi_operator = op_ref then              
+      147 +            % ref is special: it modifies the constant pool   
+      148 +            eval_ref(!Array, !Ptr, !Pool, !HT)                
+      149 +        else if Info ^ oi_operator = op_deref then            
+      150 +            % deref is special: it reads the constant pool    
+      151 +            eval_deref(!Array, !Ptr, !.Pool)                  
+      152          else
+      153              operators.eval_operator(OpTable, !.ST, Info ^ oi_o
+           perator, !.Env,
+      154                  !Array, !Ptr, !IO)
+
+● Now I need to add the eval_ref and eval_deref implementations. Let me find the end of eval_poke:
+
+● Read(src/eval.m)
+  ⎿  Read 35 lines
+
+● Read(src/eval.m)
+  ⎿  Read 11 lines
+
+● Update(src/eval.m)
+  ⎿  Added 47 lines                                                      
+      390      ).
+      391  
+      392  %-------------------------------------------------------------
+           ----------%
+      393 +% ref: ( value -- int ) Store value in constant pool, return i
+          +ndex                                                          
+      394 +%-------------------------------------------------------------
+          +----------%                                                   
+      395 +                                                              
+      396 +:- pred eval_ref(                                             
+      397 +    array(value)::array_di, array(value)::array_uo,           
+      398 +    int::in, int::out,                                        
+      399 +    array(value)::array_di, array(value)::array_uo,           
+      400 +    hash_table(value, int)::hash_table_di,                    
+      401 +    hash_table(value, int)::hash_table_uo) is det.            
+      402 +                                                              
+      403 +eval_ref(!Array, !Ptr, !Pool, !HT) :-                         
+      404 +    datastack.pop("ref", V, !Array, !Ptr),                    
+      405 +    % Check if value is already in the pool (deduplication)   
+      406 +    ( if hash_table.search(!.HT, V, ExistingIdx) then         
+      407 +        % Already exists, return existing index               
+      408 +        datastack.push(intval(ExistingIdx), !Array, !Ptr)     
+      409 +    else                                                      
+      410 +        % New value: add to pool and hash table               
+      411 +        Idx = array.size(!.Pool),                             
+      412 +        array.resize(Idx + 1, V, !Pool),                      
+      413 +        hash_table.det_insert(V, Idx, !HT),                   
+      414 +        datastack.push(intval(Idx), !Array, !Ptr)             
+      415 +    ).                                                        
+      416 +                                                              
+      417 +%-------------------------------------------------------------
+          +----------%                                                   
+      418 +% deref: ( int -- value ) Retrieve value from constant pool   
+      419 +%-------------------------------------------------------------
+          +----------%                                                   
+      420 +                                                              
+      421 +:- pred eval_deref(                                           
+      422 +    array(value)::array_di, array(value)::array_uo,           
+      423 +    int::in, int::out,                                        
+      424 +    array(value)::in) is det.                                 
+      425 +                                                              
+      426 +eval_deref(!Array, !Ptr, Pool) :-                             
+      427 +    datastack.pop("deref", V, !Array, !Ptr),                  
+      428 +    ( if V = intval(Idx) then                                 
+      429 +        ( if Idx >= 0, Idx < array.size(Pool) then            
+      430 +            array.lookup(Pool, Idx, Value),                   
+      431 +            datastack.push(Value, !Array, !Ptr)               
+      432 +        else                                                  
+      433 +            throw(index_error(Idx, array.size(Pool)))         
+      434 +        )                                                     
+      435 +    else                                                      
+      436 +        throw(type_error("int", V))                           
+      437 +    ).                                                        
+      438 +                                                              
+      439 +%-------------------------------------------------------------
+          +----------%                                                   
+      440  :- end_module eval.
+      441  %-------------------------------------------------------------
+           ----------%
+
+● Now I need to implement these in vm.m as well. Let me check how operators are handled there:
+
+● Read(src/vm.m)
+  ⎿  Read 20 lines
+
+● I need to handle ref and deref specially in the VM since they need Pool and HashTable access:
+
+● Update(src/vm.m)
+  ⎿  Added 14 lines, removed 4 lines                                     
+      133          % op n: execute operator n
+      134          array.lookup(!.Bytecode, IP + 1, OpNum),
+      135          ( if operator_table.int_to_operator(OpNum, Op) then
+      136 -            operators.eval_operator(OpTable, !.Store ^ vs_stri
+          -ng_table, Op, Env,                                            
+      137 -                !Stack, !SP, !IO),                            
+      138 -            run(IP + 2, RP, FP, Context, GenStack, !SP, !Store
+          -, OpTable, Env,                                               
+      139 -                !Bytecode, !Stack, !Pool, !HashTable, !IO)    
+      136 +            ( if Op = op_ref then                             
+      137 +                vm_ref(!Stack, !SP, !Pool, !HashTable),       
+      138 +                run(IP + 2, RP, FP, Context, GenStack, !SP, !S
+          +tore, OpTable, Env,                                           
+      139 +                    !Bytecode, !Stack, !Pool, !HashTable, !IO)
+      140 +            else if Op = op_deref then                        
+      141 +                vm_deref(!Stack, !SP, !.Pool),                
+      142 +                run(IP + 2, RP, FP, Context, GenStack, !SP, !S
+          +tore, OpTable, Env,                                           
+      143 +                    !Bytecode, !Stack, !Pool, !HashTable, !IO)
+      144 +            else                                              
+      145 +                operators.eval_operator(OpTable, !.Store ^ vs_
+          +string_table, Op, Env,                                        
+      146 +                    !Stack, !SP, !IO),                        
+      147 +                run(IP + 2, RP, FP, Context, GenStack, !SP, !S
+          +tore, OpTable, Env,                                           
+      148 +                    !Bytecode, !Stack, !Pool, !HashTable, !IO)
+      149 +            )                                                 
+      150          else
+      151              throw(vm_error("invalid operator number"))
+      152          )
+
+● Now I need to add the vm_ref and vm_deref predicates at the end of vm.m:
+
+● Read(src/vm.m)
+  ⎿  Read 12 lines
+
+● Update(src/vm.m)
+  ⎿  Added 44 lines                                                      
+      266      ).
+      267  
+      268  %-------------------------------------------------------------
+           ----------%
+      269 +% ref: ( value -- int ) Store value in constant pool, return i
+          +ndex                                                          
+      270 +%-------------------------------------------------------------
+          +----------%                                                   
+      271 +                                                              
+      272 +:- pred vm_ref(                                               
+      273 +    array(value)::array_di, array(value)::array_uo,           
+      274 +    int::in, int::out,                                        
+      275 +    array(value)::array_di, array(value)::array_uo,           
+      276 +    hash_table(value, int)::hash_table_di,                    
+      277 +    hash_table(value, int)::hash_table_uo) is det.            
+      278 +                                                              
+      279 +vm_ref(!Stack, !SP, !Pool, !HashTable) :-                     
+      280 +    datastack.pop("ref", V, !Stack, !SP),                     
+      281 +    ( if hash_table.search(!.HashTable, V, ExistingIdx) then  
+      282 +        datastack.push(intval(ExistingIdx), !Stack, !SP)      
+      283 +    else                                                      
+      284 +        Idx = array.size(!.Pool),                             
+      285 +        array.resize(Idx + 1, V, !Pool),                      
+      286 +        hash_table.det_insert(V, Idx, !HashTable),            
+      287 +        datastack.push(intval(Idx), !Stack, !SP)              
+      288 +    ).                                                        
+      289 +                                                              
+      290 +%-------------------------------------------------------------
+          +----------%                                                   
+      291 +% deref: ( int -- value ) Retrieve value from constant pool   
+      292 +%-------------------------------------------------------------
+          +----------%                                                   
+      293 +                                                              
+      294 +:- pred vm_deref(                                             
+      295 +    array(value)::array_di, array(value)::array_uo,           
+      296 +    int::in, int::out,                                        
+      297 +    array(value)::in) is det.                                 
+      298 +                                                              
+      299 +vm_deref(!Stack, !SP, Pool) :-                                
+      300 +    datastack.pop("deref", V, !Stack, !SP),                   
+      301 +    ( if V = intval(Idx) then                                 
+      302 +        ( if Idx >= 0, Idx < array.size(Pool) then            
+      303 +            array.lookup(Pool, Idx, Value),                   
+      304 +            datastack.push(Value, !Stack, !SP)                
+      305 +        else                                                  
+      306 +            throw(index_error(Idx, array.size(Pool)))         
+      307 +        )                                                     
+      308 +    else                                                      
+      309 +        throw(type_error("int", V))                           
+      310 +    ).                                                        
+      311 +                                                              
+      312 +%-------------------------------------------------------------
+          +----------%                                                   
+      313  :- end_module vm.
+      314  %-------------------------------------------------------------
+           ----------%
+
+● Now let's build and test:
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/types.int3
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/operator_table.int3
+     Making Mercury/int3s/vm.int3
+     Making Mercury/ints/vm.int
+     Making Mercury/ints/values.int
+     Making Mercury/ints/types.int
+     Making Mercury/ints/parser.int
+     … +16 lines (ctrl+o to see all)
+
+● I need to check the error types in types.m:
+
+● Bash(grep -n "eval_error\|index"
+      /home/mark/Documents/projects/froth/src/types.m | head -20)
+  ⎿  142::- type eval_error                                             
+     146:    ;       index_out_of_bounds(int, int)   % Index, array size
+     151:    % Convert an eval_error to a human-readable message.
+     … +4 lines (ctrl+o to expand)
+
+● Update(src/eval.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      430              array.lookup(Pool, Idx, Value),
+      431              datastack.push(Value, !Array, !Ptr)
+      432          else
+      433 -            throw(index_error(Idx, array.size(Pool)))         
+      433 +            throw(index_out_of_bounds(Idx, array.size(Pool))) 
+      434          )
+      435      else
+      436          throw(type_error("int", V))
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      303              array.lookup(Pool, Idx, Value),
+      304              datastack.push(Value, !Stack, !SP)
+      305          else
+      306 -            throw(index_error(Idx, array.size(Pool)))         
+      306 +            throw(index_out_of_bounds(Idx, array.size(Pool))) 
+      307          )
+      308      else
+      309          throw(type_error("int", V))
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/vm.int3
+     Making Mercury/ints/vm.int
+     Making Mercury/ints/eval.int
+     Making Mercury/cs/eval.c
+     Making Mercury/cs/froth.c
+     Making Mercury/cs/lexer.c
+     Making Mercury/cs/operator_table.c
+     … +11 lines (ctrl+o to see all)
+
+● I need to add cases for ref/deref in operators.m. Let me find the switch:
+
+● Bash(grep -n "op_poke\|op_peek"
+      /home/mark/Documents/projects/froth/src/operators.m)
+  ⎿  312:        Op = op_peek,
+     316:        Op = op_poke,
+
+● Read(src/operators.m)
+  ⎿  Read 25 lines
+
+● Update(src/operators.m)
+  ⎿  Added 8 lines                                                       
+      317          % poke is handled specially in eval.m, should not reac
+           h here
+      318          unexpected($pred, "poke should be handled in eval.m")
+      319      ;
+      320 +        Op = op_ref,                                          
+      321 +        % ref is handled specially in eval.m/vm.m, should not 
+          +reach here                                                    
+      322 +        unexpected($pred, "ref should be handled in eval.m/vm.
+          +m")                                                           
+      323 +    ;                                                         
+      324 +        Op = op_deref,                                        
+      325 +        % deref is handled specially in eval.m/vm.m, should no
+          +t reach here                                                  
+      326 +        unexpected($pred, "deref should be handled in eval.m/v
+          +m.m")                                                         
+      327 +    ;                                                         
+      328          Op = op_apply_operator,
+      329          operator_apply_operator(OpTable, ST, Env, !Array, !Ptr
+           , !IO)
+      330      ).
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth         
+     Making Mercury/int3s/operators.int3
+     Making Mercury/ints/operators.int
+     … +18 lines (ctrl+o to expand)
+
+● Now let's run tests and test the new operators:
+
+● Bash(./run_tests.sh 2>&1 | tail -10)
+  ⎿  PASS: term_access            
+     PASS: term_convert
+     PASS: time
+     … +7 lines (ctrl+o to expand)
+
+● Bash(./bin/froth -e '42 ref print " " print deref print')
+  ⎿  Error: Exit code 1
+     0 Runtime error: stack underflow in 'deref'
+
+● Bash(./bin/froth -e '42 ref /r r print " " print r deref print')
+  ⎿  0 42
+
+● Bash(./bin/froth -e '42 ref print " " print 42 ref print " " print 99 ref
+      println!')
+  ⎿  0 0 1
+
+● Bash(./bin/froth -e '[ 1 2 3 ] ref /r r println! r deref print')
+  ⎿  0  
+     123
+
+● Bash(./bin/froth -e '{ 1 2 + } ref /r r println! r deref ! println!')
+  ⎿  0
+     3
+
+● Bash(./bin/froth -e '42 ref drop! 99 deref println!')
+  ⎿  Error: Exit code 1
+     Runtime error: index out of bounds: 99 (array size: 1)
+
+● All working! Let me create a test file:
+
+● Write(tests/ref.froth)
+  ⎿  Wrote 31 lines to tests/ref.froth                
+      1 ; Test ref and deref operators
+      2 ; Basic ref and deref
+      3 42 ref /r
+      4 r deref print
+      5 " " print
+      6 ; Deduplication: same value returns same index
+      7 42 ref /r2
+      8 r r2 = print
+     … +21 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/ref.froth)
+  ⎿  42 0 1 123 3 42
+
+● Write(tests/ref.expected)
+  ⎿  Wrote 2 lines to tests/ref.expected
+      1 42 0 1 123 3 42
+
+● Bash(./run_tests.sh 2>&1 | tail -15)
+  ⎿  PASS: scan                    
+     PASS: shadow
+     PASS: slots
+     … +12 lines (ctrl+o to expand)
+
+● All 63 tests pass. Let me update the documentation:
+
+● Read(FROTH.md)
+  ⎿  Read 30 lines
+
+● Read(FROTH.md)
+  ⎿  Read 30 lines
+
+● Read(FROTH.md)
+  ⎿  Read 7 lines
+
+● Update(FROTH.md)
+  ⎿  Added 2 lines                                                       
+      184  | `stack` | `( ... -- array )` | Convert entire stack to an ar
+           ray |
+      185  | `peek` | `( addr -- int )` | Read value from bytecode store 
+           (0 if beyond size) |
+      186  | `poke` | `( value addr -- )` | Write value to bytecode store
+            (extends if needed) |
+      187 +| `ref` | `( value -- int )` | Store value in constant pool, r
+          +eturn index (deduplicated) |                                  
+      188 +| `deref` | `( int -- value )` | Retrieve value from constant 
+          +pool by index |                                               
+      189  | `applyOperator` | `( 'op -- ... )` | Apply a quoted operator
+            |
+
+● I should also update lib/ops.froth with the new operator codes:
+
+● Read(lib/ops.froth)
+  ⎿  Read 60 lines
+
+● Update(lib/ops.froth)
+  ⎿  Added 3 lines, removed 1 line                                       
+      55    50 'isClosure :
+      56    51 'peek :
+      57    52 'poke :
+      58 -  53 'applyOperator :                                          
+      58 +  53 'ref :                                                    
+      59 +  54 'deref :                                                  
+      60 +  55 'applyOperator :                                          
+      61  /operator-table
+
+● Bash(./run_tests.sh 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● All 63 tests pass. Here's a summary of the implementation:
+
+  New operators:
+  - ref ( value -- int ): Store a value in the constant pool and return its index. Deduplicates - same values return the same index.
+  - deref ( int -- value ): Retrieve a value from the constant pool by index.
+
+  Files changed:
+  - src/types.m: Added op_ref and op_deref to the operator enum
+  - src/operator_table.m: Added operator declarations, arities, and int mappings (53, 54)
+  - src/operators.m: Added placeholder cases that throw if reached (they shouldn't be)
+  - src/eval.m: Added eval_ref and eval_deref predicates, special handling in eval_identifier
+  - src/vm.m: Added vm_ref and vm_deref predicates, special handling in the op dispatch
+  - lib/ops.froth: Added ref (53) and deref (54), updated applyOperator to 55
+  - FROTH.md: Added documentation for ref and deref operators
+  - tests/ref.froth and tests/ref.expected: Added test case
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                    
+     Your branch is ahead of 'origin/master' by 1 commit.
+       (use "git push" to publish your local commits)
+     … +20 lines (ctrl+o to expand)
+
+● Bash(git log --oneline -3)
+  ⎿  d1cc264 Add constant pool infrastructure for bytecode compiler
+     0ba64ac Add values.m module with equality predicates
+     52ccf67 Update documentation for clarity and consistency
+
+● Bash(git commit -m "Add ref and deref operators for constant pool access…)
+  ⎿  [master 372d576] Add ref and deref operators for constant pool access
+      9 files changed, 169 insertions(+), 9 deletions(-)
+      create mode 100644 tests/ref.expected
+      create mode 100644 tests/ref.froth
+
+● Committed as 372d576.
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 192k/200k tokens (96%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 13.1k tokens (6.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 116.3k tokens (58.1%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 8k (3.9%)
+     ⛁ ⛁ ⛁ ⛁ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 117 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.6k tokens
+     └ FROTH_LIBRARY.md: 4.3k tokens
+     └ FROTH_COMPILER.md: 3.8k tokens
+     └ FROTH_BYTECODE.md: 1.4k tokens
+     └ FROTH_GUIDE.md: 816 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+

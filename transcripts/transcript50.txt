@@ -1,0 +1,1604 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read src/eval.m (363 lines)
+  ⎿  Referenced file src/operators.m
+  ⎿  Read src/values.m (223 lines)
+  ⎿  Read lib/boundness.froth (121 lines)
+  ⎿  Read FROTH_BYTECODE.md (143 lines)
+
+> Let's refactor `values_equal` so that it doesn't return a bool, it just 
+succeeds or fails based on equality. 
+
+● I'll refactor values_equal to use Mercury's semidet pattern instead of returning a bool.
+
+● Read(src/values.m)
+  ⎿  Read 223 lines
+
+● Let me check how values_equal is used in operators.m:
+
+● Search(pattern: "values_equal", path: "src", output_mode: "content")
+  ⎿  Found 16 lines (ctrl+o to expand)
+
+● Let me see the call site in operators.m:
+
+● Read(src/operators.m)
+  ⎿  Read 30 lines
+
+● I see. Currently values_equal returns a bool, and the call site in operators.m distinguishes between:
+  1. Type mismatch (predicate fails) → throws type_error
+  2. Same type, equal → pushes 0
+  3. Same type, not equal → pushes 1
+
+  With the simpler succeed/fail approach, we'll lose the type error distinction. The refactored version will just:
+  - Succeed if values are equal
+  - Fail if values are not equal (for any reason)
+
+  Let me refactor values.m:
+
+● Update(src/values.m)
+  ⎿  Added 3 lines, removed 5 lines                                      
+       6  :- module values.
+       7  :- interface.
+       8  
+       9 -:- import_module bool.                                         
+      10 -                                                               
+       9  :- import_module types.
+      10  
+      11  %--------------------------------------------------------------
+          ---------%
+      12  
+      15 -    % values_equal(V1, V2, Equal):                             
+      13 +    % values_equal(V1, V2):                                    
+      14      % Test structural equality of two values.
+      17 -    % Fails if values are of incompatible types.               
+      15 +    % Succeeds if equal, fails if not equal.                   
+      16      %
+      19 -:- pred values_equal(value::in, value::in, bool::out) is semide
+         -t.                                                             
+      17 +:- pred values_equal(value::in, value::in) is semidet.         
+      18  
+      19      % value_to_string(ST, Value) = String:
+      20      % Convert a value to its display string representation (for
+           print).
+
+● Update(src/values.m)
+  ⎿  Added 34 lines, removed 60 lines                                    
+       47  % Value equality
+       48  %-------------------------------------------------------------
+           ----------%
+       49  
+       50 -values_equal(intval(I1), intval(I2), Equal) :-                
+       51 -    ( if I1 = I2 then Equal = yes else Equal = no ).          
+       52 -values_equal(stringval(Id1), stringval(Id2), Equal) :-        
+       53 -    ( if Id1 = Id2 then Equal = yes else Equal = no ).        
+       54 -values_equal(arrayval(A1), arrayval(A2), Equal) :-            
+       55 -    arrays_equal(A1, A2, Equal).                              
+       56 -values_equal(mapval(M1), mapval(M2), Equal) :-                
+       57 -    maps_equal(M1, M2, Equal).                                
+       58 -values_equal(termval(T1), termval(T2), Equal) :-              
+       59 -    ( if T1 = T2 then Equal = yes else Equal = no ).          
+       60 -values_equal(nilval, nilval, yes).                            
+       61 -values_equal(consval(H1, T1), consval(H2, T2), Equal) :-      
+       62 -    values_equal(H1, H2, HeadEq),                             
+       63 -    ( HeadEq = no, Equal = no                                 
+       64 -    ; HeadEq = yes, values_equal(T1, T2, Equal)               
+       65 -    ).                                                        
+       66 -values_equal(closureval(Env1, Body1), closureval(Env2, Body2),
+          - Equal) :-                                                    
+       67 -    ( if Body1 = Body2 then                                   
+       68 -        maps_equal(Env1, Env2, Equal)                         
+       69 -    else                                                      
+       70 -        Equal = no                                            
+       71 -    ).                                                        
+       72 -values_equal(bytecodeval(Ctx1, Addr1), bytecodeval(Ctx2, Addr2
+          -), Equal) :-                                                  
+       73 -    ( if Addr1 = Addr2 then                                   
+       74 -        arrays_equal(Ctx1, Ctx2, Equal)                       
+       75 -    else                                                      
+       76 -        Equal = no                                            
+       77 -    ).                                                        
+       50 +values_equal(intval(I), intval(I)).                           
+       51 +values_equal(stringval(Id), stringval(Id)).                   
+       52 +values_equal(arrayval(A1), arrayval(A2)) :-                   
+       53 +    arrays_equal(A1, A2).                                     
+       54 +values_equal(mapval(M1), mapval(M2)) :-                       
+       55 +    maps_equal(M1, M2).                                       
+       56 +values_equal(termval(T), termval(T)).                         
+       57 +values_equal(nilval, nilval).                                 
+       58 +values_equal(consval(H1, T1), consval(H2, T2)) :-             
+       59 +    values_equal(H1, H2),                                     
+       60 +    values_equal(T1, T2).                                     
+       61 +values_equal(closureval(Env1, Body), closureval(Env2, Body)) :
+          +-                                                             
+       62 +    maps_equal(Env1, Env2).                                   
+       63 +values_equal(bytecodeval(Ctx1, Addr), bytecodeval(Ctx2, Addr))
+          + :-                                                           
+       64 +    arrays_equal(Ctx1, Ctx2).                                 
+       65  
+       79 -:- pred arrays_equal(array(value)::in, array(value)::in, bool:
+          -:out) is semidet.                                             
+       66 +:- pred arrays_equal(array(value)::in, array(value)::in) is se
+          +midet.                                                        
+       67  
+       81 -arrays_equal(A1, A2, Equal) :-                                
+       82 -    Size1 = array.size(A1),                                   
+       83 -    Size2 = array.size(A2),                                   
+       84 -    ( if Size1 \= Size2 then                                  
+       85 -        Equal = no                                            
+       86 -    else                                                      
+       87 -        arrays_equal_loop(A1, A2, 0, Size1, Equal)            
+       88 -    ).                                                        
+       68 +arrays_equal(A1, A2) :-                                       
+       69 +    array.size(A1) = array.size(A2),                          
+       70 +    arrays_equal_loop(A1, A2, 0, array.size(A1)).             
+       71  
+       90 -:- pred arrays_equal_loop(array(value)::in, array(value)::in, 
+          -int::in, int::in,                                             
+       91 -    bool::out) is semidet.                                    
+       72 +:- pred arrays_equal_loop(array(value)::in, array(value)::in, 
+       73 +    int::in, int::in) is semidet.                             
+       74  
+       93 -arrays_equal_loop(A1, A2, I, Size, Equal) :-                  
+       75 +arrays_equal_loop(A1, A2, I, Size) :-                         
+       76      ( if I >= Size then
+       95 -        Equal = yes                                           
+       77 +        true                                                  
+       78      else
+       79          array.lookup(A1, I, V1),
+       80          array.lookup(A2, I, V2),
+       99 -        values_equal(V1, V2, ElemEqual),                      
+      100 -        ( ElemEqual = no, Equal = no                          
+      101 -        ; ElemEqual = yes, arrays_equal_loop(A1, A2, I + 1, Si
+          -ze, Equal)                                                    
+      102 -        )                                                     
+       81 +        values_equal(V1, V2),                                 
+       82 +        arrays_equal_loop(A1, A2, I + 1, Size)                
+       83      ).
+       84  
+      105 -:- pred maps_equal(map(string_id, value)::in, map(string_id, v
+          -alue)::in,                                                    
+      106 -    bool::out) is semidet.                                    
+       85 +:- pred maps_equal(map(string_id, value)::in, map(string_id, v
+          +alue)::in)                                                    
+       86 +    is semidet.                                               
+       87  
+      108 -maps_equal(M1, M2, Equal) :-                                  
+       88 +maps_equal(M1, M2) :-                                         
+       89      map.to_assoc_list(M1, AL1),
+       90      map.to_assoc_list(M2, AL2),
+      111 -    assoc_lists_equal(AL1, AL2, Equal).                       
+       91 +    assoc_lists_equal(AL1, AL2).                              
+       92  
+       93  :- pred assoc_lists_equal(assoc_list(string_id, value)::in,
+      114 -    assoc_list(string_id, value)::in, bool::out) is semidet.  
+       94 +    assoc_list(string_id, value)::in) is semidet.             
+       95  
+      116 -assoc_lists_equal([], [], yes).                               
+      117 -assoc_lists_equal([K1 - V1 | Rest1], [K2 - V2 | Rest2], Equal)
+          - :-                                                           
+      118 -    ( if K1 = K2 then                                         
+      119 -        values_equal(V1, V2, ValEqual),                       
+      120 -        ( ValEqual = no, Equal = no                           
+      121 -        ; ValEqual = yes, assoc_lists_equal(Rest1, Rest2, Equa
+          -l)                                                            
+      122 -        )                                                     
+      123 -    else                                                      
+      124 -        Equal = no                                            
+      125 -    ).                                                        
+       96 +assoc_lists_equal([], []).                                    
+       97 +assoc_lists_equal([K - V1 | Rest1], [K - V2 | Rest2]) :-      
+       98 +    values_equal(V1, V2),                                     
+       99 +    assoc_lists_equal(Rest1, Rest2).                          
+      100  
+      101  %-------------------------------------------------------------
+           ----------%
+      102  % value_to_string: convert a value to its display representati
+           on
+
+● Now let me update operators.m to use the simplified predicate:
+
+● Update(src/operators.m)
+  ⎿  Added 3 lines, removed 5 lines                                      
+      515  operator_eq(!Array, !Ptr) :-
+      516      datastack.pop("=", V1, !Array, !Ptr),
+      517      datastack.pop("=", V2, !Array, !Ptr),
+      518 -    ( if values_equal(V1, V2, Equal) then                     
+      519 -        ( Equal = yes, datastack.push(intval(0), !Array, !Ptr)
+      520 -        ; Equal = no, datastack.push(intval(1), !Array, !Ptr) 
+      521 -        )                                                     
+      518 +    ( if values_equal(V1, V2) then                            
+      519 +        datastack.push(intval(0), !Array, !Ptr)               
+      520      else
+      523 -        throw(type_error("comparable values", V1))            
+      521 +        datastack.push(intval(1), !Array, !Ptr)               
+      522      ).
+      523  
+      524  %-------------------------------------------------------------
+           ----------%
+
+● Let me check if bool is still used in operators.m:
+
+● Search(pattern: "bool", path: "src/operators.m", output_mode: "content")
+  ⎿  Found 2 lines (ctrl+o to expand)
+
+● Search(pattern: "\byes\b|\bno\b|bool\.", path: "src/operators.m", output_mode:
+         "content")
+  ⎿  Found 2 lines (ctrl+o to expand)
+
+● The bool import is no longer needed. Let me remove it:
+
+● Read(src/operators.m)
+  ⎿  Read 10 lines
+
+● Update(src/operators.m)
+  ⎿  Removed 1 line                                                      
+      136  :- implementation.
+      137  
+      138  :- import_module assoc_list.
+      139 -:- import_module bool.                                        
+      139  :- import_module datastack.
+      140  :- import_module exception.
+      141  :- import_module int.
+
+● Now let me build and run the tests:
+
+● Bash(make 2>&1 | head -50)
+  ⎿  cd src && mmc --make froth         
+     Making Mercury/int3s/operators.int3
+     Making Mercury/int3s/values.int3
+     … +14 lines (ctrl+o to expand)
+
+● There's a type ambiguity issue. Let me fix it:
+
+● Update(src/values.m)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      66  :- pred arrays_equal(array(value)::in, array(value)::in) is sem
+          idet.
+      67  
+      68  arrays_equal(A1, A2) :-
+      69 -    array.size(A1) = array.size(A2),                           
+      70 -    arrays_equal_loop(A1, A2, 0, array.size(A1)).              
+      69 +    Size = array.size(A1),                                     
+      70 +    Size = array.size(A2),                                     
+      71 +    arrays_equal_loop(A1, A2, 0, Size).                        
+      72  
+      73  :- pred arrays_equal_loop(array(value)::in, array(value)::in,
+      74      int::in, int::in) is semidet.
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth      
+     Making Mercury/int3s/values.int3
+     Making Mercury/ints/values.int
+     … +6 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | tail -20)
+  ⎿  PASS: shadow                  
+     PASS: slots
+     PASS: stack
+     … +16 lines (ctrl+o to expand)
+
+● One test failed as expected - eq_type_error. The old behavior threw a type error on comparing different types, but now it just returns "not equal". Let me check what this test expects:
+
+● Bash(cat tests/eq_type_error.froth tests/eq_type_error.expected)
+  ⎿  ; Test that comparing different types throws an error            
+     1 "one" =
+     Runtime error: type error: expected comparable values, got string
+
+● The test expects a type error when comparing different types, but with the new behavior it just returns 1 (not equal). I'll update the test to reflect the new semantics:
+
+● Write(tests/eq_type_error.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      1 -; Test that comparing different types throws an error           
+      2 -1 "one" =                                                       
+      1 +; Test that comparing different types returns "not equal" (1)   
+      2 +1 "one" = println!                                              
+
+● Write(tests/eq_type_error.expected)
+  ⎿  Added 1 line, removed 1 line                                        
+      1 -Runtime error: type error: expected comparable values, got strin
+        -g                                                               
+      1 +1                                                               
+
+● Bash(./run_tests.sh 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● All 62 tests pass. Here's a summary of the refactoring:
+
+  Changes made:
+
+  1. values.m: Simplified values_equal from pred(value, value, bool) is semidet to pred(value, value) is semidet
+    - Predicate now succeeds if values are equal, fails if not
+    - Much cleaner implementation using Mercury's pattern matching (e.g., values_equal(intval(I), intval(I)).)
+    - Removed bool import
+  2. operators.m: Updated operator_eq to use simplified predicate
+    - Removed type error throwing on type mismatch (now just returns "not equal")
+    - Removed unused bool import
+  3. tests/eq_type_error: Updated test to reflect new behavior
+    - Comparing different types now returns 1 (not equal) instead of throwing an error
+
+  The new code is more idiomatic Mercury and simpler overall.
+
+> We need to make sure that recursive equality tests use `values_equal` 
+rather than builtin equality, which is not quite the same. I think we should
+ add `terms_equal` which recurses into the terms and calls `values_equal` 
+for value terms. What do you think? 
+
+● You're right. Currently values_equal(termval(T), termval(T)) uses Mercury's built-in unification, which won't correctly handle value(V) terms embedded within. The same issue exists for closure bodies.
+
+  We should add:
+  - term_equal(term, term) - compares two terms, recursing into nested terms and using values_equal for value(V) terms
+  - terms_equal(list(term), list(term)) - compares term lists element-wise
+
+  Then update:
+  - values_equal(termval(T1), termval(T2)) to use term_equal
+  - values_equal(closureval(Env1, Body1), closureval(Env2, Body2)) to use terms_equal for the bodies
+
+  This ensures consistent equality semantics throughout. Let me implement it:
+
+● Read(src/types.m)
+  ⎿  Read 80 lines
+
+● Read(src/types.m)
+  ⎿  Read 50 lines
+
+● Read(src/types.m)
+  ⎿  Read 20 lines
+
+● Now I'll add term_equal and terms_equal predicates and update values_equal to use them:
+
+● Update(src/values.m)
+  ⎿  Added 11 lines                                                      
+      16      %
+      17  :- pred values_equal(value::in, value::in) is semidet.
+      18  
+      19 +    % term_equal(T1, T2):                                      
+      20 +    % Test structural equality of two terms.                   
+      21 +    % Uses values_equal for value terms.                       
+      22 +    %                                                          
+      23 +:- pred term_equal(term::in, term::in) is semidet.             
+      24 +                                                               
+      25 +    % terms_equal(Ts1, Ts2):                                   
+      26 +    % Test structural equality of two term lists.              
+      27 +    %                                                          
+      28 +:- pred terms_equal(list(term)::in, list(term)::in) is semidet.
+      29 +                                                               
+      30      % value_to_string(ST, Value) = String:
+      31      % Convert a value to its display string representation (for
+           print).
+      32      %
+
+● Now update the implementation to use term_equal and terms_equal:
+
+● Update(src/values.m)
+  ⎿  Added 25 lines, removed 2 lines                                     
+       64      arrays_equal(A1, A2).
+       65  values_equal(mapval(M1), mapval(M2)) :-
+       66      maps_equal(M1, M2).
+       67 -values_equal(termval(T), termval(T)).                         
+       67 +values_equal(termval(T1), termval(T2)) :-                     
+       68 +    term_equal(T1, T2).                                       
+       69  values_equal(nilval, nilval).
+       70  values_equal(consval(H1, T1), consval(H2, T2)) :-
+       71      values_equal(H1, H2),
+       72      values_equal(T1, T2).
+       72 -values_equal(closureval(Env1, Body), closureval(Env2, Body)) :
+          --                                                             
+       73 +values_equal(closureval(Env1, Body1), closureval(Env2, Body2))
+          + :-                                                           
+       74 +    terms_equal(Body1, Body2),                                
+       75      maps_equal(Env1, Env2).
+       76  values_equal(bytecodeval(Ctx1, Addr), bytecodeval(Ctx2, Addr))
+            :-
+       77      arrays_equal(Ctx1, Ctx2).
+       78  
+       79 +%-------------------------------------------------------------
+          +----------%                                                   
+       80 +% Term equality                                               
+       81 +%-------------------------------------------------------------
+          +----------%                                                   
+       82 +                                                              
+       83 +term_equal(identifier(Id), identifier(Id)).                   
+       84 +term_equal(binder(Id), binder(Id)).                           
+       85 +term_equal(function(Ts1), function(Ts2)) :-                   
+       86 +    terms_equal(Ts1, Ts2).                                    
+       87 +term_equal(generator(Ts1), generator(Ts2)) :-                 
+       88 +    terms_equal(Ts1, Ts2).                                    
+       89 +term_equal(quoted(T1), quoted(T2)) :-                         
+       90 +    term_equal(T1, T2).                                       
+       91 +term_equal(value(V1), value(V2)) :-                           
+       92 +    values_equal(V1, V2).                                     
+       93 +term_equal(apply_term, apply_term).                           
+       94 +                                                              
+       95 +terms_equal([], []).                                          
+       96 +terms_equal([T1 | Ts1], [T2 | Ts2]) :-                        
+       97 +    term_equal(T1, T2),                                       
+       98 +    terms_equal(Ts1, Ts2).                                    
+       99 +                                                              
+      100  :- pred arrays_equal(array(value)::in, array(value)::in) is se
+           midet.
+      101  
+      102  arrays_equal(A1, A2) :-
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/values.int3
+     Making Mercury/ints/values.int
+     values.m:028: In declaration of predicate `terms_equal'/2:
+     values.m:028:   error: the type `list'/1 is undefined.
+     values.m:028:   (The module `list' has not been imported in the interface.)
+     `Mercury/ints/values.int' and `Mercury/int2s/values.int2' not written.
+     ** Error making `Mercury/ints/values.int'.
+     make: *** [Makefile:14: froth] Error 1
+
+● Need to import list in the interface section:
+
+● Update(src/values.m)
+  ⎿  Added 2 lines                                                       
+       6  :- module values.
+       7  :- interface.
+       8  
+       9 +:- import_module list.                                         
+      10 +                                                               
+      11  :- import_module types.
+      12  
+      13  %--------------------------------------------------------------
+          ---------%
+
+● Read(src/values.m)
+  ⎿  Read 15 lines
+
+● Bash(make 2>&1)
+  ⎿ cd src && mmc --make froth                                             
+    Making Mercury/int3s/values.int3
+    values.m:054: Warning: this `:- import_module' declaration for module `
+    … +26 lines (ctrl+o to expand)
+
+
+● Let me remove the redundant import:
+
+● Update(src/values.m)
+  ⎿  Removed 1 line                                                      
+      51  :- import_module array.
+      52  :- import_module assoc_list.
+      53  :- import_module int.
+      54 -:- import_module list.                                         
+      54  :- import_module map.
+      55  :- import_module pair.
+      56  :- import_module string.
+
+● Bash(make 2>&1 && ./run_tests.sh 2>&1 | tail -5)
+  ⎿  cd src && mmc --make froth      
+     Making Mercury/int3s/values.int3
+     Making Mercury/ints/values.int
+     … +9 lines (ctrl+o to expand)
+
+● All 62 tests pass. Here's a summary of the changes:
+
+  Added to values.m:
+
+  1. term_equal(term, term) is semidet - compares terms recursively:
+    - identifier(Id), binder(Id), apply_term use Mercury's unification (correct since they're simple)
+    - function(Ts), generator(Ts) use terms_equal on the term lists
+    - quoted(T) uses term_equal on the inner term
+    - value(V) uses values_equal on the embedded value
+  2. terms_equal(list(term), list(term)) is semidet - compares term lists element-wise
+
+  Updated in values.m:
+
+  - values_equal(termval(T1), termval(T2)) now uses term_equal(T1, T2) instead of Mercury's =
+  - values_equal(closureval(Env1, Body1), closureval(Env2, Body2)) now uses terms_equal(Body1, Body2) for the bodies
+
+  This ensures that embedded values within terms (e.g., '{ 42 } containing a value term) are compared using values_equal rather than Mercury's built-in equality, giving consistent semantics throughout.
+
+> The term equality implementation should go after assoc_lists_equal 
+
+● Read(src/values.m)
+  ⎿  Read 60 lines
+
+● Read(src/values.m)
+  ⎿  Read 40 lines
+
+● I'll move the term equality section to after assoc_lists_equal:
+
+● Update(src/values.m)
+  ⎿  Removed 21 lines                                                    
+       77  values_equal(bytecodeval(Ctx1, Addr), bytecodeval(Ctx2, Addr))
+            :-
+       78      arrays_equal(Ctx1, Ctx2).
+       79  
+       80 -%-------------------------------------------------------------
+          -----------%                                                   
+       81 -% Term equality                                               
+       82 -%-------------------------------------------------------------
+          -----------%                                                   
+       83 -                                                              
+       84 -term_equal(identifier(Id), identifier(Id)).                   
+       85 -term_equal(binder(Id), binder(Id)).                           
+       86 -term_equal(function(Ts1), function(Ts2)) :-                   
+       87 -    terms_equal(Ts1, Ts2).                                    
+       88 -term_equal(generator(Ts1), generator(Ts2)) :-                 
+       89 -    terms_equal(Ts1, Ts2).                                    
+       90 -term_equal(quoted(T1), quoted(T2)) :-                         
+       91 -    term_equal(T1, T2).                                       
+       92 -term_equal(value(V1), value(V2)) :-                           
+       93 -    values_equal(V1, V2).                                     
+       94 -term_equal(apply_term, apply_term).                           
+       95 -                                                              
+       96 -terms_equal([], []).                                          
+       97 -terms_equal([T1 | Ts1], [T2 | Ts2]) :-                        
+       98 -    term_equal(T1, T2),                                       
+       99 -    terms_equal(Ts1, Ts2).                                    
+      100 -                                                              
+       80  :- pred arrays_equal(array(value)::in, array(value)::in) is se
+           midet.
+       81  
+       82  arrays_equal(A1, A2) :-
+
+● Update(src/values.m)
+  ⎿  Added 21 lines                                                      
+      114      assoc_lists_equal(Rest1, Rest2).
+      115  
+      116  %-------------------------------------------------------------
+           ----------%
+      117 +% Term equality                                               
+      118 +%-------------------------------------------------------------
+          +----------%                                                   
+      119 +                                                              
+      120 +term_equal(identifier(Id), identifier(Id)).                   
+      121 +term_equal(binder(Id), binder(Id)).                           
+      122 +term_equal(function(Ts1), function(Ts2)) :-                   
+      123 +    terms_equal(Ts1, Ts2).                                    
+      124 +term_equal(generator(Ts1), generator(Ts2)) :-                 
+      125 +    terms_equal(Ts1, Ts2).                                    
+      126 +term_equal(quoted(T1), quoted(T2)) :-                         
+      127 +    term_equal(T1, T2).                                       
+      128 +term_equal(value(V1), value(V2)) :-                           
+      129 +    values_equal(V1, V2).                                     
+      130 +term_equal(apply_term, apply_term).                           
+      131 +                                                              
+      132 +terms_equal([], []).                                          
+      133 +terms_equal([T1 | Ts1], [T2 | Ts2]) :-                        
+      134 +    term_equal(T1, T2),                                       
+      135 +    terms_equal(Ts1, Ts2).                                    
+      136 +                                                              
+      137 +%-------------------------------------------------------------
+          +----------%                                                   
+      138  % value_to_string: convert a value to its display representati
+           on
+      139  %-------------------------------------------------------------
+           ----------%
+      140  
+
+● Bash(make 2>&1 && ./run_tests.sh 2>&1 | tail -3)
+  ⎿  cd src && mmc --make froth      
+     Making Mercury/int3s/values.int3
+     Making Mercury/ints/values.int
+     … +7 lines (ctrl+o to expand)
+
+● Done. The term equality section is now after assoc_lists_equal, giving a better organization where the helper predicates (arrays_equal, maps_equal, assoc_lists_equal) are grouped together, followed by the term equality predicates.
+
+> update README 
+
+● Read(README.md)
+  ⎿  Read 272 lines
+
+● I need to update several things:
+  1. value_format.m → values.m (merged)
+  2. FROTHLIB.md → FROTH_LIBRARY.md and FROTH_COMPILER.md (split)
+  3. Add FROTH_GUIDE.md to documentation
+  4. Add lib/ops.froth and lib/node.froth to lib listing
+
+● Update(README.md)
+  ⎿  Added 3 lines, removed 1 line                                       
+      22  │   ├── bench.froth       # Benchmarking (bench)
+      23  │   ├── eval.froth        # Meta-interpreter
+      24  │   ├── preflight.froth   # Pre-flight checks (env/import detec
+          tion)
+      25 +│   ├── node.froth        # Compiler node constructors         
+      26  │   ├── boundness.froth   # Boundness analysis for compiler
+      27  │   ├── liveness.froth    # Liveness analysis for compiler
+      28  │   ├── slots.froth       # Frame slot allocation for compiler
+      29  │   ├── optimize.froth    # Closure optimization (restrict-clos
+          ure-env)
+      29 -│   └── bytecode.froth    # Bytecode constants and utilities   
+      30 +│   ├── bytecode.froth    # Bytecode instruction table and util
+         +ities                                                          
+      31 +│   └── ops.froth         # Operator table for bytecode        
+      32  ├── src/                  # Mercury source
+      33  │   ├── froth.m           # Main entry point, REPL
+      34  │   ├── lexer.m           # Tokenizer
+
+● Update(README.md)
+  ⎿  Added 1 line, removed 1 line                                        
+      36  │   ├── eval.m            # Evaluator
+      37  │   ├── operators.m       # Operator implementations
+      38  │   ├── operator_table.m  # Operator metadata (arity, bytecode 
+          encoding)
+      39 -│   ├── value_format.m    # Value-to-string conversion         
+      39 +│   ├── values.m          # Value equality and formatting      
+      40  │   ├── vm.m              # Bytecode virtual machine
+      41  │   ├── datastack.m       # Stack implementation
+      42  │   ├── bytecode.m        # Bytecode storage
+
+● Update(README.md)
+  ⎿  Added 4 lines, removed 1 line                                       
+      47  │   ├── *.expected        # Expected outputs
+      48  │   └── lib/              # Test library files
+      49  ├── FROTH.md              # Language reference
+      50 -├── FROTHLIB.md           # Standard library reference         
+      50 +├── FROTH_LIBRARY.md      # Standard library reference         
+      51 +├── FROTH_COMPILER.md     # Compiler infrastructure reference  
+      52 +├── FROTH_BYTECODE.md     # Bytecode compiler design           
+      53 +├── FROTH_GUIDE.md        # Coding guide and patterns          
+      54  ├── Makefile              # Build: make, make test, make clean
+      55  └── run_tests.sh          # Test runner script
+      56  ```
+
+● Update(README.md)
+  ⎿  Added 3 lines, removed 1 line                                       
+      272  ## Documentation
+      273  
+      274  - [FROTH.md](FROTH.md) - Language reference
+      275 -- [FROTHLIB.md](FROTHLIB.md) - Standard library reference     
+      275 +- [FROTH_LIBRARY.md](FROTH_LIBRARY.md) - Standard library refe
+          +rence                                                         
+      276 +- [FROTH_COMPILER.md](FROTH_COMPILER.md) - Compiler infrastruc
+          +ture reference                                                
+      277  - [FROTH_BYTECODE.md](FROTH_BYTECODE.md) - Bytecode compiler d
+           esign
+      278 +- [FROTH_GUIDE.md](FROTH_GUIDE.md) - Coding guide and patterns
+
+● Bash(./run_tests.sh 2>&1 | tail -3)
+  ⎿  PASS: write                 
+
+     Results: 62 passed, 0 failed
+
+● Done. Updated README with:
+  - Added lib/node.froth and lib/ops.froth to library listing
+  - Changed value_format.m to values.m in source listing
+  - Updated FROTHLIB.md → FROTH_LIBRARY.md
+  - Added FROTH_COMPILER.md, FROTH_BYTECODE.md, FROTH_GUIDE.md to file tree
+  - Updated documentation links section
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                    
+     Your branch is ahead of 'origin/master' by 1 commit.
+       (use "git push" to publish your local commits)
+     … +16 lines (ctrl+o to expand)
+
+● Bash(git diff --staged)
+  ⎿  diff --git a/README.md b/README.md
+     index 76e1b12..6c6b5ab 100644
+     --- a/README.md
+     … +398 lines (ctrl+o to expand)
+
+● Bash(git log --oneline -5)
+  ⎿  52ccf67 Update documentation for clarity and consistency
+     c0e19ee Refactor bytecode constants to use table maps
+     2ef05c1 Add ops.froth with op-table constant
+     … +2 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Add values.m module with equality predicates…)
+  ⎿  [master 0ba64ac] Add values.m module with equality predicates
+      6 files changed, 126 insertions(+), 99 deletions(-)
+      rename src/{value_format.m => values.m} (64%)
+
+● Bash(git status)
+  ⎿  On branch master                                     
+     Your branch is ahead of 'origin/master' by 2 commits.
+       (use "git push" to publish your local commits)
+     … +10 lines (ctrl+o to expand)
+
+● Done. Committed as 0ba64ac:
+  - Renamed value_format.m → values.m with expanded scope
+  - Added values_equal/2, term_equal/2, terms_equal/2 predicates
+  - Updated operators.m to use the new module
+  - Updated README and test for new semantics
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 136k/200k tokens (68%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛶ ⛶ ⛶ ⛶   ⛁ Memory files: 13.1k tokens (6.5%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Messages: 60.1k tokens (30.1%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 64k (32.0%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 117 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.6k tokens
+     └ FROTH_LIBRARY.md: 4.3k tokens
+     └ FROTH_COMPILER.md: 3.8k tokens
+     └ FROTH_BYTECODE.md: 1.4k tokens
+     └ FROTH_GUIDE.md: 816 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> Let's think about how we should add a constant pool. We want two new 
+operators, `ref` to store a constant and return an integer address, and 
+`deref` to retrieve the constant from the pool. I think we should implement 
+these operators by threading around the following arguments. What do you 
+think?
+- an array of constant values, expanded as necessary
+- a counter for the number of constants
+- a map or hash table of Froth values to `const_id` values, allocated as 
+necessary 
+
+● That's a reasonable design. A few thoughts:
+
+  Do we need the counter?
+  If we use a dynamically-sized array (like the bytecode store), the counter is just array.size. Unless you want to pre-allocate for performance, the array size serves as the "next id".
+
+  Map key challenge:
+  For the deduplication map, we'd need map(value, int) in Mercury, which requires a total ordering on value. We have values_equal but not values_compare. We'd need to implement that - straightforward but tedious (compare by constructor tag first, then recursively compare contents).
+
+  Alternative: skip deduplication initially?
+  We could start simpler:
+  - ref always allocates a new slot, returns the id
+  - deref retrieves by id
+  - Add the deduplication map later if needed
+
+  This avoids the values_compare work and keeps the threading simpler (just array + counter, or just array if size = counter).
+
+  Threading location:
+  We already thread !BC (bytecode array) through eval. A constant pool would be similar - another array(value) threaded alongside. The question is whether ref/deref are operators (like peek/poke) requiring Mercury implementation, or could be built in Froth using lower-level primitives.
+
+  My suggestion: Start with the simple version (array only, no deduplication), similar to how peek/poke work for the bytecode store. Add a const_pool array threaded through, with ref pushing a value and returning its index, and deref looking up by index. We can add deduplication later if profiling shows it matters.
+
+  What do you think?
+
+> Mercury arrays only have a capacity, not a size, so we need to track the 
+number of used slots separately. Deduping is important because closure 
+environments use a lot of sharing, so compilation will need to avoid the 
+exponential blowup. There are two options for deduping in Mercury. What 
+recommendations would you make?
+1. Use map.m
+ - requires that we define a total ordering
+ - requires that we use "user-defined comparison" in Mercury, which can be 
+tricky
+2. Use hash_table.m
+ - requires a hash function (not hard)
+ - requires unique threading of a separate argument 
+
+● I'd recommend hash_table.m for these reasons:
+
+  1. Avoids user-defined comparison on value: User-defined comparison in Mercury requires declaring it on the type definition itself (where comparison is ...), which affects all uses of the type throughout the codebase. This is invasive and could have unintended consequences.
+  2. Hash function is simpler: A hash function just needs to produce a consistent int for equal values - it doesn't need to define a total ordering. For recursive structures, you can combine hashes (XOR, multiply-add) without worrying about ordering edge cases.
+  3. Unique threading is established: We already thread unique arrays (!Array, !BC) through the evaluator. Adding another unique argument follows the same pattern. The const_pool array itself needs unique threading anyway.
+  4. Better complexity: O(1) amortized vs O(log n) for lookup/insert matters when compilation processes many constants with shared closure environments.
+
+  Suggested structure:
+
+  :- type const_pool
+      --->    const_pool(
+                  cp_values :: array(value),      % indexed by const_id
+                  cp_count  :: int,               % number of used slots
+                  cp_lookup :: hash_table(value, int)  % value -> const_id
+              ).
+
+  Thread as const_pool::di, const_pool::uo through the operators that need it (similar to how !BC is handled for peek/poke).
+
+  For the hash function, something like:
+  - intval(I) → hash of I
+  - stringval(Id) → hash of Id
+  - arrayval(A) → combine hashes of elements
+  - closureval(Env, Body) → combine hash of body terms (env sharing makes hashing env risky)
+  - etc.
+
+  Does this approach sound right?
+
+> Mercury values lose uniqueness when put in a data structure, so the array 
+and hash table will need to be threaded through at the top level. The 
+environment is used frequently so it is also best at the top level. Other 
+non-unique arguments that need to be threaded through can be put in a single
+ structure for simplicity. What are the arguments we currently thread 
+through the virtual machine? 
+
+● Search(pattern: "^:- pred run\(", path: "src/vm.m", output_mode: "content")
+  ⎿  Found 6 lines (ctrl+o to expand)
+
+● Read(src/vm.m)
+  ⎿  Read 25 lines
+
+● Currently the VM threads:
+
+  | Argument | Mode                                           | Description                                 |
+  |----------|------------------------------------------------|---------------------------------------------|
+  | BC       | array(int)::in                                 | Bytecode array (read-only)                  |
+  | IP       | int::in                                        | Instruction pointer (updated via recursion) |
+  | RP       | int::in, int::out                              | Return pointer                              |
+  | Context  | array(value)::in, array(value)::out            | Closure context array                       |
+  | OpTable  | operator_table::in                             | Operator table (read-only)                  |
+  | ST       | string_table::in                               | String table (read-only)                    |
+  | Env      | env::in                                        | Environment (read-only)                     |
+  | Stack    | array(value)::array_di, array(value)::array_uo | Data stack (unique)                         |
+  | SP       | int::in, int::out                              | Stack pointer                               |
+  | FP       | int::in                                        | Frame pointer (read-only)                   |
+  | GenStack | list(int)::in                                  | Generator stack pointers (read-only)        |
+  | IO       | io::di, io::uo                                 | I/O state (unique)                          |
+
+  Unique arguments: Stack, IO
+
+  Non-unique threaded: RP, Context, SP
+
+  Read-only: BC, IP, OpTable, ST, Env, FP, GenStack
+
+  For the constant pool, we'd add:
+  - ConstArray - array(value)::array_di, array(value)::array_uo (unique)
+  - ConstTable - hash_table(value, int)::di, hash_table(value, int)::uo (unique)
+  - ConstCount - could go in a non-unique structure with other counters
+
+  The read-only args (OpTable, ST, FP, GenStack) could potentially be bundled into a single vm_context structure to reduce parameter count.
+
+> Don't implement code yet. Let's first think about the arguments passed in 
+or threaded through the execution loop in vm. Let me check my understanding:
+1. Machine registers. We want these at the top-level since they change 
+frequently thus we don't want any excess heap allocations. Aside from SP, 
+the caller doesn't need the final values so these can just be passed as 
+inputs.
+ - IP - instruction pointer (int)
+ - RP - return pointer (int)
+ - FP - frame pointer (int)
+ - SP - stack pointer (int)
+ - Context - current execution context (array(value))
+ - GenStack - generator stack (list(int))
+2. Non-unique storage, must be threaded through but can be packaged 
+together.
+ - BP - next available bytecode address (int)
+ - PP - next available pool address (int)
+ - ST - string table
+3. Memory. These are unique so they must be at the top level, and the final 
+value is required so they must be threaded through.
+ - Bytecode - compiled bytecode array (array(int))
+ - Stack - data/frame stack (array(value))
+ - Pool - stored constants (array(value))
+ - HashTable - hash table from value to pool index
+4. Execution context. This is constant data that only needs to be passed in.
+ - OpTable - VM operator table (operator_table)
+ - Env - full environment for use by `env` 
+
+● Your categorization looks sound. A few observations:
+
+  1. IO is missing - The VM needs io::di, io::uo for print, write, etc. This would go in Memory as another unique argument.
+  2. Context as input-only - I see the logic. The caller passes in the initial context, but the VM manages context internally via save/restore to the stack. The final context value isn't needed by the caller (currently ignored with _ in eval.m). This is a good simplification.
+  3. Bytecode becoming unique - Currently read-only, but making it unique allows poke during VM execution. The BP counter tracks the next available slot.
+  4. ST threading - Currently read-only in VM. If you want to support string interning during execution (e.g., dynamic string operations), it needs threading. Otherwise it could stay in the execution context.
+
+  So the refined list:
+
+  Memory (unique, threaded):
+  - Bytecode, Stack, Pool, HashTable, IO
+
+  Non-unique storage (threaded, can bundle):
+  - BP, PP, ST (if dynamic interning needed)
+
+  Machine registers (input, except SP which is threaded):
+  - IP, RP, FP, Context, GenStack
+  - SP (in/out - caller needs final value)
+
+  Execution context (read-only input):
+  - OpTable, Env
+
+  Does this match your thinking?
+
+> Sorry, I was incorrect and we don't need BP. With `peek` and `poke` it is 
+up to the user to track the next available address. Other than that I agree 
+with your list. Another change that we should make is to omit the `execute` 
+predicate and just do the opcode handling in `run`, since all run currently 
+does is look up the opcode. Are you ready to proceed with this refactoring? 
+
+● Yes, I'm ready. Let me confirm the final structure:
+
+  Memory (unique, threaded):
+  - Bytecode array(int)::array_di, array(int)::array_uo
+  - Stack array(value)::array_di, array(value)::array_uo
+  - Pool array(value)::array_di, array(value)::array_uo (NEW)
+  - HashTable hash_table(value, int)::di, hash_table(value, int)::uo (NEW)
+  - IO io::di, io::uo
+
+  Non-unique storage (threaded, bundled into a record):
+  - PP (pool count) (NEW)
+  - ST (string table)
+
+  Machine registers (input only, except SP):
+  - IP, RP, FP, Context, GenStack (input)
+  - SP int::in, int::out
+
+  Execution context (read-only):
+  - OpTable, Env
+
+  Changes:
+  1. Inline execute into run
+  2. Reorganize arguments per above
+  3. Add Pool, HashTable, PP for constant pool
+  4. Bundle PP + ST into a vm_storage record (or similar name)
+  5. Add ref and deref opcodes
+
+  Should I also add the hash function for value in this refactoring, or do that as a separate step first?
+
+> For now just refactor run to have the right signature, and pass values 
+through directly for operators we haven't implemented. Don't implement the 
+new operators yet. In `eval_apply` we can just use initial values for the 
+new arguments, as we will deal with the term evaluator separately. 
+
+● Read(src/vm.m)
+  ⎿  Read 231 lines
+
+● Read(src/eval.m)
+  ⎿  Read 30 lines
+
+● Now I'll refactor vm.m with the new signature. Let me also check what we need for hash_table:
+
+● Write(src/vm.m)
+  ⎿  Added 94 lines, removed 64 lines                                    
+       7  :- interface.
+       8  
+       9  :- import_module array.
+      10 +:- import_module hash_table.                                   
+      11  :- import_module io.
+      12  :- import_module list.
+      13  :- import_module types.
+      14  
+      15  %--------------------------------------------------------------
+          ---------%
+      16  
+      16 -    % run(Bytecode, IP, !RP, !Context, OpTable, ST, Env, !Stack
+         -, !SP, FP, GenStack, !IO):                                     
+      17 +    % Non-unique storage bundled together for threading.       
+      18 +    %                                                          
+      19 +:- type vm_store                                               
+      20 +    --->    vm_store(                                          
+      21 +                vs_pool_count   :: int,         % PP: next avai
+         +lable pool slot                                                
+      22 +                vs_string_table :: string_table % ST: string in
+         +tern table                                                     
+      23 +            ).                                                 
+      24 +                                                               
+      25 +    % run(IP, RP, FP, Context, GenStack, !SP,                  
+      26 +    %     !Store, OpTable, Env,                                
+      27 +    %     !Bytecode, !Stack, !Pool, !HashTable, !IO):          
+      28 +    %                                                          
+      29      % Execute bytecode starting at IP until return.
+      18 -    % RP is the return pointer (-1 means return to eval_apply).
+      19 -    % RP is threaded through so saveReturnPtr/restoreReturnPtr 
+         -can modify it.                                                 
+      20 -    % Context is the closure's captured environment array.     
+      21 -    % Context is threaded through so call/restoreContextPtr can
+         - modify it.                                                    
+      22 -    % Env is passed for operators that need it (like env).     
+      23 -    % FP is the frame pointer (top of frame stack, grows downwa
+         -rd).                                                           
+      24 -    % GenStack is a list of saved stack pointers for generators
+         -.                                                              
+      30      %
+      31 +    % Machine registers (input only, except SP):               
+      32 +    %   IP - instruction pointer                               
+      33 +    %   RP - return pointer (-1 means return to caller)        
+      34 +    %   FP - frame pointer (top of frame, grows downward)      
+      35 +    %   Context - closure's captured environment array         
+      36 +    %   GenStack - saved stack pointers for generators         
+      37 +    %   SP - stack pointer (threaded, caller needs final value)
+      38 +    %                                                          
+      39 +    % Non-unique storage (threaded):                           
+      40 +    %   Store - bundled PP (pool count) and ST (string table)  
+      41 +    %                                                          
+      42 +    % Execution context (read-only):                           
+      43 +    %   OpTable - operator dispatch table                      
+      44 +    %   Env - environment for 'env' operator                   
+      45 +    %                                                          
+      46 +    % Memory (unique, threaded):                               
+      47 +    %   Bytecode - compiled bytecode array                     
+      48 +    %   Stack - data/frame stack                               
+      49 +    %   Pool - constant pool                                   
+      50 +    %   HashTable - value to pool index mapping                
+      51 +    %   IO - I/O state                                         
+      52 +    %                                                          
+      53  :- pred run(
+      27 -    array(int)::in,                                            
+      28 -    int::in,                                                   
+      54 +    int::in, int::in, int::in, array(value)::in, list(int)::in,
+      55      int::in, int::out,
+      30 -    array(value)::in, array(value)::out,                       
+      31 -    operator_table::in,                                        
+      32 -    string_table::in,                                          
+      33 -    env::in,                                                   
+      56 +    vm_store::in, vm_store::out,                               
+      57 +    operator_table::in, env::in,                               
+      58 +    array(int)::array_di, array(int)::array_uo,                
+      59      array(value)::array_di, array(value)::array_uo,
+      35 -    int::in, int::out,                                         
+      36 -    int::in,                                                   
+      37 -    list(int)::in,                                             
+      60 +    array(value)::array_di, array(value)::array_uo,            
+      61 +    hash_table(value, int)::di, hash_table(value, int)::uo,    
+      62      io::di, io::uo) is det.
+      63  
+      64  %--------------------------------------------------------------
+          ---------%
+     ...
+      120  % VM execution
+      121  %-------------------------------------------------------------
+           ----------%
+      122  
+       99 -run(BC, IP, !RP, !Context, OpTable, ST, Env, !Stack, !SP, FP, 
+          -GenStack, !IO) :-                                             
+      100 -    array.lookup(BC, IP, Opcode),                             
+      101 -    execute(Opcode, BC, IP, !RP, !Context, OpTable, ST, Env, !
+          -Stack, !SP, FP, GenStack, !IO).                               
+      102 -                                                              
+      103 -:- pred execute(int::in, array(int)::in, int::in, int::in, int
+          -::out,                                                        
+      104 -    array(value)::in, array(value)::out,                      
+      105 -    operator_table::in, string_table::in, env::in,            
+      106 -    array(value)::array_di, array(value)::array_uo,           
+      107 -    int::in, int::out, int::in, list(int)::in, io::di, io::uo)
+          - is det.                                                      
+      108 -                                                              
+      109 -execute(Opcode, BC, IP, !RP, !Context, OpTable, ST, Env, !Stac
+          -k, !SP, FP, GenStack, !IO) :-                                 
+      123 +run(IP, RP, FP, Context, GenStack, !SP, !Store, OpTable, Env, 
+      124 +        !Bytecode, !Stack, !Pool, !HashTable, !IO) :-         
+      125 +    array.lookup(!.Bytecode, IP, Opcode),                     
+      126      ( if Opcode = oc_pushInt then
+      127          % pushInt n: push integer n onto stack
+      112 -        array.lookup(BC, IP + 1, N),                          
+      128 +        array.lookup(!.Bytecode, IP + 1, N),                  
+      129          datastack.push(intval(N), !Stack, !SP),
+      114 -        run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !Stac
+          -k, !SP, FP, GenStack, !IO)                                    
+      130 +        run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, Op
+          +Table, Env,                                                   
+      131 +            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      132      else if Opcode = oc_op then
+      133          % op n: execute operator n
+      117 -        array.lookup(BC, IP + 1, OpNum),                      
+      134 +        array.lookup(!.Bytecode, IP + 1, OpNum),              
+      135          ( if operator_table.int_to_operator(OpNum, Op) then
+      119 -            operators.eval_operator(OpTable, ST, Op, Env, !Sta
+          -ck, !SP, !IO),                                                
+      120 -            run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !
+          -Stack, !SP, FP, GenStack, !IO)                                
+      136 +            operators.eval_operator(OpTable, !.Store ^ vs_stri
+          +ng_table, Op, Env,                                            
+      137 +                !Stack, !SP, !IO),                            
+      138 +            run(IP + 2, RP, FP, Context, GenStack, !SP, !Store
+          +, OpTable, Env,                                               
+      139 +                !Bytecode, !Stack, !Pool, !HashTable, !IO)    
+      140          else
+      141              throw(vm_error("invalid operator number"))
+      142          )
+      143      else if Opcode = oc_return then
+      125 -        % return: if RP is -1, stop execution (return to eval_
+          -apply)                                                        
+      126 -        % otherwise jump to return address (caller will restor
+          -e RP and Context)                                             
+      127 -        ( if !.RP = -1 then                                   
+      144 +        % return: if RP is -1, stop execution (return to calle
+          +r)                                                            
+      145 +        % otherwise jump to return address                    
+      146 +        ( if RP = -1 then                                     
+      147              true
+      148          else
+      130 -            run(BC, !.RP, !RP, !Context, OpTable, ST, Env, !St
+          -ack, !SP, FP, GenStack, !IO)                                  
+      149 +            run(RP, RP, FP, Context, GenStack, !SP, !Store, Op
+          +Table, Env,                                                   
+      150 +                !Bytecode, !Stack, !Pool, !HashTable, !IO)    
+      151          )
+      152      else if Opcode = oc_pushString then
+      153          % pushString n: push string with intern ID n
+      134 -        array.lookup(BC, IP + 1, StrId),                      
+      154 +        array.lookup(!.Bytecode, IP + 1, StrId),              
+      155          datastack.push(stringval(StrId), !Stack, !SP),
+      136 -        run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !Stac
+          -k, !SP, FP, GenStack, !IO)                                    
+      156 +        run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, Op
+          +Table, Env,                                                   
+      157 +            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      158      else if Opcode = oc_pushContext then
+      159          % pushContext n: push value from context slot n
+      139 -        array.lookup(BC, IP + 1, Slot),                       
+      140 -        array.lookup(!.Context, Slot, Val),                   
+      160 +        array.lookup(!.Bytecode, IP + 1, Slot),               
+      161 +        array.lookup(Context, Slot, Val),                     
+      162          datastack.push(Val, !Stack, !SP),
+      142 -        run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !Stac
+          -k, !SP, FP, GenStack, !IO)                                    
+      163 +        run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, Op
+          +Table, Env,                                                   
+      164 +            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      165      else if Opcode = oc_popUnused then
+      166          % popUnused: pop and discard top of stack
+      167          datastack.pop("popUnused", _, !Stack, !SP),
+      146 -        run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !Stac
+          -k, !SP, FP, GenStack, !IO)                                    
+      168 +        run(IP + 1, RP, FP, Context, GenStack, !SP, !Store, Op
+          +Table, Env,                                                   
+      169 +            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      170      else if Opcode = oc_pushLocal then
+      171          % pushLocal n: push value from frame slot n
+      149 -        array.lookup(BC, IP + 1, Slot),                       
+      172 +        array.lookup(!.Bytecode, IP + 1, Slot),               
+      173          array.lookup(!.Stack, FP + Slot, Val),
+      174          datastack.push(Val, !Stack, !SP),
+      152 -        run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !Stac
+          -k, !SP, FP, GenStack, !IO)                                    
+      175 +        run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, Op
+          +Table, Env,                                                   
+      176 +            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      177      else if Opcode = oc_popLocal then
+      178          % popLocal n: pop value into frame slot n
+      155 -        array.lookup(BC, IP + 1, Slot),                       
+      179 +        array.lookup(!.Bytecode, IP + 1, Slot),               
+      180          datastack.pop("popLocal", Val, !Stack, !SP),
+      181          array.set(FP + Slot, Val, !Stack),
+      158 -        run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !Stac
+          -k, !SP, FP, GenStack, !IO)                                    
+      182 +        run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, Op
+          +Table, Env,                                                   
+      183 +            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      184      else if Opcode = oc_enterFrame then
+      185          % enterFrame n: allocate n frame slots (FP -= n)
+      161 -        array.lookup(BC, IP + 1, N),                          
+      186 +        array.lookup(!.Bytecode, IP + 1, N),                  
+      187          NewFP = FP - N,
+      188          ( if NewFP < !.SP then
+      189              throw(vm_error("stack overflow: frame collision"))
+      190          else
+      166 -            run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !
+          -Stack, !SP, NewFP, GenStack, !IO)                             
+      191 +            run(IP + 2, RP, NewFP, Context, GenStack, !SP, !St
+          +ore, OpTable, Env,                                            
+      192 +                !Bytecode, !Stack, !Pool, !HashTable, !IO)    
+      193          )
+      194      else if Opcode = oc_leaveFrame then
+      195          % leaveFrame n: deallocate n frame slots (FP += n)
+      170 -        array.lookup(BC, IP + 1, N),                          
+      196 +        array.lookup(!.Bytecode, IP + 1, N),                  
+      197          NewFP = FP + N,
+      172 -        run(BC, IP + 2, !RP, !Context, OpTable, ST, Env, !Stac
+          -k, !SP, NewFP, GenStack, !IO)                                 
+      198 +        run(IP + 2, RP, NewFP, Context, GenStack, !SP, !Store,
+          + OpTable, Env,                                                
+      199 +            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      200      else if Opcode = oc_startArray then
+      201          % startArray: save current SP for later array extracti
+           on
+      175 -        run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !Stac
+          -k, !SP, FP, [!.SP | GenStack], !IO)                           
+      202 +        run(IP + 1, RP, FP, Context, [!.SP | GenStack], !SP, !
+          +Store, OpTable, Env,                                          
+      203 +            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      204      else if Opcode = oc_endArray then
+      205          % endArray: extract values since saved SP as array
+      206          (
+     ...
+      208              datastack.extract_range(!.Stack, SavedSP, !.SP, Re
+           sultArray),
+      209              !:SP = SavedSP,
+      210              datastack.push(arrayval(ResultArray), !Stack, !SP)
+           ,
+      183 -            run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !
+          -Stack, !SP, FP, RestGenStack, !IO)                            
+      211 +            run(IP + 1, RP, FP, Context, RestGenStack, !SP, !S
+          +tore, OpTable, Env,                                           
+      212 +                !Bytecode, !Stack, !Pool, !HashTable, !IO)    
+      213          ;
+      214              GenStack = [],
+      215              throw(vm_error("endArray without matching startArr
+           ay"))
+     ...
+      218          % call: pop closure, set RP to return address, switch 
+           context, jump
+      219          datastack.pop("call", V, !Stack, !SP),
+      220          ( if V = bytecodeval(CalleeContext, CodeAddr) then
+      192 -            !:RP = IP + 1,                                    
+      193 -            !:Context = CalleeContext,                        
+      194 -            run(BC, CodeAddr, !RP, !Context, OpTable, ST, Env,
+          - !Stack, !SP, FP, GenStack, !IO)                              
+      221 +            run(CodeAddr, IP + 1, FP, CalleeContext, GenStack,
+          + !SP, !Store,                                                 
+      222 +                OpTable, Env, !Bytecode, !Stack, !Pool, !HashT
+          +able, !IO)                                                    
+      223          else
+      224              throw(type_error("bytecode closure", V))
+      225          )
+      226      else if Opcode = oc_saveReturnPtr then
+      227          % saveReturnPtr: push current RP onto data stack
+      200 -        datastack.push(intval(!.RP), !Stack, !SP),            
+      201 -        run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !Stac
+          -k, !SP, FP, GenStack, !IO)                                    
+      228 +        datastack.push(intval(RP), !Stack, !SP),              
+      229 +        run(IP + 1, RP, FP, Context, GenStack, !SP, !Store, Op
+          +Table, Env,                                                   
+      230 +            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      231      else if Opcode = oc_restoreReturnPtr then
+      232          % restoreReturnPtr: pop RP from data stack
+      233          datastack.pop("restoreReturnPtr", V, !Stack, !SP),
+      234          ( if V = intval(NewRP) then
+      206 -            !:RP = NewRP,                                     
+      207 -            run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !
+          -Stack, !SP, FP, GenStack, !IO)                                
+      235 +            run(IP + 1, NewRP, FP, Context, GenStack, !SP, !St
+          +ore, OpTable, Env,                                            
+      236 +                !Bytecode, !Stack, !Pool, !HashTable, !IO)    
+      237          else
+      238              throw(type_error("int", V))
+      239          )
+      240      else if Opcode = oc_saveContextPtr then
+      241          % saveContextPtr: push current context array onto data
+            stack
+      213 -        datastack.push(arrayval(!.Context), !Stack, !SP),     
+      214 -        run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !Stac
+          -k, !SP, FP, GenStack, !IO)                                    
+      242 +        datastack.push(arrayval(Context), !Stack, !SP),       
+      243 +        run(IP + 1, RP, FP, Context, GenStack, !SP, !Store, Op
+          +Table, Env,                                                   
+      244 +            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      245      else if Opcode = oc_restoreContextPtr then
+      246          % restoreContextPtr: pop context array from data stack
+      247          datastack.pop("restoreContextPtr", V, !Stack, !SP),
+      248          ( if V = arrayval(NewContext) then
+      219 -            !:Context = NewContext,                           
+      220 -            run(BC, IP + 1, !RP, !Context, OpTable, ST, Env, !
+          -Stack, !SP, FP, GenStack, !IO)                                
+      249 +            run(IP + 1, RP, FP, NewContext, GenStack, !SP, !St
+          +ore, OpTable, Env,                                            
+      250 +                !Bytecode, !Stack, !Pool, !HashTable, !IO)    
+      251          else
+      252              throw(type_error("array", V))
+      253          )
+
+● Read(src/eval.m)
+  ⎿  Read 60 lines
+
+● Update(src/eval.m)
+  ⎿  Added 1 line                                                        
+      44  :- import_module datastack.
+      45  :- import_module dir.
+      46  :- import_module exception.
+      47 +:- import_module hash_table.                                   
+      48  :- import_module int.
+      49  :- import_module lexer.
+      50  :- import_module map.
+
+● Now update eval_apply to use the new signature:
+
+● Update(src/eval.m)
+  ⎿  Added 21 lines, removed 2 lines                                     
+      204          eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Ar
+           ray, !Ptr, !ST, !BC, !IO)
+      205      else if V = bytecodeval(Context, CodeAddr) then
+      206          % Execute bytecode closure via VM
+      207 -        % Note: bytecode array is read-only during VM executio
+          -n                                                             
+      207          % RP=-1 means return to eval_apply (sentinel value)
+      208          % FP starts at top of stack array (frame grows downwar
+           d)
+      209          % GenStack starts empty (no active generators)
+      210          FP = array.size(!.Array),
+      212 -        vm.run(!.BC, CodeAddr, -1, _, Context, _, OpTable, !.S
+          -T, Env, !Array, !Ptr, FP, [], !IO)                            
+      211 +        Store0 = vm.vm_store(0, !.ST),                        
+      212 +        Pool0 = array.make_empty_array,                       
+      213 +        HashTable0 = hash_table.init(value_hash, 256, 0.9),   
+      214 +        vm.run(CodeAddr, -1, FP, Context, [], !Ptr, Store0, St
+          +ore,                                                          
+      215 +            OpTable, Env, !BC, !Array, Pool0, _Pool, HashTable
+          +0, _HashTable, !IO),                                          
+      216 +        !:ST = Store ^ vm.vs_string_table                     
+      217      else
+      218          throw(type_error("closure", V))
+      219      ).
+      220  
+      221 +    % Placeholder hash function for values.                   
+      222 +    % TODO: implement proper hashing when ref/deref are added.
+      223 +    %                                                         
+      224 +:- func value_hash(value) = int.                              
+      225 +                                                              
+      226 +value_hash(intval(I)) = I.                                    
+      227 +value_hash(stringval(Id)) = Id.                               
+      228 +value_hash(arrayval(_)) = 0.                                  
+      229 +value_hash(mapval(_)) = 0.                                    
+      230 +value_hash(termval(_)) = 0.                                   
+      231 +value_hash(nilval) = 0.                                       
+      232 +value_hash(consval(_, _)) = 0.                                
+      233 +value_hash(closureval(_, _)) = 0.                             
+      234 +value_hash(bytecodeval(_, Addr)) = Addr.                      
+      235 +                                                              
+      236  %-------------------------------------------------------------
+           ----------%
+      237  % import: ( filename -- ) Load and evaluate a file
+      238  %-------------------------------------------------------------
+           ----------%
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/vm.int3
+     Making Mercury/ints/vm.int
+     Making Mercury/ints/froth.int
+     Making Mercury/ints/eval.int
+     Making Mercury/cs/eval.c
+     eval.m:213: In clause for predicate `eval_apply'/14:
+     eval.m:213:   type error in unification of argument 1 of functor
+     … +9 lines (ctrl+o to see all)
+
+● The hash function needs to be a predicate, not a function:
+
+● Update(src/eval.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      210          FP = array.size(!.Array),
+      211          Store0 = vm.vm_store(0, !.ST),
+      212          Pool0 = array.make_empty_array,
+      213 -        HashTable0 = hash_table.init(value_hash, 256, 0.9),   
+      213 +        HashTable0 = hash_table.init(value_hash_pred, 256, 0.9
+          +),                                                            
+      214          vm.run(CodeAddr, -1, FP, Context, [], !Ptr, Store0, St
+           ore,
+      215              OpTable, Env, !BC, !Array, Pool0, _Pool, HashTable
+           0, _HashTable, !IO),
+      216          !:ST = Store ^ vm.vs_string_table
+
+● Update(src/eval.m)
+  ⎿  Added 11 lines, removed 11 lines                                    
+      218          throw(type_error("closure", V))
+      219      ).
+      220  
+      221 -    % Placeholder hash function for values.                   
+      221 +    % Placeholder hash predicate for values.                  
+      222      % TODO: implement proper hashing when ref/deref are added.
+      223      %
+      224 -:- func value_hash(value) = int.                              
+      224 +:- pred value_hash_pred(value::in, int::out) is det.          
+      225  
+      226 -value_hash(intval(I)) = I.                                    
+      227 -value_hash(stringval(Id)) = Id.                               
+      228 -value_hash(arrayval(_)) = 0.                                  
+      229 -value_hash(mapval(_)) = 0.                                    
+      230 -value_hash(termval(_)) = 0.                                   
+      231 -value_hash(nilval) = 0.                                       
+      232 -value_hash(consval(_, _)) = 0.                                
+      233 -value_hash(closureval(_, _)) = 0.                             
+      234 -value_hash(bytecodeval(_, Addr)) = Addr.                      
+      226 +value_hash_pred(intval(I), I).                                
+      227 +value_hash_pred(stringval(Id), Id).                           
+      228 +value_hash_pred(arrayval(_), 0).                              
+      229 +value_hash_pred(mapval(_), 0).                                
+      230 +value_hash_pred(termval(_), 0).                               
+      231 +value_hash_pred(nilval, 0).                                   
+      232 +value_hash_pred(consval(_, _), 0).                            
+      233 +value_hash_pred(closureval(_, _), 0).                         
+      234 +value_hash_pred(bytecodeval(_, Addr), Addr).                  
+      235  
+      236  %-------------------------------------------------------------
+           ----------%
+      237  % import: ( filename -- ) Load and evaluate a file
+
+● Bash(make 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/eval.int3
+     Making Mercury/ints/eval.int
+     Making Mercury/cs/eval.c
+     eval.m:214: In clause for `eval_apply(in, in, in, out, array_di, array_uo, 
+     in,
+     eval.m:214:   out, in, out, array_di, array_uo, di, uo)':
+     eval.m:214:   in argument 18 of call to predicate `vm.run'/21:
+     eval.m:214:   mode error: variable `HashTable0' has instantiatedness
+     eval.m:214:     bound(
+     … +17 lines (ctrl+o to see all)
+
+● The hash_table needs to be unique. Let me use unsafe_promise_unique:
+
+● Update(src/eval.m)
+  ⎿  Added 3 lines, removed 1 line                                       
+      210          FP = array.size(!.Array),
+      211          Store0 = vm.vm_store(0, !.ST),
+      212          Pool0 = array.make_empty_array,
+      213 -        HashTable0 = hash_table.init(value_hash_pred, 256, 0.9
+          -),                                                            
+      213 +        promise_equivalent_solutions [HashTable0] (           
+      214 +            HashTable0 = hash_table.init(value_hash_pred, 256,
+          + 0.9)                                                         
+      215 +        ),                                                    
+      216          vm.run(CodeAddr, -1, FP, Context, [], !Ptr, Store0, St
+           ore,
+      217              OpTable, Env, !BC, !Array, Pool0, _Pool, HashTable
+           0, _HashTable, !IO),
+      218          !:ST = Store ^ vm.vs_string_table
+
+● Bash(make 2>&1 | head -30)
+  ⎿  cd src && mmc --make froth    
+     Making Mercury/int3s/eval.int3
+     Making Mercury/ints/eval.int
+     … +24 lines (ctrl+o to expand)
+
+● Let me try using unsafe_promise_unique:
+
+● Update(src/eval.m)
+  ⎿  Added 2 lines, removed 3 lines                                      
+      210          FP = array.size(!.Array),
+      211          Store0 = vm.vm_store(0, !.ST),
+      212          Pool0 = array.make_empty_array,
+      213 -        promise_equivalent_solutions [HashTable0] (           
+      214 -            HashTable0 = hash_table.init(value_hash_pred, 256,
+          - 0.9)                                                         
+      215 -        ),                                                    
+      213 +        HashTable0 = unsafe_promise_unique(                   
+      214 +            hash_table.init(value_hash_pred, 256, 0.9)),      
+      215          vm.run(CodeAddr, -1, FP, Context, [], !Ptr, Store0, St
+           ore,
+      216              OpTable, Env, !BC, !Array, Pool0, _Pool, HashTable
+           0, _HashTable, !IO),
+      217          !:ST = Store ^ vm.vs_string_table
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth    
+     Making Mercury/int3s/eval.int3
+     Making Mercury/ints/eval.int
+     … +8 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | tail -10)
+  ⎿  1                            
+     49
+     3
+     … +7 lines (ctrl+o to expand)
+
+● The hash_table.init size parameter appears to be a log2 value. Let me fix it:
+
+● Update(src/eval.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      211          Store0 = vm.vm_store(0, !.ST),
+      212          Pool0 = array.make_empty_array,
+      213          HashTable0 = unsafe_promise_unique(
+      214 -            hash_table.init(value_hash_pred, 256, 0.9)),      
+      214 +            hash_table.init(value_hash_pred, 8, 0.9)),        
+      215          vm.run(CodeAddr, -1, FP, Context, [], !Ptr, Store0, St
+           ore,
+      216              OpTable, Env, !BC, !Array, Pool0, _Pool, HashTable
+           0, _HashTable, !IO),
+      217          !:ST = Store ^ vm.vs_string_table
+
+● Bash(make 2>&1 && ./run_tests.sh 2>&1 | tail -5)
+  ⎿  cd src && mmc --make froth    
+     Making Mercury/int3s/eval.int3
+     Making Mercury/ints/eval.int
+     … +9 lines (ctrl+o to expand)
+
+● All 62 tests pass. Here's a summary of the refactoring:
+
+  vm.m changes:
+  - Added vm_store type bundling PP (pool count) and ST (string table)
+  - New run signature with organized argument groups:
+    - Machine registers: IP, RP, FP, Context, GenStack (input), SP (in/out)
+    - Non-unique storage: vm_store (in/out)
+    - Execution context: OpTable, Env (input)
+    - Memory (unique): Bytecode, Stack, Pool, HashTable, IO (all di/uo)
+  - Inlined execute predicate into run
+  - Bytecode array now unique (di/uo) to support future modifications
+
+  eval.m changes:
+  - Added hash_table import
+  - Updated eval_apply to create initial values:
+    - Pool0 = array.make_empty_array
+    - HashTable0 via hash_table.init with placeholder hash function
+    - Store0 = vm_store(0, !.ST)
+  - Added value_hash_pred placeholder for hash table (returns 0 for most types)
+  - Extract updated string table from Store after VM execution
+
+  The Pool and HashTable are created fresh each VM invocation and discarded - this is temporary until we implement ref/deref and need to persist them.
+
+> The source code for the locally installed Mercury library can be found in 
+~/mlib. Read the interface sections of array.m and hash_table.m. Hash tables
+ have their own modes defined similarly to arrays, so if you use these then 
+you may be able to avoid that promise. 
+
+● Bash(head -200 ~/mlib/array.m)
+  ⎿ %----------------------------------------------------------------------
+    -----%
+    % vim: ft=mercury ts=4 sw=4 et
+    … +221 lines (ctrl+o to expand)
+
+
+● Bash(head -300 ~/mlib/hash_table.m)
+  ⎿ %----------------------------------------------------------------------
+    -----%
+    % vim: ts=4 sw=4 et ft=mercury
+    … +340 lines (ctrl+o to expand)
+
+
+● I see - hash_table has its own modes hash_table_di and hash_table_uo. The init function returns hash_table_uo which should work directly. Let me update vm.m to use the proper modes:
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      58      array(int)::array_di, array(int)::array_uo,
+      59      array(value)::array_di, array(value)::array_uo,
+      60      array(value)::array_di, array(value)::array_uo,
+      61 -    hash_table(value, int)::di, hash_table(value, int)::uo,    
+      61 +    hash_table(value, int)::hash_table_di, hash_table(value, in
+         +t)::hash_table_uo,                                             
+      62      io::di, io::uo) is det.
+      63  
+      64  %--------------------------------------------------------------
+          ---------%
+
+● Now update eval.m to remove the unsafe_promise_unique:
+
+● Update(src/eval.m)
+  ⎿  Added 1 line, removed 2 lines                                       
+      210          FP = array.size(!.Array),
+      211          Store0 = vm.vm_store(0, !.ST),
+      212          Pool0 = array.make_empty_array,
+      213 -        HashTable0 = unsafe_promise_unique(                   
+      214 -            hash_table.init(value_hash_pred, 8, 0.9)),        
+      213 +        HashTable0 = hash_table.init(value_hash_pred, 8, 0.9),
+      214          vm.run(CodeAddr, -1, FP, Context, [], !Ptr, Store0, St
+           ore,
+      215              OpTable, Env, !BC, !Array, Pool0, _Pool, HashTable
+           0, _HashTable, !IO),
+      216          !:ST = Store ^ vm.vs_string_table
+
+● Bash(make 2>&1 && ./run_tests.sh 2>&1 | tail -5)
+  ⎿  cd src && mmc --make froth    
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/vm.int3
+     … +13 lines (ctrl+o to expand)
+
+● All 62 tests pass. Using the proper hash_table_di/hash_table_uo modes eliminates the need for unsafe_promise_unique since hash_table.init returns hash_table_uo which is directly compatible.
+
+  The key insight from the Mercury library:
+  - hash_table defines its own modes: hash_table_di, hash_table_uo, hash_table_ui
+  - These are defined as di(hash_table), out(hash_table), in(hash_table) using a custom inst
+  - init returns hash_table_uo, so it can be passed directly to a hash_table_di parameter
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 179k/200k tokens (90%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 13.1k tokens (6.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 103.5k tokens (51.8%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛶ ⛶   ⛶ Free space: 21k (10.3%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 117 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.6k tokens
+     └ FROTH_LIBRARY.md: 4.3k tokens
+     └ FROTH_COMPILER.md: 3.8k tokens
+     └ FROTH_BYTECODE.md: 1.4k tokens
+     └ FROTH_GUIDE.md: 816 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
