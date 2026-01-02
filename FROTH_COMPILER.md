@@ -14,7 +14,7 @@ This document describes the compiler infrastructure for Froth, including bytecod
 | `instruction-table` | bytecode | Constant: map from symbols to VM instruction codes |
 | `new-apply-node` | node | Create apply node with defaults |
 | `new-binder-node` | node | Create binder node with defaults |
-| `new-closure-node` | node | Create closure node with defaults |
+| `new-function-node` | node | Create function node with defaults |
 | `new-generator-node` | node | Create generator node with defaults |
 | `new-identifier-node` | node | Create identifier node with defaults |
 | `new-literal-node` | node | Create literal node with defaults |
@@ -133,7 +133,7 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 | `new-identifier-node` | `( -- node )` | Create identifier node |
 | `new-binder-node` | `( -- node )` | Create binder node (/name) |
 | `new-apply-node` | `( -- node )` | Create apply node (!) |
-| `new-closure-node` | `( -- node )` | Create closure node ({ }) |
+| `new-function-node` | `( -- node )` | Create function node ({ }) |
 | `new-generator-node` | `( -- node )` | Create generator node ([ ]) |
 
 **Value conventions:**
@@ -179,9 +179,9 @@ Boundness analysis for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `boundness` | `( func -- func closure-node )` | Analyze variable binding in a function |
+| `boundness` | `( func -- func function-node )` | Analyze variable binding in a function |
 
-Analyzes a quoted function and returns the function plus a closure-node. The map contains:
+Analyzes a quoted function and returns the function plus a function-node. The map contains:
 - `'body`: array of node maps, one per term in the function body
 - `'free-vars`: map from identifiers to context slot numbers
 - `'bound-set`: map from identifiers to nil (marking presence)
@@ -200,11 +200,11 @@ bnd-map 'body @                ; [ binder-node identifier-node ]
 ; Second element has is-bound=0 (bound)
 
 '{/x {x}} boundness! /bnd-map /func
-bnd-map 'body @ 1 @            ; nested closure-node
+bnd-map 'body @ 1 @            ; nested function-node
 ; Has 'body, 'free-vars, 'bound-set keys
 ```
 
-The passes compose: `func boundness! liveness! slots!` returns `(func closure-node)`.
+The passes compose: `func boundness! liveness! slots!` returns `(func function-node)`.
 
 ## Liveness (liveness.froth)
 
@@ -212,9 +212,9 @@ Liveness analysis for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `liveness` | `( func closure-node -- func closure-node )` | Analyze last references in function |
+| `liveness` | `( func function-node -- func function-node )` | Analyze last references in function |
 
-Takes the closure-node from `boundness` and adds liveness information.
+Takes the function-node from `boundness` and adds liveness information.
 
 **Per-term keys:**
 - `'is-live`: `0` (still live) or `1` (last reference) for identifiers
@@ -263,9 +263,9 @@ Frame slot allocation for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `slots` | `( func closure-node -- func closure-node )` | Allocate frame slots |
+| `slots` | `( func function-node -- func function-node )` | Allocate frame slots |
 
-Takes the closure-node from `liveness` and adds slot allocation information:
+Takes the function-node from `liveness` and adds slot allocation information:
 
 - `'slot`: frame slot number (for live binders and bound identifier references)
 - `'ctx-save-slot`: frame slot for saving context pointer (for non-tail calls)
