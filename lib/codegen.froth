@@ -5,10 +5,17 @@ instruction-table 'push-int @ /ocPushInt
 instruction-table 'push-string @ /ocPushString
 instruction-table 'op @ /ocOp
 instruction-table 'return @ /ocReturn
+instruction-table 'push-quoted-apply @ /ocPushQuotedApply
+
+; Get operator codes for quoted term construction
+operator-table 'idToIdent @ /opIdToIdent
+operator-table 'idToBinder @ /opIdToBinder
+operator-table 'wrap @ /opWrap
 
 ; codegen-term: (code term -- code')
 ; Generate bytecode for a single term, append to code array.
-['concat 'ocPushInt 'ocPushString 'ocOp 'operator-table] { /term /code
+['concat 'ocPushInt 'ocPushString 'ocOp 'operator-table
+ 'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap] { /term /code
   term isValue {
     ; Quoted literal value - unwrap and check type
     term unwrap /val
@@ -32,9 +39,43 @@ instruction-table 'return @ /ocReturn
       code
     } ?!
   } {
+  term isQuote {
+    ; Quote term - unwrap and check inner type
+    term unwrap /inner
+    inner isIdent {
+      ; 'identifier -> push-int id, op idToIdent
+      inner intern /id
+      code [ocPushInt id ocOp opIdToIdent] concat!
+    } {
+    inner isBinder {
+      ; '/binder -> push-int id, op idToBinder
+      inner intern /id
+      code [ocPushInt id ocOp opIdToBinder] concat!
+    } {
+    inner isApply {
+      ; '! -> push-quoted-apply
+      code [ocPushQuotedApply] concat!
+    } {
+    inner isValue {
+      ; 'value -> push value, op wrap
+      inner unwrap /val
+      val isInt {
+        code [ocPushInt val ocOp opWrap] concat!
+      } {
+      val isString {
+        code [ocPushString val intern ocOp opWrap] concat!
+      } {
+        ; Unsupported quoted value type
+        code
+      } ?! } ?!
+    } {
+      ; Quoted function, generator, or nested quote - skip for now
+      code
+    } ?! } ?! } ?! } ?!
+  } {
     ; Other term type - skip for now
     code
-  } ?! } ?!
+  } ?! } ?! } ?!
 } def-fn! /codegen-term
 
 ; codegen-seq: (code func idx -- code')
