@@ -7,6 +7,15 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | Name | Module | Description |
 |------|--------|-------------|
 | `add-keys` | map | Add array of keys with nil values |
+| `alist-delete` | alist | Remove key from alist |
+| `alist-empty` | alist | Check if alist is empty |
+| `alist-find` | alist | Find pair by key |
+| `alist-get` | alist | Get value by key |
+| `alist-has` | alist | Check if key exists |
+| `alist-keys` | alist | Get all keys as array |
+| `alist-set` | alist | Set or update key-value pair |
+| `alist-size` | alist | Get number of entries |
+| `alist-values` | alist | Get all values as array |
 | `and` | bool | Logical and |
 | `bench` | bench | Benchmark closure execution |
 | `concat` | array | Concatenate two arrays |
@@ -198,6 +207,49 @@ m { 2 * } transform-values!    ; $ 2 'a : 4 'b : 6 'c :
 $ 1 'a : 2 'b : $ 3 'b : 4 'c : merge!  ; $ 1 'a : 3 'b : 4 'c :
 m ['a 'c] delete-keys!         ; $ 2 'b :
 $ ['x 'y] add-keys!            ; $ . 'x : . 'y :
+```
+
+## Alist (alist.froth)
+
+Association lists for key-value storage with arbitrary key types. Unlike maps (which only support identifier keys), alists can use any value as a key. Operations are O(n) but simple and sufficient for small dictionaries.
+
+An alist is an array of `[key value]` pairs:
+
+```
+[ ]                            ; empty alist
+[ [1 "one"] [2 "two"] ]        ; alist with integer keys
+[ ["a" 1] ["b" 2] ]            ; alist with string keys
+```
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `alist-find` | `( alist key -- pair 0 \| 1 )` | Find pair by key |
+| `alist-get` | `( alist key -- value 0 \| 1 )` | Get value by key |
+| `alist-has` | `( alist key -- 0 \| 1 )` | Check if key exists |
+| `alist-set` | `( alist key value -- alist' )` | Set or update key-value pair |
+| `alist-delete` | `( alist key -- alist' )` | Remove key from alist |
+| `alist-keys` | `( alist -- array )` | Get all keys as array |
+| `alist-values` | `( alist -- array )` | Get all values as array |
+| `alist-size` | `( alist -- n )` | Get number of entries |
+| `alist-empty` | `( alist -- 0 \| 1 )` | Check if empty (0 = yes) |
+
+Lookup functions return a success flag (0 = found, 1 = not found):
+
+```
+[ [1 "one"] [2 "two"] ] /a
+a 1 alist-get!                 ; "one" 0 (found)
+a 3 alist-get!                 ; 1 (not found)
+a 2 alist-has!                 ; 0 (exists)
+```
+
+Mutation functions return a new alist (immutable updates):
+
+```
+[ ] /a
+a 1 "one" alist-set! /a        ; [ [1 "one"] ]
+a 2 "two" alist-set! /a        ; [ [1 "one"] [2 "two"] ]
+a 1 "ONE" alist-set! /a        ; [ [1 "ONE"] [2 "two"] ] (updated)
+a 1 alist-delete! /a           ; [ [2 "two"] ]
 ```
 
 ## Data (data.froth)
