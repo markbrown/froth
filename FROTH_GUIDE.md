@@ -34,11 +34,11 @@ Since 0 already means true, testing `0 =` is usually unnecessary:
 ; Redundant
 x y = 0 = { "equal" } { "not equal" } ?!
 
-; Better
-x y = { "not equal" } { "equal" } ?!
+; Better - just remove the 0 =
+x y = { "equal" } { "not equal" } ?!
 ```
 
-Note the branches are swapped because `=` returns 0 for equal (the "true" case).
+Both work because `=` returns 0 for equal, and `?` executes the then-branch when condition is 0.
 
 ## Conditional Syntax
 
