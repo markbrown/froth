@@ -33,7 +33,7 @@ compile (addr body-map env-map id -- new-addr new-body-map new-env-map)
 **Algorithm:**
 
 1. Look up `id` in `env-map`; skip if not closureval or already bytecodeval
-2. `open` closure to get environment and body; run `preflight`
+2. `open` closureval to get environment and body; run `preflight`
 3. Use `ref` on body to get unique ID; check `body-map` for existing code
 4. If not found: run analysis passes, emit bytecode, update `body-map`
 5. Build context array: for each free variable, compile if closureval
@@ -41,11 +41,11 @@ compile (addr body-map env-map id -- new-addr new-body-map new-env-map)
 
 **Dependencies:**
 
-- **Nested functions** (`{ ... }` in body): Compile body, context built at runtime
-- **Captured closures** (in environment): Compile body AND build context at compile time
+- **Nested functions** (`{ ... }` in body): Compile function body; context built at runtime
+- **Captured closurevals** (in environment): Compile body AND build context at compile time
 
-**Deduplication:** `ref` returns unique ID for each body term. Tree23 maps these to bytecode addresses, enabling code sharing across closures with same body but different environments.
+**Deduplication:** `ref` returns unique ID for each function body. Tree23 maps these to bytecode addresses, enabling code sharing across closurevals with same body but different environments.
 
 ## Limitations
 
-Compilation runs `preflight` and can fail for closures using dynamic constructs (`env`, `import`, `applyOperator`). Failed compilations leave the environment unchanged.
+Compilation runs `preflight` and can fail for closurevals using dynamic constructs (`env`, `import`, `applyOperator`). Failed compilations leave the environment unchanged.

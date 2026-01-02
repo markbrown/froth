@@ -75,7 +75,7 @@ Utilities for creating closures with minimal environments. This module is import
 |------|--------------|-------------|
 | `def-fn` | `( deps closure -- closure )` | Create closure with environment restricted to deps |
 
-When a closure is created with `{ ... }`, it captures the entire current environment. This can cause environment bloat to propagate through a chain of definitions. Use `def-fn` to explicitly specify which bindings a closure needs:
+When a closureval is created with `{ ... }`, it captures the entire current environment. This can cause environment bloat to propagate through a chain of definitions. Use `def-fn` to explicitly specify which bindings a closure needs:
 
 ```
 { 1 } /a

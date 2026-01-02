@@ -71,7 +71,7 @@ literal     ::= number | string
 | `term` | Quoted (unevaluated) term |
 | `nil` | Empty/null value |
 | `cons` | Pair of two values (head, tail) |
-| `closure` | Closure (environment + function body) |
+| `closure` | Callable: closureval (map + function) or bytecodeval (array + address) |
 
 ## Evaluation
 
@@ -89,7 +89,7 @@ Evaluation maintains three pieces of state:
 |------|------|
 | `identifier` | Look up name in environment; if found, push its value. Otherwise, if operator, execute it. Environment shadows operators. |
 | `binder` (`/name`) | Pop a value and bind it to `name` in the environment. |
-| `function` (`{ ... }`) | Capture the current environment and push a closure. |
+| `function` (`{ ... }`) | Capture the current environment and push a closureval. |
 | `generator` (`[ ... ]`) | Evaluate terms with an empty stack, collect results into an array, push the array. |
 | `quoted` (`'term`) | Push the term as a value without evaluating it. |
 | `apply` (`!`) | Pop a closure or quoted operator and execute it. Stack is shared; environment changes are discarded. |
@@ -172,8 +172,8 @@ Evaluation maintains three pieces of state:
 |------|--------------|-------------|
 | `env` | `( -- map )` | Push current environment as a map |
 | `restore` | `( map -- )` | Replace current environment with the map |
-| `close` | `( env body -- closure )` | Create a closure from (map, term) or (array, int) |
-| `open` | `( closure -- env body )` | Decompose a closure to (map, term) or (array, int) |
+| `close` | `( env body -- closure )` | Create closureval (map, function) or bytecodeval (array, int) |
+| `open` | `( closure -- env body )` | Decompose closureval to (map, function) or bytecodeval to (array, int) |
 | `unwrap` | `( 'x -- x )` | Extract inner from quoted value or quoted term |
 | `intern` | `( a -- int )` | Get intern id from string, identifier, or binder |
 | `idToString` | `( int -- string )` | Create string from intern id |
