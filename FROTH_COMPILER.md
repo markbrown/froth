@@ -158,6 +158,8 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 - `'restore-context`: 0 = non-tail call needing context restore after
 - `'restore-return`: 0 = last non-tail call (needs return restore)
 - `'leave-frame`: 0 = last term using the frame
+- `'save-context`: 0 = first call needing context save (set by slots)
+- `'save-return`: 0 = first non-tail call needing return save (set by slots)
 - `'ctx-save-slot`: frame slot for saving context pointer (set by slots)
 - `'rp-save-slot`: frame slot for saving return pointer (set by slots)
 
@@ -272,11 +274,13 @@ Frame slot allocation for the compiler.
 Takes the function-node from `liveness` and adds slot allocation information:
 
 - `'slot`: frame slot number (for live binders and bound identifier references)
-- `'ctx-save-slot`: frame slot for saving context pointer (for non-tail calls)
+- `'save-context`: 0 on first call needing context save
+- `'save-return`: 0 on first non-tail call needing return save
+- `'ctx-save-slot`: frame slot for saving context pointer (for calls needing context restore)
 - `'rp-save-slot`: frame slot for saving return pointer (for non-tail calls)
 - `'max-slots`: maximum number of slots needed (for closures only)
 
-Slots are allocated on-demand and reused when freed. Binder slots are freed at the variable's last use. Register save slots are allocated at non-tail calls and freed immediately after. Closures get their own frame (slots start at 0), while generators share the outer frame.
+Slots are allocated on-demand and reused when freed. Binder slots are freed at the variable's last use. Register save slots are allocated once at the first call that needs them and reused by subsequent calls. Closures get their own frame (slots start at 0), while generators share the outer frame.
 
 ```
 '{/x x} boundness! liveness! slots! /map /func
