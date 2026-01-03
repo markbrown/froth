@@ -169,6 +169,7 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 **Function node keys:**
 - `'body`: array of node maps (parallel to body terms)
 - `'free-vars`: map: identifier -> context slot number
+- `'free-vars-array`: array: slot index -> identifier
 - `'bound-set`: map: identifier -> nil (set of bound vars)
 - `'dead-set`: map: identifier -> nil (vars whose last use is capture)
 - `'max-slots`: maximum frame slots needed
@@ -177,6 +178,7 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 **Generator node keys:**
 - `'body`: array of node maps (parallel to body terms)
 - `'free-vars`: map: identifier -> context slot number
+- `'free-vars-array`: array: slot index -> identifier
 - `'bound-set`: map: identifier -> nil (set of bound vars)
 
 Generators share the containing function's frame, so they don't have `'max-slots`.
@@ -192,6 +194,7 @@ Boundness analysis for the compiler.
 Analyzes a quoted function and returns a function-node. The node contains:
 - `'body`: array of node maps, one per term in the function body
 - `'free-vars`: map from identifiers to context slot numbers
+- `'free-vars-array`: array of identifiers indexed by context slot
 - `'bound-set`: map from identifiers to nil (marking presence)
 
 Each node map contains keys appropriate to the term type (see Node module).
