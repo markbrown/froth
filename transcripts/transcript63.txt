@@ -1,0 +1,1558 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read FROTH_BYTECODE.md (67 lines)
+  ⎿  Referenced file FROTH_LIBRARY.md
+  ⎿  Read ../../../../../tmp/test_loops.froth (14 lines)
+  ⎿  Read lib/control.froth (100 lines)
+  ⎿  Read ../../../../../tmp/test_dup.froth (3 lines)
+
+> Let's think about non-tail calls. These are tricky because we may need to 
+save/restore registers, and we also need to ensure that we enter and leave 
+the frame in the correct locations. The earlier passes collect information 
+that will be needed, but it is unclear whether there are more things that 
+would be useful. Is there anything you need to know about this task? What is
+ your plan for implementing non-tail calls? 
+
+● Let me review what the analysis passes provide and clarify my understanding before planning.
+
+  What I understand from the documentation:
+
+  1. Analysis pass outputs for apply nodes:
+    - is-tail-call: 0 = tail, 1 = non-tail
+    - save-context: 0 = first call needing context save
+    - save-return: 0 = first non-tail call needing return save
+    - restore-context: 0 = needs context restore after
+    - restore-return: 0 = last non-tail call (restore return after)
+    - ctx-save-slot / rp-save-slot: frame slots for saving
+  2. Bytecode instructions:
+    - save-context-ptr / restore-context-ptr: push/pop context pointer to/from stack
+    - save-return-ptr / restore-return-ptr: push/pop return pointer to/from stack
+    - call: call bytecodeval (sets RP)
+
+  Questions I have:
+
+  1. Save/restore mechanism: The instructions push/pop to the data stack, so the sequence to save to a frame slot would be:
+  save-context-ptr    ; push CP to stack
+  pop-local slot      ; store in frame
+  1. And to restore:
+  push-local slot     ; push saved value
+  restore-context-ptr ; pop and set CP
+  1. Is this correct?
+  2. Frame timing: The frame must exist before we save to slots. Is enter-frame always emitted early enough that slots are available before the first call?
+  3. What gets called: Non-tail calls can call closurevals or bytecodeval. For closurevals, the VM falls back to tree-walking. Do we need different handling, or does call work for both?
+  4. Generator context: Do generators share the outer function's context pointer, or do they have their own? Would a call inside a generator need to save/restore the outer context?
+
+  Let me read the current codegen implementation to see what's there:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 347 lines
+
+● Now let me look at the VM to understand how the save/restore instructions work:
+
+● Search(pattern: "save_return|restore_return|save_context|restore_context",
+        path: "src")
+  ⎿  Found 0 files 
+
+● Search(pattern:
+        "SaveReturnPtr|RestoreReturnPtr|SaveContextPtr|RestoreContextPtr", path:
+         "src")
+  ⎿  Found 0 files 
+
+● Search(pattern: "save.*ptr|restore.*ptr", path: "src")
+  ⎿  Found 2 files (ctrl+o to expand)
+
+● Read(src/vm.m)
+  ⎿  Read 333 lines
+
+● Now I understand the VM mechanism. The save/restore instructions push/pop to the data stack:
+
+  - saveReturnPtr: pushes intval(RP) to stack
+  - restoreReturnPtr: pops intval, sets RP
+  - saveContextPtr: pushes arrayval(Context) to stack
+  - restoreContextPtr: pops arrayval, sets Context
+
+  So to save to a frame slot:
+  save-context-ptr    ; push Context to data stack
+  pop-local slot      ; store in frame
+
+  And to restore:
+  push-local slot     ; push from frame
+  restore-context-ptr ; pop and set Context
+
+  Let me check what the slots pass provides:
+
+● Read(lib/slots.froth)
+  ⎿  Read 185 lines
+
+● Now I have a clear picture. The slots pass sets on apply nodes:
+  - save-context: 0 on first call needing context save, with ctx-save-slot
+  - save-return: 0 on first non-tail call, with rp-save-slot
+  - ctx-save-slot / rp-save-slot: frame slot numbers
+
+  And liveness provides:
+  - is-tail-call: 0 = tail, 1 = non-tail
+  - restore-context: 0 = needs context restore after
+  - restore-return: 0 = needs return restore after
+  - leave-frame: 0 = last term using the frame
+
+  My Plan:
+
+  For a non-tail apply (is-tail-call = 1):
+
+  Before call:
+  1. If need-enter = 0 (haven't entered frame yet) AND we need to save registers → emit enter-frame max-slots, set need-enter = 1
+  2. If save-context = 0 → emit save-context-ptr + pop-local ctx-save-slot
+  3. If save-return = 0 → emit save-return-ptr + pop-local rp-save-slot
+  4. Emit call
+
+  After call:
+  5. If restore-context = 0 → emit push-local ctx-save-slot + restore-context-ptr
+  6. If restore-return = 0 → emit push-local rp-save-slot + restore-return-ptr
+  7. If leave-frame = 0 → emit leave-frame max-slots
+
+  Remaining Questions:
+
+  1. Closureval handling: The VM's call instruction only handles bytecodeval (throws type error for closureval). Should we assume all called functions are compiled? Or should there be a fallback?
+  2. Generator calls: I see generators share the outer frame and thread ctx-slot/rp-slot through. If a non-tail call happens inside a generator, the register saves go to the outer frame. Is this correct?
+  3. Instruction codes: I need to add call, save-context-ptr, etc. to the codegen. Are these already in bytecode.froth?
+
+  Let me check bytecode.froth:
+
+● Read(lib/bytecode.froth)
+  ⎿  Read 37 lines
+
+● Good - all instruction codes are in bytecode.froth. Let me check if liveness sets needs-frame correctly for calls:
+
+● Search(pattern: "needs-frame", path: "lib/liveness.froth", output_mode:
+        "content")
+  ⎿  Found 3 lines (ctrl+o to expand)
+
+● Read(lib/liveness.froth)
+  ⎿  Read 50 lines
+
+● Read(lib/liveness.froth)
+  ⎿  Read 60 lines
+
+● Read(lib/liveness.froth)
+  ⎿  Read 25 lines
+
+● Now I understand the complete picture:
+
+  - needs-frame is set to 0 if function has used binders OR non-tail calls needing saves
+  - seen-frame gets set to 0 when we encounter either (going right-to-left)
+  - Frame entry is needed before first binder OR first register save
+
+  My Implementation Plan:
+
+  1. Add instruction codes to codegen.froth (already imported: ocCall, ocSaveContextPtr, etc.)
+  2. Modify apply handling in codegen-term. For non-tail calls:
+
+  ; Before call (in order):
+  - If need-enter = 0 AND (save-context = 0 OR save-return = 0):
+      emit enter-frame max-slots
+      set need-enter = 1
+  - If save-context = 0:
+      emit save-context-ptr, pop-local ctx-save-slot
+  - If save-return = 0:
+      emit save-return-ptr, pop-local rp-save-slot
+  - emit call
+
+  ; After call (in order):
+  - If restore-context = 0:
+      emit push-local ctx-save-slot, restore-context-ptr
+  - If restore-return = 0:
+      emit push-local rp-save-slot, restore-return-ptr
+  - If leave-frame = 0:
+      emit leave-frame max-slots
+
+  One question about order:
+
+  Looking at the VM, call sets RP to IP + 1 (the instruction after call). When the callee returns, it jumps back to that address. So the "after call" code is at IP + 1 and will execute after the callee returns. This seems correct.
+
+  Another consideration:
+
+  What if the function ends with a non-tail call followed by return? The sequence would be:
+  ... call  ; RP = addr of restore-context-ptr
+  restore-context-ptr
+  restore-return-ptr
+  leave-frame
+  return  ; uses restored RP
+
+  But wait - if we restore the return pointer, then return uses that restored RP. But the return instruction checks if RP = -1 to stop execution. If we just restored RP from a saved value, it wouldn't be -1.
+
+  Actually, looking at codegen line 324-328, it checks if the last term is a tail call. If not, it emits return. But after a non-tail call's restores, the RP is the caller's return pointer. So return would jump to the caller's return address... which might be correct?
+
+  Wait, I think I'm confusing myself. Let me trace through an example:
+
+  { /x f! g! }  ; f is non-tail, g is tail
+
+  For f!:
+  - save RP (caller's return address)
+  - save context
+  - call f (sets RP to next instruction)
+  - [f executes and returns to here]
+  - restore context
+  - restore RP (back to caller's return address)
+
+  For g!:
+  - tail-call g (preserves RP = caller's return address)
+  - [g returns directly to caller]
+
+  This makes sense. The issue is: after f! returns and we restore RP, what is the final return for?
+
+  Oh wait - looking more carefully at codegen, if the last term is a tail call (g!), we don't emit return. And g! is a tail call so it preserves RP and returns to caller.
+
+  If the last term is a non-tail call (f!), we restore RP and then emit return. The return uses the restored RP to return to caller.
+
+  But what if both are non-tail calls? Actually, only the last apply can be a tail call. So if there are two applies, the first is non-tail and the second is tail. Makes sense.
+
+  Actually looking at the test case { /x f! g! }:
+  - f! is at index 2, g! is at index 3 (last)
+  - Only g! is a tail call
+
+  But what about { /x f! 1 }?
+  - f! is non-tail (not last term)
+  - Final return is emitted after pushing 1
+
+  Hmm, after f! returns, we restore RP. Then we push 1 and return. The return uses the restored RP. But wait - that RP was from before the call to f. So we'd return to where we were before calling this function... which is correct!
+
+  OK I think I understand now. Shall I proceed with implementation?
+
+> Let's update FROTH_BYTECODE to remove information about nested functions, 
+which we have finished implementing. Add your plan for call handling in 
+codegen. 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 67 lines
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 25 lines, removed 10 lines                                    
+      46  
+      47  **Deduplication:** `ref` returns unique ID for each function te
+          rm. The `code-map` (tree23) maps these to bytecode addresses, e
+          nabling code sharing across closurevals with same body but diff
+          erent environments.
+      48  
+      49 -## Codegen Details                                             
+      49 +## Non-Tail Call Handling (TODO)                               
+      50  
+      51 -See FROTH_COMPILER.md for the `codegen` function signature and 
+         -supported terms.                                               
+      51 +Non-tail calls require saving and restoring the context pointer
+         + (CP) and return pointer (RP) across the call. The analysis pas
+         +ses provide flags on apply nodes:                              
+      52  
+      53 -Codegen walks the function body left-to-right, collecting bytec
+         -ode into an array. When it encounters a nested function, it rec
+         -ursively codegens that function first (emitting at `addr`), the
+         -n continues collecting. After processing all terms, it emits th
+         -e collected bytecode. This ensures nested functions appear firs
+         -t in the bytecode store.                                       
+      53 +**From liveness:**                                             
+      54 +- `is-tail-call`: 0 = tail call, 1 = non-tail call             
+      55 +- `restore-context`: 0 = needs CP restore after call           
+      56 +- `restore-return`: 0 = needs RP restore after call (last non-t
+         +ail call)                                                      
+      57 +- `leave-frame`: 0 = last term using the frame                 
+      58  
+      55 -**Nested function handling:**                                  
+      59 +**From slots:**                                                
+      60 +- `save-context`: 0 = first call needing CP save               
+      61 +- `save-return`: 0 = first non-tail call needing RP save       
+      62 +- `ctx-save-slot`: frame slot for saving CP                    
+      63 +- `rp-save-slot`: frame slot for saving RP                     
+      64  
+      57 -1. Use `ref` on nested function; check `code-map` for existing 
+         -address                                                        
+      58 -2. If not found: recurse, get `func-addr`, update `code-map`   
+      59 -3. Collect code to build context array from current frame/conte
+         -xt slots                                                       
+      60 -4. Collect code to push the nested function's `func-addr`      
+      61 -5. Collect `op close` to create bytecodeval at runtime         
+      65 +**Codegen algorithm for non-tail calls:**                      
+      66  
+      63 -The `free-vars` map tells which variables to capture. At runtim
+         -e, these are looked up from the enclosing function's frame (bou
+         -nd variables) or context (free variables).                     
+      67 +Before call:                                                   
+      68 +1. If `need-enter` = 0 AND (`save-context` = 0 OR `save-return`
+         + = 0): emit `enter-frame`, set `need-enter` = 1                
+      69 +2. If `save-context` = 0: emit `save-context-ptr`, `pop-local c
+         +tx-save-slot`                                                  
+      70 +3. If `save-return` = 0: emit `save-return-ptr`, `pop-local rp-
+         +save-slot`                                                     
+      71 +4. Emit `call`                                                 
+      72  
+      73 +After call:                                                    
+      74 +5. If `restore-context` = 0: emit `push-local ctx-save-slot`, `
+         +restore-context-ptr`                                           
+      75 +6. If `restore-return` = 0: emit `push-local rp-save-slot`, `re
+         +store-return-ptr`                                              
+      76 +7. If `leave-frame` = 0: emit `leave-frame max-slots`          
+      77 +                                                               
+      78 +The save instructions push CP/RP to the data stack; `pop-local`
+         + stores them in the frame. Restoring reverses this: `push-local
+         +` retrieves from frame, restore instruction sets CP/RP.        
+      79 +                                                               
+      80  ## Limitations
+      81  
+      82  Compilation runs `preflight` and can fail for closurevals using
+           dynamic constructs (`env`, `import`, `applyOperator`). Failed 
+          compilations leave the environment unchanged.
+      83   No newline at end of file
+
+● Updated FROTH_BYTECODE.md:
+  - Removed the nested function handling section (now implemented)
+  - Added "Non-Tail Call Handling (TODO)" section with the algorithm
+
+  The document now focuses on what's still to be implemented. The structure is:
+
+  1. Overview - Purpose
+  2. Compiler Pipeline - The 5 passes
+  3. Compilation Algorithm - Top-level compile function (not yet implemented)
+  4. Non-Tail Call Handling (TODO) - New section with codegen plan
+  5. Limitations - Dynamic constructs
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 117k/200k tokens (59%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛶ ⛶ ⛶   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Memory files: 17.1k tokens (8.5%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Messages: 37.4k tokens (18.7%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 83k (41.3%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 118 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.5k tokens
+     └ FROTH_COMPILER.md: 4.6k tokens
+     └ FROTH_BYTECODE.md: 813 tokens
+     └ FROTH_GUIDE.md: 2.3k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> let's implement this 
+
+● Update(lib/codegen.froth)
+  ⎿  Added 5 lines                                                       
+      15  instruction-table 'start-array @ /ocStartArray
+      16  instruction-table 'end-array @ /ocEndArray
+      17  instruction-table 'tail-call @ /ocTailCall
+      18 +instruction-table 'call @ /ocCall                              
+      19 +instruction-table 'save-context-ptr @ /ocSaveContextPtr        
+      20 +instruction-table 'restore-context-ptr @ /ocRestoreContextPtr  
+      21 +instruction-table 'save-return-ptr @ /ocSaveReturnPtr          
+      22 +instruction-table 'restore-return-ptr @ /ocRestoreReturnPtr    
+      23  
+      24  ; Get operator codes for quoted term construction and closure c
+          reation
+      25  operator-table 'idToIdent @ /opIdToIdent
+
+● Now I need to update the def-fn dependency list and implement the non-tail call logic:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines, removed 1 line                                       
+      42   'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
+      43   'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
+      44   'ocEnterFrame 'ocLeaveFrame
+      45 - 'ocStartArray 'ocEndArray 'opClose 'opDeref 'ocTailCall 'foldl
+         - 'reduce 'drop] {                                              
+      45 + 'ocStartArray 'ocEndArray 'opClose 'opDeref 'ocTailCall 'ocCal
+         +l                                                              
+      46 + 'ocSaveContextPtr 'ocRestoreContextPtr 'ocSaveReturnPtr 'ocRes
+         +toreReturnPtr                                                  
+      47 + 'foldl 'reduce 'drop 'or] {                                   
+      48    /max-slots /outer-bound-slots /outer-free-vars /node /term /n
+          eed-enter /code /code-map /addr /seq-fn /codegen-fn
+      49    term isValue {
+      50      ; Quoted literal value - unwrap and check type
+
+● Update(lib/codegen.froth)
+  ⎿  Added 47 lines, removed 3 lines                                     
+      233      gen-addr gen-code-map gen-code [ocEndArray] concat! need-e
+           nter
+      234    } {
+      235    term isApply {
+      236 -    ; Apply - check node for tail call flag (only set by liven
+          -ess for tail calls)                                           
+      236 +    ; Apply - check node for tail call flag                   
+      237      node 'is-tail-call in { node 'is-tail-call @ } { 1 } ?! {
+      238        ; Tail call (is-tail-call=0) - emit tail-call
+      239        addr code-map code [ocTailCall] concat! need-enter
+      240      } {
+      241 -      ; Non-tail call - skip for now                          
+      242 -      addr code-map code need-enter                           
+      241 +      ; Non-tail call - handle register saves/restores        
+      242 +      ; Check if we need to save context or return pointer    
+      243 +      node 'save-context in { node 'save-context @ 0 = } { 1 }
+          + ?! /needs-save-ctx                                           
+      244 +      node 'save-return in { node 'save-return @ 0 = } { 1 } ?
+          +! /needs-save-rp                                              
+      245 +                                                              
+      246 +      ; Step 1: Enter frame if needed (haven't entered yet AND
+          + need to save registers)                                      
+      247 +      need-enter needs-save-ctx needs-save-rp 0 = or! 0 = and!
+          + {                                                            
+      248 +        ; need-enter=0 AND (needs-save-ctx OR needs-save-rp) -
+          + enter frame first                                            
+      249 +        code [ocEnterFrame max-slots] concat! 1               
+      250 +      } {                                                     
+      251 +        code need-enter                                       
+      252 +      } ?! /code1 /new-need-enter                             
+      253 +                                                              
+      254 +      ; Step 2: Save context if this is the first call needing
+          + it                                                           
+      255 +      needs-save-ctx {                                        
+      256 +        node 'ctx-save-slot @ /ctx-slot                       
+      257 +        code1 [ocSaveContextPtr ocPopLocal ctx-slot] concat!  
+      258 +      } { code1 } ?! /code2                                   
+      259 +                                                              
+      260 +      ; Step 3: Save return pointer if this is the first non-t
+          +ail call                                                      
+      261 +      needs-save-rp {                                         
+      262 +        node 'rp-save-slot @ /rp-slot                         
+      263 +        code2 [ocSaveReturnPtr ocPopLocal rp-slot] concat!    
+      264 +      } { code2 } ?! /code3                                   
+      265 +                                                              
+      266 +      ; Step 4: Emit call                                     
+      267 +      code3 [ocCall] concat! /code4                           
+      268 +                                                              
+      269 +      ; Step 5: Restore context if needed                     
+      270 +      node 'restore-context in { node 'restore-context @ 0 = }
+          + { 1 } ?! {                                                   
+      271 +        node 'ctx-save-slot @ /ctx-slot                       
+      272 +        code4 [ocPushLocal ctx-slot ocRestoreContextPtr] conca
+          +t!                                                            
+      273 +      } { code4 } ?! /code5                                   
+      274 +                                                              
+      275 +      ; Step 6: Restore return pointer if this is the last non
+          +-tail call                                                    
+      276 +      node 'restore-return in { node 'restore-return @ 0 = } {
+          + 1 } ?! {                                                     
+      277 +        node 'rp-save-slot @ /rp-slot                         
+      278 +        code5 [ocPushLocal rp-slot ocRestoreReturnPtr] concat!
+      279 +      } { code5 } ?! /code6                                   
+      280 +                                                              
+      281 +      ; Step 7: Leave frame if this is the last term using the
+          + frame                                                        
+      282 +      node 'leave-frame in { node 'leave-frame @ 0 = } { 1 } ?
+          +! {                                                           
+      283 +        code6 [ocLeaveFrame max-slots] concat!                
+      284 +      } { code6 } ?! /code7                                   
+      285 +                                                              
+      286 +      addr code-map code7 new-need-enter                      
+      287      } ?!
+      288    } {
+      289      ; Other term type - skip
+
+● Write(/tmp/test_nontail.froth)
+  ⎿  Wrote 74 lines to ../../../../../tmp/test_nontail.froth
+      1 ; Test non-tail call codegen
+      2 ; A simple function that makes a non-tail call
+      3 ; Import compiler modules
+      4 "lib/preflight.froth" import
+      5 "lib/node.froth" import
+      6 "lib/boundness.froth" import
+      7 "lib/liveness.froth" import
+      8 "lib/slots.froth" import
+      9 "lib/bytecode.froth" import
+     … +64 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth /tmp/test_nontail.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Runtime error: import: /tmp/lib/preflight.froth: can't open input file: No 
+     such file or directory
+
+● Bash(timeout 10 ./bin/froth /tmp/test_nontail.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Runtime error: import: /tmp/lib/preflight.froth: can't open input file: No 
+     such file or directory
+
+● Write(tests/nontail.froth)
+  ⎿  Wrote 74 lines to tests/nontail.froth
+      1 ; Test non-tail call codegen
+      2 ; Import compiler modules
+      3 "../lib/preflight.froth" import
+      4 "../lib/node.froth" import
+      5 "../lib/boundness.froth" import
+      6 "../lib/liveness.froth" import
+      7 "../lib/slots.froth" import
+      8 "../lib/bytecode.froth" import
+      9 "../lib/ops.froth" import
+     … +64 lines (ctrl+o to expand)
+
+● Update(tests/nontail.froth)
+  ⎿  Added 3 lines, removed 9 lines                                      
+      60  
+      61  "Bytecode emitted from " print func-addr print " to " print nex
+          t-addr println!
+      62  
+      63 -; Dump bytecode manually                                       
+      64 -"Bytecode: [" print                                            
+      65 -func-addr /i                                                   
+      66 -{ i next-addr < } {                                            
+      67 -  i 0 > { " " print } { } ?!                                   
+      68 -  i peek print                                                 
+      69 -  i 1 + /i                                                     
+      70 -} while!                                                       
+      71 -"]" println!                                                   
+      63 +; Dump bytecode manually using foldl                           
+      64 +"Bytecode: " print                                             
+      65 +[ func-addr next-addr { dup! 0 < } { 1 - dup! peek swap! } unti
+         +l-loop! drop! ] writeln!                                       
+      66  
+      67  "Done!" println!
+
+● Update(tests/nontail.froth)
+  ⎿  Added 22 lines, removed 3 lines                                     
+      60  
+      61  "Bytecode emitted from " print func-addr print " to " print nex
+          t-addr println!
+      62  
+      63 -; Dump bytecode manually using foldl                           
+      64 -"Bytecode: " print                                             
+      65 -[ func-addr next-addr { dup! 0 < } { 1 - dup! peek swap! } unti
+         -l-loop! drop! ] writeln!                                       
+      63 +; Dump first 20 bytecode values                                
+      64 +"Bytecode: " println!                                          
+      65 +0 peek print " " print                                         
+      66 +1 peek print " " print                                         
+      67 +2 peek print " " print                                         
+      68 +3 peek print " " print                                         
+      69 +4 peek print " " print                                         
+      70 +5 peek print " " print                                         
+      71 +6 peek print " " print                                         
+      72 +7 peek print " " print                                         
+      73 +8 peek print " " print                                         
+      74 +9 peek print " " print                                         
+      75 +10 peek print " " print                                        
+      76 +11 peek print " " print                                        
+      77 +12 peek print " " print                                        
+      78 +13 peek print " " print                                        
+      79 +14 peek print " " print                                        
+      80 +15 peek print " " print                                        
+      81 +16 peek print " " print                                        
+      82 +17 peek print " " print                                        
+      83 +18 peek print " " print                                        
+      84 +19 peek println!                                               
+      85  
+      86  "Done!" println!
+
+● Bash(timeout 10 ./bin/froth tests/nontail.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Test 1: Non-tail call analysis...
+     Function: '{ f ! 1 + }
+     Apply node keys: [ 'is-bound 'is-live 'slot 'leave-frame ]
+     is-tail-call: "not set"
+     save-context: "not set"
+     save-return: "not set"
+     ctx-save-slot: "not set"
+     rp-save-slot: "not set"
+     restore-context: "not set"
+     … +4 lines (ctrl+o to see all)
+
+● I see two issues:
+
+  1. Body index 0 is the identifier f, not the apply !. The apply is at index 1.
+  2. I used and! in codegen but only imported or. Let me fix both:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      44   'ocEnterFrame 'ocLeaveFrame
+      45   'ocStartArray 'ocEndArray 'opClose 'opDeref 'ocTailCall 'ocCal
+          l
+      46   'ocSaveContextPtr 'ocRestoreContextPtr 'ocSaveReturnPtr 'ocRes
+          toreReturnPtr
+      47 - 'foldl 'reduce 'drop 'or] {                                   
+      47 + 'foldl 'reduce 'drop 'or 'and] {                              
+      48    /max-slots /outer-bound-slots /outer-free-vars /node /term /n
+          eed-enter /code /code-map /addr /seq-fn /codegen-fn
+      49    term isValue {
+      50      ; Quoted literal value - unwrap and check type
+
+● Update(tests/nontail.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      26  
+      27  "Function: " print func write nl!
+      28  
+      29 -; Check the apply node                                         
+      30 -node 'body @ 0 @ /apply-node                                   
+      29 +; Check the apply node (index 1: f is 0, ! is 1)               
+      30 +node 'body @ 1 @ /apply-node                                   
+      31  "Apply node keys: " print apply-node keys writeln!
+      32  
+      33  "is-tail-call: " print
+
+● Bash(timeout 10 ./bin/froth tests/nontail.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Test 1: Non-tail call analysis...
+     Function: '{ f ! 1 + }
+     Apply node keys: [ 'leave-frame 'restore-return 'save-return 'rp-save-slot ]
+     is-tail-call: "not set"
+     save-context: "not set"
+     save-return: 0
+     ctx-save-slot: "not set"
+     rp-save-slot: 0
+     restore-context: "not set"
+
+     … +4 lines (ctrl+o to see all)
+
+● The analysis is working - I see save-return: 0, rp-save-slot: 0, restore-return: 0. But codegen is failing. Let me add debugging:
+
+● Update(tests/nontail.froth)
+  ⎿  Added 3 lines                                                       
+      56  ; Test 2: Generate bytecode
+      57  "Test 2: Codegen..." println!
+      58  
+      59 +"max-slots: " print node 'max-slots in { node 'max-slots @ } { 
+         +"not set" } ?! writeln!                                        
+      60 +"needs-frame: " print node 'needs-frame in { node 'needs-frame 
+         +@ } { "not set" } ?! writeln!                                  
+      61 +                                                               
+      62  0 tree-empty! test-func node codegen! /func-addr /code-map /nex
+          t-addr
+      63  
+      64  "Bytecode emitted from " print func-addr print " to " print nex
+          t-addr println!
+
+● Bash(timeout 10 ./bin/froth tests/nontail.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Test 1: Non-tail call analysis...
+     Function: '{ f ! 1 + }
+     Apply node keys: [ 'leave-frame 'restore-return 'save-return 'rp-save-slot ]
+     is-tail-call: "not set"
+     save-context: "not set"
+     save-return: 0
+     ctx-save-slot: "not set"
+     rp-save-slot: 0
+     restore-context: "not set"
+
+     … +6 lines (ctrl+o to see all)
+
+● Let me add more specific debugging to find where the error occurs:
+
+● Update(tests/nontail.froth)
+  ⎿  Added 3 lines                                                       
+      58  
+      59  "max-slots: " print node 'max-slots in { node 'max-slots @ } { 
+          "not set" } ?! writeln!
+      60  "needs-frame: " print node 'needs-frame in { node 'needs-frame 
+          @ } { "not set" } ?! writeln!
+      61 +"free-vars: " print node 'free-vars in { node 'free-vars @ } { 
+         +"not set" } ?! writeln!                                        
+      62  
+      63 +"About to run codegen..." println!                             
+      64  0 tree-empty! test-func node codegen! /func-addr /code-map /nex
+          t-addr
+      65 +"Codegen completed!" println!                                  
+      66  
+      67  "Bytecode emitted from " print func-addr print " to " print nex
+          t-addr println!
+      68  
+
+● Bash(timeout 10 ./bin/froth tests/nontail.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Test 1: Non-tail call analysis...
+     Function: '{ f ! 1 + }
+     Apply node keys: [ 'leave-frame 'restore-return 'save-return 'rp-save-slot ]
+     is-tail-call: "not set"
+     save-context: "not set"
+     save-return: 0
+     ctx-save-slot: "not set"
+     rp-save-slot: 0
+     restore-context: "not set"
+
+     … +8 lines (ctrl+o to see all)
+
+● The error is inside codegen. Let me test with a simpler case first to isolate the issue:
+
+● Update(tests/nontail.froth)
+  ⎿  Added 10 lines, removed 3 lines                                     
+      53  
+      54  nl!
+      55  
+      56 -; Test 2: Generate bytecode                                    
+      57 -"Test 2: Codegen..." println!                                  
+      56 +; Test 2: Simple codegen (no calls)                            
+      57 +"Test 2: Simple codegen (no calls)..." println!                
+      58 +'{ 1 2 + } /simple-func                                        
+      59 +simple-func analyze! /simple-node /simple-f                    
+      60 +0 tree-empty! simple-f simple-node codegen! /simple-addr /simpl
+         +e-code-map /simple-next                                        
+      61 +"Simple bytecode from " print simple-addr print " to " print si
+         +mple-next println!                                             
+      62  
+      63 +; Test 3: Codegen with non-tail call                           
+      64 +"Test 3: Codegen with non-tail call..." println!               
+      65 +                                                               
+      66  "max-slots: " print node 'max-slots in { node 'max-slots @ } { 
+          "not set" } ?! writeln!
+      67  "needs-frame: " print node 'needs-frame in { node 'needs-frame 
+          @ } { "not set" } ?! writeln!
+      68  "free-vars: " print node 'free-vars in { node 'free-vars @ } { 
+          "not set" } ?! writeln!
+      69  
+      70  "About to run codegen..." println!
+      64 -0 tree-empty! test-func node codegen! /func-addr /code-map /nex
+         -t-addr                                                         
+      71 +simple-next simple-code-map test-func node codegen! /func-addr 
+         +/code-map /next-addr                                           
+      72  "Codegen completed!" println!
+      73  
+      74  "Bytecode emitted from " print func-addr print " to " print nex
+          t-addr println!
+
+● Bash(timeout 10 ./bin/froth tests/nontail.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Test 1: Non-tail call analysis...
+     Function: '{ f ! 1 + }
+     Apply node keys: [ 'leave-frame 'restore-return 'save-return 'rp-save-slot ]
+     is-tail-call: "not set"
+     save-context: "not set"
+     save-return: 0
+     ctx-save-slot: "not set"
+     rp-save-slot: 0
+     restore-context: "not set"
+
+     … +10 lines (ctrl+o to see all)
+
+● I see the bug! The binder order is wrong. In Froth, binders pop LIFO. Looking at:
+
+  code [ocEnterFrame max-slots] concat! 1  ; stack: [code', 1]
+  ...
+  ?! /code1 /new-need-enter  ; /code1 pops 1, /new-need-enter pops code' -- WRONG!
+
+  Should be /new-need-enter /code1:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      249          code [ocEnterFrame max-slots] concat! 1
+      250        } {
+      251          code need-enter
+      252 -      } ?! /code1 /new-need-enter                             
+      252 +      } ?! /new-need-enter /code1                             
+      253  
+      254        ; Step 2: Save context if this is the first call needing
+            it
+      255        needs-save-ctx {
+
+● Bash(timeout 10 ./bin/froth tests/nontail.froth 2>&1)
+  ⎿ Test 1: Non-tail call analysis...                                      
+    Function: '{ f ! 1 + }
+    Apply node keys: [ 'leave-frame 'restore-return 'save-return 'rp-save-s
+    … +21 lines (ctrl+o to expand)
+
+
+● The codegen completed and produced bytecode. Let me decode it to verify:
+
+  Address 7-24:
+   4 0    ; push-context 0 (push f)
+   8 1    ; enter-frame 1
+  13      ; save-return-ptr
+   7 0    ; pop-local 0 (save RP to slot 0)
+  12      ; call
+   6 0    ; push-local 0 (load saved RP)
+  14      ; restore-return-ptr
+   9 1    ; leave-frame 1
+   0 1    ; push-int 1
+   1 2    ; op + (opcode 2)
+   2      ; return
+
+  This looks correct! Now let's test actual execution. Let me update the test:
+
+● Update(tests/nontail.froth)
+  ⎿  Added 27 lines, removed 22 lines                                    
+       73  
+       74  "Bytecode emitted from " print func-addr print " to " print ne
+           xt-addr println!
+       75  
+       76 -; Dump first 20 bytecode values                               
+       77 -"Bytecode: " println!                                         
+       78 -0 peek print " " print                                        
+       79 -1 peek print " " print                                        
+       80 -2 peek print " " print                                        
+       81 -3 peek print " " print                                        
+       82 -4 peek print " " print                                        
+       83 -5 peek print " " print                                        
+       84 -6 peek print " " print                                        
+       85 -7 peek print " " print                                        
+       86 -8 peek print " " print                                        
+       87 -9 peek print " " print                                        
+       88 -10 peek print " " print                                       
+       89 -11 peek print " " print                                       
+       90 -12 peek print " " print                                       
+       91 -13 peek print " " print                                       
+       92 -14 peek print " " print                                       
+       93 -15 peek print " " print                                       
+       94 -16 peek print " " print                                       
+       95 -17 peek print " " print                                       
+       96 -18 peek print " " print                                       
+       97 -19 peek println!                                              
+       76 +; Dump first 25 bytecode values                               
+       77 +"Bytecode: " print                                            
+       78 +[ 0 25 { 1 - dup! 0 < } { dup! peek swap! } until-loop! drop! 
+          +] writeln!                                                    
+       79  
+       80 +; Test 4: Execute the compiled function                       
+       81 +"Test 4: Execute compiled bytecode..." println!               
+       82 +                                                              
+       83 +; Compile f (the function we're calling) to bytecode first    
+       84 +; f = { 10 }                                                  
+       85 +{ 10 } /f-closure                                             
+       86 +'{ 10 } analyze! /f-node /f-term                              
+       87 +next-addr code-map f-term f-node codegen! /f-func-addr /f-code
+          +-map /f-next-addr                                             
+       88 +"f compiled at: " print f-func-addr println!                  
+       89 +                                                              
+       90 +; Create bytecodeval for f: context array + address           
+       91 +; f has no free vars so context is empty                      
+       92 +[] f-func-addr close /f-bytecode                              
+       93 +                                                              
+       94 +; Now create bytecodeval for test-func                        
+       95 +; test-func needs f in its context (slot 0)                   
+       96 +[f-bytecode] func-addr close /test-bytecode                   
+       97 +                                                              
+       98 +; Execute it!                                                 
+       99 +"Executing test-bytecode..." println!                         
+      100 +test-bytecode! /result                                        
+      101 +"Result: " print result println!                              
+      102 +"Expected: 11 (f returns 10, then 10 + 1 = 11)" println!      
+      103 +                                                              
+      104  "Done!" println!
+
+● Bash(timeout 10 ./bin/froth tests/nontail.froth 2>&1)
+  ⎿ Test 1: Non-tail call analysis...                                      
+    Function: '{ f ! 1 + }
+    Apply node keys: [ 'leave-frame 'restore-return 'save-return 'rp-save-s
+    … +25 lines (ctrl+o to expand)
+
+
+● Excellent! The non-tail call works! Result is 11 as expected (f returns 10, then 10 + 1 = 11).
+
+● Let me test multiple non-tail calls:
+
+● Update(tests/nontail.froth)
+  ⎿  Added 39 lines                                                      
+      101  "Result: " print result println!
+      102  "Expected: 11 (f returns 10, then 10 + 1 = 11)" println!
+      103  
+      104 +; Test 5: Multiple non-tail calls                             
+      105 +"Test 5: Multiple non-tail calls..." println!                 
+      106 +                                                              
+      107 +; Function: { f! g! + }                                       
+      108 +; Both f! and g! are non-tail calls (followed by +)           
+      109 +'{ f! g! + } /multi-func                                      
+      110 +multi-func analyze! /multi-node /multi-f                      
+      111 +                                                              
+      112 +"Multi-func body nodes:" println!                             
+      113 +multi-node 'body @ /multi-body                                
+      114 +                                                              
+      115 +"Apply 1 (f!):" println!                                      
+      116 +multi-body 1 @ /apply1                                        
+      117 +"  save-return: " print apply1 'save-return in { apply1 'save-
+          +return @ } { "not set" } ?! writeln!                          
+      118 +"  restore-return: " print apply1 'restore-return in { apply1 
+          +'restore-return @ } { "not set" } ?! writeln!                 
+      119 +                                                              
+      120 +"Apply 2 (g!):" println!                                      
+      121 +multi-body 3 @ /apply2                                        
+      122 +"  save-return: " print apply2 'save-return in { apply2 'save-
+          +return @ } { "not set" } ?! writeln!                          
+      123 +"  restore-return: " print apply2 'restore-return in { apply2 
+          +'restore-return @ } { "not set" } ?! writeln!                 
+      124 +                                                              
+      125 +; Generate bytecode                                           
+      126 +f-next-addr f-code-map multi-f multi-node codegen! /multi-func
+          +-addr /multi-code-map /multi-next-addr                        
+      127 +"Multi-func bytecode from " print multi-func-addr print " to "
+          + print multi-next-addr println!                               
+      128 +                                                              
+      129 +; Compile g = { 5 }                                           
+      130 +'{ 5 } analyze! /g-node /g-term                               
+      131 +multi-next-addr multi-code-map g-term g-node codegen! /g-func-
+          +addr /g-code-map /g-next-addr                                 
+      132 +[] g-func-addr close /g-bytecode                              
+      133 +"g compiled at: " print g-func-addr println!                  
+      134 +                                                              
+      135 +; Create test bytecode: context = [f-bytecode, g-bytecode]    
+      136 +[f-bytecode g-bytecode] multi-func-addr close /multi-bytecode 
+      137 +                                                              
+      138 +"Executing multi-func..." println!                            
+      139 +multi-bytecode! /multi-result                                 
+      140 +"Result: " print multi-result println!                        
+      141 +"Expected: 15 (f returns 10, g returns 5, 10 + 5 = 15)" printl
+          +n!                                                            
+      142 +                                                              
+      143  "Done!" println!
+
+● Bash(timeout 10 ./bin/froth tests/nontail.froth 2>&1)
+  ⎿ Test 1: Non-tail call analysis...                                      
+    Function: '{ f ! 1 + }
+    Apply node keys: [ 'leave-frame 'restore-return 'save-return 'rp-save-s
+    … +38 lines (ctrl+o to expand)
+
+
+● Both tests pass:
+  - Single non-tail call: f! 1 + → 11 ✓
+  - Multiple non-tail calls: f! g! + → 15 ✓
+
+  The analysis correctly shows:
+  - Apply 1 (f!): save-return: 0 (first saves RP), restore-return: not set
+  - Apply 2 (g!): save-return: not set (reuses slot), restore-return: 0 (last restores RP)
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 1 line, removed 1 line                                        
+      46  
+      47  **Deduplication:** `ref` returns unique ID for each function te
+          rm. The `code-map` (tree23) maps these to bytecode addresses, e
+          nabling code sharing across closurevals with same body but diff
+          erent environments.
+      48  
+      49 -## Non-Tail Call Handling (TODO)                               
+      49 +## Non-Tail Call Handling                                      
+      50  
+      51  Non-tail calls require saving and restoring the context pointer
+           (CP) and return pointer (RP) across the call. The analysis pas
+          ses provide flags on apply nodes:
+      52  
+
+● Let me check FROTH_COMPILER.md to update the codegen documentation:
+
+● Search(pattern: "Supports:", path: "FROTH_COMPILER.md", output_mode:
+        "content")
+  ⎿  Found 11 lines (ctrl+o to expand)
+
+● Update(FROTH_COMPILER.md)
+  ⎿  File must be read first
+
+● Read(FROTH_COMPILER.md)
+  ⎿  Read 38 lines
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 1 line                                                        
+      329  - Dead binders (`pop-unused`)
+      330  - Quoted identifiers, binders, apply, and values
+      331  - Tail calls (`tail-call` instead of `return`)
+      332 +- Non-tail calls (`call` with register save/restore)          
+      333  
+      334  ```
+      335  ; Simple literals (no analysis needed)
+
+● Let me clean up the test file (it was for development):
+
+● Bash(rm /home/mark/Documents/projects/froth/tests/nontail.froth)
+  ⎿  (No content)
+
+● Bash(git status)
+  ⎿  On branch master                                      
+     Your branch is ahead of 'origin/master' by 10 commits.
+       (use "git push" to publish your local commits)
+     … +14 lines (ctrl+o to expand)
+
+● Implementation complete. Summary of changes:
+
+  lib/codegen.froth:
+  - Added instruction codes: ocCall, ocSaveContextPtr, ocRestoreContextPtr, ocSaveReturnPtr, ocRestoreReturnPtr
+  - Implemented non-tail call handling with 7 steps:
+    a. Enter frame if needed (haven't entered yet AND need to save registers)
+    b. Save context if first call needing it
+    c. Save return pointer if first non-tail call
+    d. Emit call
+    e. Restore context if needed
+    f. Restore return pointer if last non-tail call
+    g. Leave frame if last term using the frame
+
+  Documentation:
+  - FROTH_BYTECODE.md: Removed "(TODO)" from section title
+  - FROTH_COMPILER.md: Added "Non-tail calls (call with register save/restore)" to supported features
+
+  Tests passed:
+  - Single non-tail call: { f! 1 + } → 11 (f returns 10, +1 = 11)
+  - Multiple non-tail calls: { f! g! + } → 15 (10 + 5 = 15)
+
+  The bytecode compiler now fully supports function calls, both tail and non-tail.
+
+> add a regression test for this 
+
+● Bash(ls tests/*.froth | head -10)
+  ⎿  tests/add.froth              
+     tests/alist.froth
+     tests/apply_op.froth
+     … +7 lines (ctrl+o to expand)
+
+● Read(tests/boundness.froth)
+  ⎿  Read 57 lines
+
+● Bash(ls tests/*.expected | head -10)
+  ⎿  tests/add.expected           
+     tests/alist.expected
+     tests/apply_op.expected
+     … +7 lines (ctrl+o to expand)
+
+● Bash(ls tests/*codegen* tests/*bytecode* 2>/dev/null || echo "No
+      codegen/bytecode tests found")
+  ⎿  tests/codegen.expected         
+     tests/codegen.froth
+     No codegen/bytecode tests found
+
+● Read(tests/codegen.froth)
+  ⎿  Read 293 lines
+
+● I see there's already a Test 19 that was skipped. Let me check the expected output and update the test:
+
+● Bash(grep -A 10 "non-tail" tests/codegen.expected)
+  ⎿  No matches found
+
+● Bash(cat tests/codegen.expected)
+  ⎿  func-addr=0 next-addr=7       
+     bytecode: 0 1 0 2 0 3 2
+     func-addr2=7 next-addr2=12
+     … +14 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  func-addr=0 next-addr=7       
+     bytecode: 0 1 0 2 0 3 2
+     func-addr2=7 next-addr2=12
+     … +39 lines (ctrl+o to expand)
+
+● The test shows the non-tail call is now generating bytecode, but the length check fails. Let me update Test 19 and add execution tests:
+
+● Update(tests/codegen.froth)
+  ⎿  Added 17 lines, removed 6 lines                                     
+      238  func18-addr 2 + peek 17 = { "tail-call ok" } { "ERROR: expecte
+           d tail-call" } ?! println!
+      239  next-addr18 func18-addr - 3 = { "length ok" } { "ERROR: expect
+           ed length 3" } ?! println!
+      240  
+      241 -; Test 19: Non-tail call (middle of function) - apply skipped 
+          -for now                                                       
+      242 -; { f! 1 } should emit: (nothing for f!), push-int 1, return  
+      241 +; Test 19: Non-tail call (middle of function)                 
+      242 +; { f! 1 } should emit:                                       
+      243 +;   push-context 0 (f)                                        
+      244 +;   enter-frame 1                                             
+      245 +;   save-return-ptr                                           
+      246 +;   pop-local 0                                               
+      247 +;   call                                                      
+      248 +;   push-local 0                                              
+      249 +;   restore-return-ptr                                        
+      250 +;   leave-frame 1                                             
+      251 +;   push-int 1                                                
+      252 +;   return                                                    
+      253  '{ f! 1 } boundness! liveness! slots! /func19-node /func19-ter
+           m
+      254  next-addr18 tree-empty! func19-term func19-node codegen!
+      255  /func19-addr /code-map19 /next-addr19
+     ...
+      258  func19-addr next-addr19 dump-bytecode!
+      259  nl!
+      260  
+      251 -; Currently emits: push-context 0, push-int 1, return (f! skip
+          -ped since non-tail not implemented)                           
+      252 -; push-context=4, push-int=0, return=2                        
+      253 -; Note: once non-tail calls are implemented, this will change 
+      254 -next-addr19 func19-addr - 5 = { "length ok (5 with push-contex
+          -t)" } { "ERROR" } ?! println!                                 
+      261 +; Verify key instructions are present                         
+      262 +; push-context=4, call=12, save-return-ptr=13, restore-return-
+          +ptr=14                                                        
+      263 +func19-addr peek 4 = { "push-context ok" } { "ERROR: expected 
+          +push-context" } ?! println!                                   
+      264 +; call is at offset 8 (after push-context 0, enter-frame 1, sa
+          +ve-return-ptr, pop-local 0)                                   
+      265 +func19-addr 8 + peek 12 = { "call ok" } { "ERROR: expected cal
+          +l" } ?! println!                                              
+      266  
+      267  ; Test 20: Tail call execution test
+      268  ; Use the existing bytecode from earlier tests instead of code
+           gen
+
+● Now let me add execution tests for non-tail calls after Test 20:
+
+● Update(tests/codegen.froth)
+  ⎿  Added 55 lines                                                      
+      300  "tail call execution test: " print
+      301  outer-bv! println!
+      302  
+      303 +; Test 21: Non-tail call execution                            
+      304 +; Compile a simple function that returns 10                   
+      305 +'{ 10 } boundness! liveness! slots! /ret10-node /ret10-term   
+      306 +after-outer tree-empty! ret10-term ret10-node codegen!        
+      307 +/ret10-addr /ret10-code-map /after-ret10                      
+      308 +[] ret10-addr close /ret10-bv                                 
+      309 +                                                              
+      310 +; Compile { f! 1 + } where f is in context slot 0             
+      311 +'{ f! 1 + } boundness! liveness! slots! /func21-node /func21-t
+          +erm                                                           
+      312 +after-ret10 ret10-code-map func21-term func21-node codegen!   
+      313 +/func21-addr /func21-code-map /after-func21                   
+      314 +                                                              
+      315 +; Create bytecodeval with context containing ret10-bv         
+      316 +[ret10-bv] func21-addr close /func21-bv                       
+      317 +                                                              
+      318 +"non-tail call execution: " print                             
+      319 +func21-bv! println!                                           
+      320 +; Expected: 11 (f returns 10, then 10 + 1 = 11)               
+      321 +                                                              
+      322 +; Test 22: Multiple non-tail calls                            
+      323 +; Compile { 5 }                                               
+      324 +'{ 5 } boundness! liveness! slots! /ret5-node /ret5-term      
+      325 +after-func21 func21-code-map ret5-term ret5-node codegen!     
+      326 +/ret5-addr /ret5-code-map /after-ret5                         
+      327 +[] ret5-addr close /ret5-bv                                   
+      328 +                                                              
+      329 +; Compile { f! g! + } where f and g are in context            
+      330 +'{ f! g! + } boundness! liveness! slots! /func22-node /func22-
+          +term                                                          
+      331 +after-ret5 ret5-code-map func22-term func22-node codegen!     
+      332 +/func22-addr /func22-code-map /after-func22                   
+      333 +                                                              
+      334 +; Create bytecodeval with context [ret10-bv, ret5-bv]         
+      335 +[ret10-bv ret5-bv] func22-addr close /func22-bv               
+      336 +                                                              
+      337 +"multiple non-tail calls: " print                             
+      338 +func22-bv! println!                                           
+      339 +; Expected: 15 (f returns 10, g returns 5, 10 + 5 = 15)       
+      340 +                                                              
+      341 +; Test 23: Non-tail call with bound variable                  
+      342 +; Compile { /x f! x + } where f returns 100                   
+      343 +'{ 100 } boundness! liveness! slots! /ret100-node /ret100-term
+      344 +after-func22 func22-code-map ret100-term ret100-node codegen! 
+      345 +/ret100-addr /ret100-code-map /after-ret100                   
+      346 +[] ret100-addr close /ret100-bv                               
+      347 +                                                              
+      348 +'{ /x f! x + } boundness! liveness! slots! /func23-node /func2
+          +3-term                                                        
+      349 +after-ret100 ret100-code-map func23-term func23-node codegen! 
+      350 +/func23-addr /func23-code-map /after-func23                   
+      351 +                                                              
+      352 +[ret100-bv] func23-addr close /func23-bv                      
+      353 +                                                              
+      354 +"non-tail with bound var: " print                             
+      355 +7 func23-bv! println!                                         
+      356 +; Expected: 107 (f returns 100, x=7, 100 + 7 = 107)           
+      357 +                                                              
+      358  "done" println!
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  func-addr=0 next-addr=7       
+     bytecode: 0 1 0 2 0 3 2
+     func-addr2=7 next-addr2=12
+     … +43 lines (ctrl+o to expand)
+
+● The execution tests pass! But the offset for call is wrong (it's at offset 7, not 8). Let me fix that:
+
+● Update(tests/codegen.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      261  ; Verify key instructions are present
+      262  ; push-context=4, call=12, save-return-ptr=13, restore-return-
+           ptr=14
+      263  func19-addr peek 4 = { "push-context ok" } { "ERROR: expected 
+           push-context" } ?! println!
+      264 -; call is at offset 8 (after push-context 0, enter-frame 1, sa
+          -ve-return-ptr, pop-local 0)                                   
+      265 -func19-addr 8 + peek 12 = { "call ok" } { "ERROR: expected cal
+          -l" } ?! println!                                              
+      264 +; call is at offset 7 (after push-context 0, enter-frame 1, sa
+          +ve-return-ptr, pop-local 0)                                   
+      265 +func19-addr 7 + peek 12 = { "call ok" } { "ERROR: expected cal
+          +l" } ?! println!                                              
+      266  
+      267  ; Test 20: Tail call execution test
+      268  ; Use the existing bytecode from earlier tests instead of code
+           gen
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  func-addr=0 next-addr=7       
+     bytecode: 0 1 0 2 0 3 2
+     func-addr2=7 next-addr2=12
+     … +43 lines (ctrl+o to expand)
+
+● All tests pass. Now let me update the expected output:
+
+● Bash(./bin/froth tests/codegen.froth > tests/codegen.expected 2>&1)
+  ⎿  (No content)
+
+● Bash(tail -20 tests/codegen.expected)
+  ⎿  generator bound var test: [ 10 11 12 ]
+     generator free var test: [ 7 8 ]
+     generator with nested func test: 42
+     … +17 lines (ctrl+o to expand)
+
+● Bash(git status)
+  ⎿  On branch master                                      
+     Your branch is ahead of 'origin/master' by 10 commits.
+       (use "git push" to publish your local commits)
+     … +17 lines (ctrl+o to expand)
+
+● Let me run the full test suite to make sure everything passes:
+
+● Bash(./run_tests.sh 2>&1 | tail -20)
+  ⎿ [ $ 1 'is-used : . 'slot : ] 0                                         
+    [ $ 0 'is-used : 0 'slot : $ 0 'is-used : 1 'slot : $ 0 'is-bound : 1 '
+    is-live : 1 'leave-frame : 0 'slot : $ 0 'is-bound : 1 'is-live : 0 'le
+    … +54 lines (ctrl+o to expand)
+
+
+
+● Bash(./run_tests.sh 2>&1 | grep -E "(PASS|FAIL|passed|failed)" | tail -5)
+  ⎿  PASS: type_error             
+     PASS: type_tests
+     PASS: vm
+     … +2 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | grep FAIL)
+  ⎿  FAIL: slots
+
+● Bash(./bin/froth tests/slots.froth > /tmp/slots_output.txt 2>&1; diff
+      tests/slots.expected /tmp/slots_output.txt)
+  ⎿ 17a18,21                                                               
+    > max-slots=1 save-rp=0 rp-slot=0 restore-rp=0
+    > max-slots=2 save-ctx=0 ctx-slot=0 save-rp=0 rp-slot=1 restore-ctx=0 r
+    … +4 lines (ctrl+o to expand)
+
+
+● Bash(tail -20 tests/slots.froth)
+  ⎿    nl!                         
+     } /test-apply-slots
+     … +17 lines (ctrl+o to expand)
+
+● The slots test has new output from previously added call tests. Let me update the expected file:
+
+● Bash(./bin/froth tests/slots.froth > tests/slots.expected 2>&1)
+  ⎿  (No content)
+
+● Bash(./run_tests.sh 2>&1 | grep -E "(passed|failed)")
+  ⎿  Results: 66 passed, 0 failed
+
+● All 66 tests pass. Let me check the final git status:
+
+● Bash(git status)
+  ⎿  On branch master                                      
+     Your branch is ahead of 'origin/master' by 10 commits.
+       (use "git push" to publish your local commits)
+     … +18 lines (ctrl+o to expand)
+
+● Done. All 66 tests pass.
+
+  Files modified:
+  - lib/codegen.froth - Non-tail call implementation
+  - FROTH_BYTECODE.md - Removed "(TODO)" from section title
+  - FROTH_COMPILER.md - Added non-tail calls to supported features
+  - tests/codegen.froth - Added Tests 21-23 for non-tail call execution
+  - tests/codegen.expected - Updated expected output
+  - tests/slots.expected - Updated expected output
+
+  New regression tests:
+  - Test 19: Non-tail call bytecode verification (push-context, call)
+  - Test 21: Single non-tail call execution (f! 1 + → 11)
+  - Test 22: Multiple non-tail calls (f! g! + → 15)
+  - Test 23: Non-tail call with bound variable (/x f! x + → 107)
+
+  The tests are ready to be staged when you want to commit.
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                      
+     Your branch is ahead of 'origin/master' by 10 commits.
+       (use "git push" to publish your local commits)
+     … +14 lines (ctrl+o to expand)
+
+● Bash(git diff --staged --stat)
+  ⎿   FROTH_BYTECODE.md      | 35 +++++++++++++++-------                
+      FROTH_COMPILER.md      |  1 +
+      lib/codegen.froth      | 59 +++++++++++++++++++++++++++++++++++---
+     … +5 lines (ctrl+o to expand)
+
+● Bash(git diff --stat)
+  ⎿  (No content)
+
+● Bash(git log --oneline -5)
+  ⎿  53b9ea0 add transcripts 61 and 62                                    
+     4637645 Remove duplicate codegen documentation from FROTH_BYTECODE.md
+     09c9b56 Add control flow library with while, until, and times loops
+     … +2 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Implement non-tail call handling in bytecode codegen…)
+  ⎿  [master 0aa08f2] Implement non-tail call handling in bytecode codegen
+      6 files changed, 187 insertions(+), 21 deletions(-)
+
+● Bash(git status)
+  ⎿  On branch master                                      
+     Your branch is ahead of 'origin/master' by 11 commits.
+       (use "git push" to publish your local commits)
+     … +8 lines (ctrl+o to expand)
+
+● Committed 0aa08f2:
+  Implement non-tail call handling in bytecode codegen
+
+  Add support for non-tail calls with register save/restore:
+  - Save/restore context pointer across calls that need it
+  - Save/restore return pointer for non-tail calls
+  - Enter frame before first register save if needed
+  - Leave frame after last term using the frame
+
+  Add regression tests for non-tail call execution:
+  - Single non-tail call: f! 1 + → 11
+  - Multiple non-tail calls: f! g! + → 15
+  - Non-tail call with bound variable: /x f! x + → 107
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 171k/200k tokens (86%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 17.1k tokens (8.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 91.2k tokens (45.6%)
+     ⛁ ⛁ ⛁ ⛀ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 29k (14.4%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 118 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.5k tokens
+     └ FROTH_COMPILER.md: 4.6k tokens
+     └ FROTH_BYTECODE.md: 813 tokens
+     └ FROTH_GUIDE.md: 2.3k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> The froth executable seems to look for stdlib in a path relative to the 
+input file, however it should look in a path relative to the executable. Can
+ you see what the problem is? 
+
+● Search(pattern: "stdlib", path: "src")
+  ⎿  Found 1 file (ctrl+o to expand)
+
+● Search(pattern: "stdlib", path: "src/froth.m", output_mode: "content")
+  ⎿  Found 155 lines (ctrl+o to expand)
+
+● I see the issue. Looking at get_stdlib_path:
+
+  get_stdlib_path(StdlibPath, !IO) :-
+      io.progname("froth", ProgName, !IO),
+      ExeDir = dir.dirname(ProgName),
+      BaseDir = dir.dirname(ExeDir),
+      StdlibPath = dir.make_path_name(BaseDir,
+                       dir.make_path_name("lib", "stdlib.froth")).
+
+  The problem is io.progname returns the program name as invoked (e.g., just "froth" if it's in PATH), not the absolute path to the executable. So dir.dirname("froth") returns "." (current directory), making stdlib path relative to wherever you run from.
+
+  The fix is to resolve the executable's real path. On Linux, we can read /proc/self/exe:
+
+● Read(src/froth.m)
+  ⎿  Read 20 lines
+
+● Update(src/froth.m)
+  ⎿  Added 10 lines, removed 2 lines                                     
+      139  :- pred get_stdlib_path(string::out, io::di, io::uo) is det.
+      140  
+      141  get_stdlib_path(StdlibPath, !IO) :-
+      142 -    io.progname("froth", ProgName, !IO),                      
+      143 -    ExeDir = dir.dirname(ProgName),                           
+      142 +    % Get executable path - try /proc/self/exe first (Linux), 
+          +fall back to progname                                         
+      143 +    io.file.read_symbolic_link("/proc/self/exe", LinkResult, !
+          +IO),                                                          
+      144 +    (                                                         
+      145 +        LinkResult = ok(ExePath),                             
+      146 +        ExeDir = dir.dirname(ExePath)                         
+      147 +    ;                                                         
+      148 +        LinkResult = error(_),                                
+      149 +        io.progname("froth", ProgName, !IO),                  
+      150 +        ExeDir = dir.dirname(ProgName)                        
+      151 +    ),                                                        
+      152      BaseDir = dir.dirname(ExeDir),
+      153      StdlibPath = dir.make_path_name(BaseDir,
+      154                       dir.make_path_name("lib", "stdlib.froth")
+           ).
+
+● Bash(make froth 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/froth.int3
+     Making Mercury/ints/froth.int
+     Making Mercury/cs/froth.c
+     froth.m:143: In clause for predicate `get_stdlib_path'/3:
+     froth.m:143:   error: call to undefined predicate
+     froth.m:143:   `io.file.read_symbolic_link'/4.
+     froth.m:143:   (Did you mean `read_symlink'?)
+     ** Error making `Mercury/cs/froth.c'.
+     … +1 line (ctrl+o to see all)
+
+● Update(src/froth.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      140  
+      141  get_stdlib_path(StdlibPath, !IO) :-
+      142      % Get executable path - try /proc/self/exe first (Linux), 
+           fall back to progname
+      143 -    io.file.read_symbolic_link("/proc/self/exe", LinkResult, !
+          -IO),                                                          
+      143 +    io.file.read_symlink("/proc/self/exe", LinkResult, !IO),  
+      144      (
+      145          LinkResult = ok(ExePath),
+      146          ExeDir = dir.dirname(ExePath)
+
+● Bash(make froth 2>&1)
+  ⎿  cd src && mmc --make froth     
+     Making Mercury/int3s/froth.int3
+     Making Mercury/ints/froth.int
+     … +4 lines (ctrl+o to expand)
+
+● Bash(cd /tmp && /home/mark/Documents/projects/froth/bin/froth -e '1 2 +
+      println!')
+  ⎿  3
+
+● Bash(echo '"hello world" println!' > test.froth &&
+      /home/mark/Documents/projects/froth/bin/froth test.froth)
+  ⎿  Error: Exit code 1
+     1:22: invalid token: '\'
+
+● Bash(echo '"hello" println!' > test.froth &&
+      /home/mark/Documents/projects/froth/bin/froth test.froth)
+  ⎿  Error: Exit code 1
+     1:16: invalid token: '\'
+
+● Write(/tmp/test_stdlib.froth)
+  ⎿  Error writing file
+
+● Bash(cat > /tmp/test_stdlib.froth << 'EOF'
+      "hello" println!…)
+  ⎿  (No content)
+
+● Bash(/home/mark/Documents/projects/froth/bin/froth test_stdlib.froth)
+  ⎿  hello
+     3
+
+● Bash(./run_tests.sh 2>&1 | grep -E "(passed|failed)")
+  ⎿  No matches found
+
+● Bash(./run_tests.sh 2>&1 | tail -3)
+  ⎿  /bin/bash: line 1: ./run_tests.sh: No such file or directory
+
+● Bash(cd /home/mark/Documents/projects/froth && ./run_tests.sh 2>&1 | tail -3)
+  ⎿  PASS: write                 
+
+     Results: 66 passed, 0 failed
+
+● Fixed. The issue was io.progname returns the program name as invoked (e.g., just "froth"), not the absolute path.
+
+  The fix: Read /proc/self/exe symlink to get the real executable path on Linux, falling back to progname if that fails:
+
+  get_stdlib_path(StdlibPath, !IO) :-
+      % Get executable path - try /proc/self/exe first (Linux), fall back to progname
+      io.file.read_symlink("/proc/self/exe", LinkResult, !IO),
+      (
+          LinkResult = ok(ExePath),
+          ExeDir = dir.dirname(ExePath)
+      ;
+          LinkResult = error(_),
+          io.progname("froth", ProgName, !IO),
+          ExeDir = dir.dirname(ProgName)
+      ),
+      ...
+
+  Tested from /tmp:
+  $ /home/mark/Documents/projects/froth/bin/froth -e '1 2 + println!'
+  3
+
+  All 66 tests pass.
+
+> If I run froth from the project directory with an input like 
+/tmp/test_nontail.froth then it looks for stdlib in /tmp/lib, which is 
+wrong. 
+
+● Let me test that scenario:
+
+● Bash(./bin/froth /tmp/test_stdlib.froth 2>&1)
+  ⎿  hello
+     3
+
+● That works for me. Let me verify the symlink is being read correctly:
+
+● Bash(ls -la /proc/self/exe)
+  ⎿ Tool use rejected with user message: It worked, thanks. The problem was that
+     /tmp/test_nontail.froth contained a relative link
+
+● The fix works. The relative import in /tmp/test_nontail.froth was a separate issue - imports inside user files are resolved relative to that file, which is the expected behavior.
+
+  The stdlib path is now correctly resolved relative to the executable location via /proc/self/exe.
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                      
+     Your branch is ahead of 'origin/master' by 11 commits.
+       (use "git push" to publish your local commits)
+     … +9 lines (ctrl+o to expand)
+
+● Bash(git diff src/froth.m)
+  ⎿  (No content)
+
+● Bash(git diff --staged src/froth.m)
+  ⎿  diff --git a/src/froth.m b/src/froth.m
+     index b586df4..ea1fc2e 100644
+     --- a/src/froth.m
+     … +21 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Fix stdlib path resolution to use executable location…)
+  ⎿  [master eeef300] Fix stdlib path resolution to use executable location
+      1 file changed, 10 insertions(+), 2 deletions(-)
+
+● Bash(git log --oneline -1)
+  ⎿  eeef300 Fix stdlib path resolution to use executable location
+
+● Committed eeef300: Fix stdlib path resolution to use executable location
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 183k/200k tokens (91%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 17.1k tokens (8.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 102.6k tokens (51.3%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛶   ⛶ Free space: 17k (8.7%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 118 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.5k tokens
+     └ FROTH_COMPILER.md: 4.6k tokens
+     └ FROTH_BYTECODE.md: 813 tokens
+     └ FROTH_GUIDE.md: 2.3k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
