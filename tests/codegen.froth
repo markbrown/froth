@@ -221,4 +221,72 @@ next-addr16 tree-empty! func17-term func17-node codegen!
 [] func17-addr close ! /r3 /r2 /r1
 r1 write " " print r2 write " " print r3 writeln!
 
+; Test 18: Tail call
+; Function { f! } should emit: push-context 0 (f), tail-call (17)
+; No return instruction since we end with tail-call
+'{ f! } boundness! liveness! slots! /func18-node /func18-term
+next-addr17 tree-empty! func18-term func18-node codegen!
+/func18-addr /code-map18 /next-addr18
+
+"tail call bytecode: " print
+func18-addr next-addr18 dump-bytecode!
+nl!
+
+; Verify: push-context=4, slot=0, tail-call=17
+func18-addr peek 4 = { "push-context ok" } { "ERROR: expected push-context" } ?! println!
+func18-addr 1 + peek 0 = { "slot 0 ok" } { "ERROR: expected slot 0" } ?! println!
+func18-addr 2 + peek 17 = { "tail-call ok" } { "ERROR: expected tail-call" } ?! println!
+next-addr18 func18-addr - 3 = { "length ok" } { "ERROR: expected length 3" } ?! println!
+
+; Test 19: Non-tail call (middle of function) - apply skipped for now
+; { f! 1 } should emit: (nothing for f!), push-int 1, return
+'{ f! 1 } boundness! liveness! slots! /func19-node /func19-term
+next-addr18 tree-empty! func19-term func19-node codegen!
+/func19-addr /code-map19 /next-addr19
+
+"non-tail call bytecode: " print
+func19-addr next-addr19 dump-bytecode!
+nl!
+
+; Currently emits: push-context 0, push-int 1, return (f! skipped since non-tail not implemented)
+; push-context=4, push-int=0, return=2
+; Note: once non-tail calls are implemented, this will change
+next-addr19 func19-addr - 5 = { "length ok (5 with push-context)" } { "ERROR" } ?! println!
+
+; Test 20: Tail call execution test
+; Use the existing bytecode from earlier tests instead of codegen
+; Test 5 already has a simple function that returns 30 when given context [10 20]
+
+; Create a function that just returns 42 using literal bytecode
+instruction-table 'push-int @ /ocPushInt
+instruction-table 'return @ /ocReturn
+instruction-table 'push-context @ /ocPushContext
+instruction-table 'tail-call @ /ocTailCall
+
+; Emit inner function: push-int 42, return
+[ocPushInt 42 ocReturn] next-addr19 emit-all-at! /after-inner
+next-addr19 /inner-addr
+
+; Emit outer function: push-context 0, tail-call (get closure from context and tail-call it)
+[ocPushContext 0 ocTailCall] after-inner emit-all-at! /after-outer
+after-inner /outer-addr
+
+"inner-addr=" print inner-addr print " outer-addr=" print outer-addr println!
+
+; Test inner directly
+"inner direct call: " print
+[] inner-addr close ! println!
+
+; Now test via binding (close creates bytecodeval, bind it, then call)
+[] inner-addr close /inner-bv
+"inner-bv call: " print
+inner-bv! println!
+
+; Create bytecodeval for outer (captures inner as context slot 0)
+[inner-bv] outer-addr close /outer-bv
+
+; Execute outer - should tail-call inner and return 42
+"tail call execution test: " print
+outer-bv! println!
+
 "done" println!
