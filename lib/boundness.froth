@@ -8,26 +8,27 @@
 ; For closures: recurse with fresh bound set (new scope)
 ; For generators: recurse with current bound set (bindings don't escape)
 ; acc-free accumulates free variables with context slot numbers
-['foldl 'new-identifier-node 'new-binder-node 'new-function-node 'new-generator-node 'new-quote-node 'new-node] { /term-fn /seq-fn /acc-free /slot /bound /term
+['foldl 'make-node 'new-node] { /term-fn /seq-fn /acc-free /slot /bound /term
   term isIdent {
     ; Identifier: check if bound
     bound term in {
       ; Bound identifier: is-bound=0 (default)
-      new-identifier-node! $ bound slot acc-free
+      term make-node! $ bound slot acc-free
     } {
       ; Not bound - check if it's an operator (no slot needed)
       term isOperator {
         ; Operator: looked up in operator-table, not captured
-        new-node! $ bound slot acc-free
+        ; Use new-node (not make-node) to avoid is-bound key
+        term new-node! $ bound slot acc-free
       } {
         ; Free identifier - check if already seen
         acc-free term in {
           ; Already seen free var
-          new-identifier-node! 1 'is-bound : acc-free term @ 'slot :
+          term make-node! 1 'is-bound : acc-free term @ 'slot :
           $ bound slot acc-free
         } {
           ; New free var: assign slot
-          new-identifier-node! 1 'is-bound : slot 'slot :
+          term make-node! 1 'is-bound : slot 'slot :
           $ bound slot 1 + acc-free slot term :
         } ?!
       } ?!
@@ -37,13 +38,13 @@
     ; Binder: add to bound set with nil value
     term intern idToIdent /ident
     bound . ident : /new-bound
-    new-binder-node! $ . ident : new-bound slot acc-free
+    term make-node! $ . ident : new-bound slot acc-free
   } {
   term isFunc {
     ; Closure: new scope (fresh bound set, fresh slots starting at 0, fresh acc-free)
     term $ 0 0 $ seq-fn term-fn seq-fn! /inner-body /inner-bound-set /inner-free-set
     ; Build result map with body, free-vars, bound-set
-    new-function-node! inner-body 'body : inner-free-set 'free-vars : inner-bound-set 'bound-set : /result-map
+    term make-node! inner-body 'body : inner-free-set 'free-vars : inner-bound-set 'bound-set : /result-map
     ; Update outer's acc-free with inner's free variables that aren't bound in outer
     slot acc-free inner-free-set keys { /v /acc /s
       bound v in {
@@ -63,7 +64,7 @@
     ; Fresh slots for inner scope (generators have their own closure context)
     term bound 0 0 $ seq-fn term-fn seq-fn! /inner-body /inner-bound-set /inner-free-set
     ; Build result map with body, free-vars, bound-set
-    new-generator-node! inner-body 'body : inner-free-set 'free-vars : inner-bound-set 'bound-set : /result-map
+    term make-node! inner-body 'body : inner-free-set 'free-vars : inner-bound-set 'bound-set : /result-map
     ; Generator free-vars contribute to outer with slot assignment
     slot acc-free inner-free-set keys { /v /acc /s
       acc v in {
@@ -76,10 +77,10 @@
   } {
   term isQuote {
     ; Quoted term
-    new-quote-node! $ bound slot acc-free
+    term make-node! $ bound slot acc-free
   } {
     ; Literal, apply, value
-    new-node! $ bound slot acc-free
+    term make-node! $ bound slot acc-free
   } ?! } ?! } ?! } ?! } ?!
 } def-fn! /boundness-term-impl
 
@@ -103,17 +104,18 @@
   } ?!
 } def-fn! /boundness-seq-impl
 
-; boundness: (func -- func function-node)
+; boundness: (func -- func-node)
 ; Analyze a function for boundness of each term.
-; Returns the function and a function-node with:
+; Returns a function-node with:
+;   'term: the original function
 ;   'body: array of node maps parallel to function body
 ;   'free-vars: map from identifiers to context slot numbers
 ;   'bound-set: map from identifiers to nil (marking presence)
 ; Each node map contains keys appropriate to the term type (see node.froth).
-['boundness-seq-impl 'boundness-term-impl 'new-function-node] { /func
+['boundness-seq-impl 'boundness-term-impl 'make-node] { /func
   func $ 0 0 $ boundness-seq-impl boundness-term-impl boundness-seq-impl!
   /body /bound-set /free-set
-  func new-function-node! body 'body : free-set 'free-vars : bound-set 'bound-set :
+  func make-node! body 'body : free-set 'free-vars : bound-set 'bound-set :
 } def-fn! /boundness
 
 ; Remove impl functions from the environment

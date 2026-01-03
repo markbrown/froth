@@ -18,7 +18,8 @@ This document describes the compiler infrastructure for Froth, including bytecod
 | `new-generator-node` | node | Create generator node with defaults |
 | `new-identifier-node` | node | Create identifier node with defaults |
 | `new-literal-node` | node | Create literal node with defaults |
-| `new-node` | node | Create empty base node |
+| `new-node` | node | Create base node with term |
+| `make-node` | node | Create appropriate node type for term |
 | `new-quote-node` | node | Create quote node with defaults |
 | `preflight` | preflight | Check for env/import/applyOperator usage |
 | `slots` | slots | Allocate frame slots for function |
@@ -129,19 +130,21 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `new-node` | `( -- node )` | Base constructor returning empty map |
-| `new-literal-node` | `( -- node )` | Create literal node (numbers, strings) |
-| `new-quote-node` | `( -- node )` | Create quote node ('symbol, 'expr) |
-| `new-identifier-node` | `( -- node )` | Create identifier node |
-| `new-binder-node` | `( -- node )` | Create binder node (/name) |
-| `new-apply-node` | `( -- node )` | Create apply node (!) |
-| `new-function-node` | `( -- node )` | Create function node ({ }) |
-| `new-generator-node` | `( -- node )` | Create generator node ([ ]) |
+| `new-node` | `(term -- node)` | Base constructor storing the term |
+| `new-literal-node` | `(term -- node)` | Create literal node (numbers, strings) |
+| `new-quote-node` | `(term -- node)` | Create quote node ('symbol, 'expr) |
+| `new-identifier-node` | `(term -- node)` | Create identifier node |
+| `new-binder-node` | `(term -- node)` | Create binder node (/name) |
+| `new-apply-node` | `(term -- node)` | Create apply node (!) |
+| `new-function-node` | `(term -- node)` | Create function node ({ }) |
+| `new-generator-node` | `(term -- node)` | Create generator node ([ ]) |
+| `make-node` | `(term -- node)` | Create appropriate node type based on term |
 
 **Value conventions:**
+- All nodes have `'term` key storing the original syntax term
 - Keys use 0 for "yes/true" and 1 for "no/false" (Froth convention)
 - Defaults are set to the common case; passes only write when different
-- `'body` arrays are parallel to the function body terms
+- `'body` arrays contain child nodes (one per term)
 
 **Identifier node keys:**
 - `'is-bound`: 0 = bound variable, 1 = free variable
@@ -184,9 +187,9 @@ Boundness analysis for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `boundness` | `( func -- func function-node )` | Analyze variable binding in a function |
+| `boundness` | `( func -- func-node )` | Analyze variable binding in a function |
 
-Analyzes a quoted function and returns the function plus a function-node. The map contains:
+Analyzes a quoted function and returns a function-node. The node contains:
 - `'body`: array of node maps, one per term in the function body
 - `'free-vars`: map from identifiers to context slot numbers
 - `'bound-set`: map from identifiers to nil (marking presence)
@@ -196,20 +199,20 @@ Each node map contains keys appropriate to the term type (see Node module).
 Context slot numbers are assigned in order of first occurrence (0, 1, 2, ...).
 
 ```
-'{x} boundness! /bnd-map /func
+'{x} boundness! /bnd-map
 bnd-map 'free-vars @           ; $ 0 'x : (x gets slot 0)
 bnd-map 'body @ 0 @            ; identifier-node with is-bound=1 (free)
 
-'{/x x} boundness! /bnd-map /func
+'{/x x} boundness! /bnd-map
 bnd-map 'body @                ; [ binder-node identifier-node ]
 ; Second element has is-bound=0 (bound)
 
-'{/x {x}} boundness! /bnd-map /func
+'{/x {x}} boundness! /bnd-map
 bnd-map 'body @ 1 @            ; nested function-node
 ; Has 'body, 'free-vars, 'bound-set keys
 ```
 
-The passes compose: `func boundness! liveness! slots!` returns `(func function-node)`.
+The passes compose: `func boundness! liveness! slots!` returns `(func-node)`.
 
 ## Liveness (liveness.froth)
 
@@ -217,7 +220,7 @@ Liveness analysis for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `liveness` | `( func function-node -- func function-node )` | Analyze last references in function |
+| `liveness` | `( func-node -- func-node )` | Analyze last references in function |
 
 Takes the function-node from `boundness` and adds liveness information.
 
@@ -241,25 +244,25 @@ The analysis traverses right-to-left to determine which references are "last" in
 - Frame exit point is marked on the last term that accesses the frame
 
 ```
-'{x} boundness! liveness! /map /func
+'{x} boundness! liveness! /map
 map 'body @ 0 @                ; identifier-node with is-bound=1, is-live=1
 ; x is free (is-bound=1) and last-ref (is-live=1)
 
-'{/x x} boundness! liveness! /map /func
+'{/x x} boundness! liveness! /map
 map 'body @ 0 @                ; binder-node with is-used=0
 ; binder is used (is-used=0)
 
-'{/x} boundness! liveness! /map /func
+'{/x} boundness! liveness! /map
 map 'body @ 0 @ 'is-used @     ; 1 - binder unused (dead)
 
-'{x {x}} boundness! liveness! /map /func
+'{x {x}} boundness! liveness! /map
 map 'body @ 1 @ 'dead-set @    ; $ . 'x :
 ; x's last use is this capture, so in dead-set
 
-'{/fn fn! x fn!} boundness! liveness! /map /func
+'{/fn fn! x fn!} boundness! liveness! /map
 map 'body @ 2 @                ; first ! has restore-context=0, restore-return=0
 
-'{1 2 +} boundness! liveness! /map /func
+'{1 2 +} boundness! liveness! /map
 map 'needs-frame @             ; 1 - no frame needed
 ```
 
@@ -269,9 +272,9 @@ Frame slot allocation for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `slots` | `( func function-node -- func function-node )` | Allocate frame slots |
+| `slots` | `( func-node -- func-node )` | Allocate frame slots |
 
-Takes the function-node from `liveness` and adds slot allocation information:
+Takes the function-node from `liveness` and adds slot allocation information.
 
 - `'slot`: frame slot number (for live binders and bound identifier references)
 - `'save-context`: 0 on first call needing context save
@@ -283,22 +286,22 @@ Takes the function-node from `liveness` and adds slot allocation information:
 Slots are allocated on-demand and reused when freed. Binder slots are freed at the variable's last use. Register save slots are allocated once at the first call that needs them and reused by subsequent calls. Closures get their own frame (slots start at 0), while generators share the outer frame.
 
 ```
-'{/x x} boundness! liveness! slots! /map /func
+'{/x x} boundness! liveness! slots! /map
 map 'max-slots @               ; 1 - one slot needed
 map 'body @ 0 @ 'slot @        ; 0 - binder gets slot 0
 map 'body @ 1 @ 'slot @        ; 0 - reference uses slot 0
 
-'{/x x /y y} boundness! liveness! slots! /map /func
+'{/x x /y y} boundness! liveness! slots! /map
 map 'max-slots @               ; 1 - slot 0 reused for y
 
-'{/x {/y y} x} boundness! liveness! slots! /map /func
+'{/x {/y y} x} boundness! liveness! slots! /map
 map 'max-slots @               ; 1 - outer needs 1 slot
 map 'body @ 1 @ 'max-slots @   ; 1 - closure needs 1 slot
 
-'{/x /y [/z z] y x} boundness! liveness! slots! /map /func
+'{/x /y [/z z] y x} boundness! liveness! slots! /map
 map 'max-slots @               ; 3 - generator uses slot 2 for z
 
-'{/x x x * f! 1 +} boundness! liveness! slots! /map /func
+'{/x x x * f! 1 +} boundness! liveness! slots! /map
 map 'max-slots @               ; 1 - slot 0 reused for RP save
 map 'body @ 5 @ 'rp-save-slot @ ; 0 - apply saves RP to slot 0
 ```
@@ -309,14 +312,13 @@ Bytecode generation for the compiler.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `codegen` | `(addr code-map func func-node -- next-addr new-code-map func-addr)` | Generate bytecode for a function |
+| `codegen` | `(addr code-map func-node -- next-addr new-code-map func-addr)` | Generate bytecode for a function |
 
-Takes a function term and its analysis node, generates bytecode at `addr`, and returns the next available address, updated code-map, and the function's entry point.
+Takes a function node containing the term and analysis data, generates bytecode at `addr`, and returns the next available address, updated code-map, and the function's entry point.
 
 - `addr`: Next available bytecode address
 - `code-map`: Tree23 from function ref IDs to bytecode addresses (for deduplication)
-- `func`: Quoted function term to generate code for
-- `func-node`: Analysis results from boundness/liveness/slots (can be empty map for simple cases)
+- `func-node`: Node containing `'term` (quoted function) and analysis results from boundness/liveness/slots
 - `next-addr`: Next available address after code is emitted
 - `new-code-map`: Updated with this function (and nested functions when supported)
 - `func-addr`: This function's bytecode entry point
@@ -333,13 +335,13 @@ Supports:
 
 ```
 ; Simple literals (no analysis needed)
-0 tree-empty! '{ 1 2 3 } $ codegen!
+0 tree-empty! '{ 1 2 3 } make-node! codegen!
 /func-addr /code-map /next-addr
 ; Emits: push-int 1 push-int 2 push-int 3 return
 
 ; With bound variables (needs full analysis)
-'{ /x x } boundness! liveness! slots! /node /func
-next-addr tree-empty! func node codegen!
+'{ /x x } boundness! liveness! slots! /node
+next-addr tree-empty! node codegen!
 /func-addr2 /code-map2 /next-addr2
 ; Emits: enter-frame 1 pop-local 0 push-local 0 leave-frame 1 return
 ```

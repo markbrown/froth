@@ -1,15 +1,16 @@
 ; slots.froth - Frame slot allocation for compiler
 ; Frame slot allocation for Froth compiler
 
-; slots-term-impl: (term live-map slot-map free max ctx-slot rp-slot seq-fn term-fn -- result-map new-slot-map new-free new-max new-ctx-slot new-rp-slot)
+; slots-term-impl: (live-map slot-map free max ctx-slot rp-slot seq-fn term-fn -- result-map new-slot-map new-free new-max new-ctx-slot new-rp-slot)
 ; Allocate a slot for a single term.
-; live-map: liveness map for this term (has 'is-used, 'is-live, 'body, 'dead-set, etc.)
+; live-map: node for this term (has 'term, 'is-used, 'is-live, 'body, 'dead-set, etc.)
 ; slot-map: identifier -> slot mapping
 ; free: cons list of free slots (nil if empty)
 ; max: next slot number to allocate if free list is empty
 ; ctx-slot: allocated context save slot (nil if not yet allocated)
 ; rp-slot: allocated return pointer save slot (nil if not yet allocated)
-['delete-keys 'reduce 'swap 'and 'not 'or] { /term-fn /seq-fn /rp-slot /ctx-slot /max /free /slot-map /live-map /term
+['delete-keys 'reduce 'swap 'and 'not 'or] { /term-fn /seq-fn /rp-slot /ctx-slot /max /free /slot-map /live-map
+  live-map 'term @ /term
   term isBinder {
     ; Binder: allocate slot if used (is-used=0), else no slot
     term intern idToIdent /ident
@@ -33,8 +34,8 @@
     ; Closure: fresh frame (own slot space), fresh register save slots
     live-map 'body @ /inner-body
     live-map 'dead-set @ /dead-set
-    term # 1 - /last-idx
-    term inner-body $ . 0 . . 0 seq-fn term-fn seq-fn!
+    inner-body # 1 - /last-idx
+    inner-body $ . 0 . . 0 seq-fn term-fn seq-fn!
     /discard-rp /discard-ctx /inner-max /discard-free /discard-slot-map /new-body
     ; Free slots for vars in dead-set (their last use was this capture)
     ; Only free if variable is bound (has a slot) - free vars don't have slots
@@ -56,9 +57,9 @@
     live-map 'body @ /inner-body
     live-map 'bound-set @ /inner-bound-set
     inner-bound-set keys /bound-vars
-    term # 1 - /last-idx
+    inner-body # 1 - /last-idx
     ; Thread state through generator (including ctx-slot and rp-slot)
-    term inner-body slot-map free max ctx-slot rp-slot 0 seq-fn term-fn seq-fn!
+    inner-body slot-map free max ctx-slot rp-slot 0 seq-fn term-fn seq-fn!
     /after-rp /after-ctx /after-max /after-free /after-slot-map /new-body
     ; Remove inner binders from slot-map (out of scope)
     after-slot-map bound-vars delete-keys! /new-slot-map
@@ -150,34 +151,35 @@
   } ?! } ?! } ?! } ?! } ?!
 } def-fn! /slots-term-impl
 
-; slots-seq-impl: (func-body body-arr slot-map free max ctx-slot rp-slot idx seq-fn term-fn -- new-body-arr new-slot-map new-free new-max new-ctx-slot new-rp-slot)
+; slots-seq-impl: (body-arr slot-map free max ctx-slot rp-slot idx seq-fn term-fn -- new-body-arr new-slot-map new-free new-max new-ctx-slot new-rp-slot)
 ; Process terms from idx to end (left-to-right).
-['concat] { /term-fn /seq-fn /idx /rp-slot /ctx-slot /max /free /slot-map /body-arr /func-body
-  idx func-body # = {
+['concat] { /term-fn /seq-fn /idx /rp-slot /ctx-slot /max /free /slot-map /body-arr
+  idx body-arr # = {
     ; Done
     [] slot-map free max ctx-slot rp-slot
   } {
     ; Process current term
-    func-body idx @ body-arr idx @ slot-map free max ctx-slot rp-slot seq-fn term-fn term-fn!
+    body-arr idx @ slot-map free max ctx-slot rp-slot seq-fn term-fn term-fn!
     /after-rp /after-ctx /after-max /after-free /after-slot-map /term-map
     ; Recurse for rest
-    func-body body-arr after-slot-map after-free after-max after-ctx after-rp idx 1 + seq-fn term-fn seq-fn!
+    body-arr after-slot-map after-free after-max after-ctx after-rp idx 1 + seq-fn term-fn seq-fn!
     /final-rp /final-ctx /final-max /final-free /final-slot-map /rest-body
     ; Prepend current result
     [term-map] rest-body concat! final-slot-map final-free final-max final-ctx final-rp
   } ?!
 } def-fn! /slots-seq-impl
 
-; slots: (func liveness-node -- func slots-node)
+; slots: (func-node -- func-node)
 ; Allocate frame slots for a function.
 ; Adds 'slot key to binders and bound identifiers.
 ; Adds 'save-context and 'save-return keys to apply nodes.
 ; Adds 'max-slots key to closures.
-['slots-seq-impl 'slots-term-impl] { /live-map /func
-  live-map 'body @ /body
-  func body $ . 0 . . 0 slots-seq-impl slots-term-impl slots-seq-impl!
+; The function term is preserved on the stack underneath the node.
+['slots-seq-impl 'slots-term-impl] { /func-node
+  func-node 'body @ /body
+  body $ . 0 . . 0 slots-seq-impl slots-term-impl slots-seq-impl!
   /discard-rp /discard-ctx /max /free /slot-map /new-body
-  func live-map new-body 'body : max 'max-slots :
+  func-node new-body 'body : max 'max-slots :
 } def-fn! /slots
 
 ; Remove impl functions
