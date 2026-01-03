@@ -32,7 +32,8 @@ Nodes are the single source of truth for a function and its metadata. Each node 
 - `'func-addr`: Bytecode entry point (added by codegen)
 
 **Generator nodes** contain:
-- `'body`: Array of child nodes (generators share outer frame, passes recurse into them)
+- `'body`: Array of child nodes (generators share outer frame and context)
+- `'bound-set`: Map of identifiers bound inside the generator
 
 **Other nodes** (literal, identifier, binder, quote, apply) contain type-specific analysis keys as documented in FROTH_COMPILER.md.
 

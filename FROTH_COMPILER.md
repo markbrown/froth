@@ -177,11 +177,9 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 
 **Generator node keys:**
 - `'body`: array of node maps (parallel to body terms)
-- `'free-vars`: map: identifier -> context slot number
-- `'free-vars-array`: array: slot index -> identifier
 - `'bound-set`: map: identifier -> nil (set of bound vars)
 
-Generators share the containing function's frame, so they don't have `'max-slots`.
+Generators share the containing function's frame and context, so they don't have `'max-slots`, `'free-vars`, or `'free-vars-array`.
 
 ## Boundness (boundness.froth)
 
