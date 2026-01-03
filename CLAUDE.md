@@ -12,4 +12,5 @@ Commit checklist:
 3. **Do not** commit until requested
 4. update docs if needed
 5. ask user to stage changes if needed
-6. review staged diff if needed
+6. review staged diff
+ - check that changes to expected outputs are correct
