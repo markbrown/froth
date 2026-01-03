@@ -139,8 +139,16 @@ init_pool(Pool, HT) :-
 :- pred get_stdlib_path(string::out, io::di, io::uo) is det.
 
 get_stdlib_path(StdlibPath, !IO) :-
-    io.progname("froth", ProgName, !IO),
-    ExeDir = dir.dirname(ProgName),
+    % Get executable path - try /proc/self/exe first (Linux), fall back to progname
+    io.file.read_symlink("/proc/self/exe", LinkResult, !IO),
+    (
+        LinkResult = ok(ExePath),
+        ExeDir = dir.dirname(ExePath)
+    ;
+        LinkResult = error(_),
+        io.progname("froth", ProgName, !IO),
+        ExeDir = dir.dirname(ProgName)
+    ),
     BaseDir = dir.dirname(ExeDir),
     StdlibPath = dir.make_path_name(BaseDir,
                      dir.make_path_name("lib", "stdlib.froth")).
