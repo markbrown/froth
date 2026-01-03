@@ -159,37 +159,20 @@ operator-table 'deref @ /opDeref
     codegen-fn addr code-map node codegen-fn! /nested-addr /new-code-map /new-addr
 
     ; Build context array at runtime: [start-array, push each captured var, end-array]
-    ; The nested function's free-vars tells us what to capture
+    ; The nested function's free-vars-array tells us what to capture (already in slot order)
     ; For each captured var, check if it's bound or free in OUTER scope
-    node 'free-vars in { node 'free-vars @ } { $ } ?! /nested-free-vars
+    node 'free-vars-array in { node 'free-vars-array @ } { [] } ?! /nested-free-array
 
-    ; Get the number of context slots needed
-    nested-free-vars keys # /num-captures
-
-    num-captures 0 = {
+    nested-free-array # 0 = {
       ; No captures - just push empty array and address
       code [ocStartArray ocEndArray ocPushInt nested-addr ocOp opClose] concat!
     } {
-      ; Build array of (slot, ident) pairs, then sort by slot to emit in order
-      ; First collect all free vars with their context slots
-      nested-free-vars keys /the-keys
-      [ the-keys { /ident nested-free-vars ident @ /slot [slot ident] } foldl! ] /pairs
-
-      ; NOTE: Context array must have values in slot order (0, 1, 2...).
-      ; Boundness assigns slots sequentially as free vars are encountered.
-      ; Map's keys function returns them in tree order (sorted by intern ID),
-      ; which may not match slot order. For correctness, pairs should be sorted
-      ; by slot. Currently this works because typical usage has few free vars
-      ; and the tree order often matches. A proper fix would sort pairs by slot.
-
       ; Start building the context array
       code [ocStartArray] concat! /ctx-code
 
-      ; For each captured variable, emit push instruction
-      ; Use reduce to accumulate the bytecode
-      pairs ctx-code {
-        /pair /acc
-        pair 1 @ /ident
+      ; For each captured variable (in slot order), emit push instruction
+      nested-free-array ctx-code {
+        /ident /acc
         ; Check if this var is bound or free in outer scope
         outer-bound-slots ident in {
           ; Bound in outer - push from frame
