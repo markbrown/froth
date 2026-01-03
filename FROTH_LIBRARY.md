@@ -23,8 +23,8 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `count-bindings` | optimize | Count bindings in environments |
 | `def-fn` | defs | Create closure with minimal environment |
 | `delete-keys` | map | Delete array of keys from map |
-| `drop` | data | Drop top of stack |
-| `dup` | data | Duplicate top of stack |
+| `drop` | stack | Drop top of stack |
+| `dup` | stack | Duplicate top of stack |
 | `eval` | eval | Evaluate closure with stack and op-table |
 | `fib` | math | Generate Fibonacci sequence |
 | `filter` | array | Keep elements matching predicate |
@@ -39,11 +39,11 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `map` | array | Transform each element |
 | `merge` | map | Merge two maps (map2 takes precedence) |
 | `nl` | io | Print newline |
-| `nip` | data | Remove second element from stack |
+| `nip` | stack | Remove second element from stack |
 | `not` | bool | Logical not (0→1, else→0) |
 | `optimize` | optimize | Recursively optimize closures |
 | `or` | bool | Logical or |
-| `over` | data | Copy second element to top |
+| `over` | stack | Copy second element to top |
 | `println` | io | Print value with newline |
 | `reduce` | array | Reduce with binary function |
 | `restrict` | map | Restrict map to specified keys |
@@ -51,7 +51,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `reverse` | array | Reverse an array |
 | `scanl` | array | Iterate left-to-right until predicate returns 0 |
 | `scanr` | array | Iterate right-to-left until predicate returns 0 |
-| `swap` | data | Swap top two elements |
+| `swap` | stack | Swap top two elements |
 | `times` | control | Execute body n times |
 | `times-loop` | control | Execute body n times with state |
 | `transform` | data | Recursively transform data structure |
@@ -317,9 +317,9 @@ t k2 200 tree-set! /t
 t k1 tree-get!                 ; 100 0
 ```
 
-## Data (data.froth)
+## Stack (stack.froth)
 
-Generic data structure utilities and stack manipulation.
+Stack manipulation primitives.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
@@ -328,6 +328,13 @@ Generic data structure utilities and stack manipulation.
 | `over` | `( a b -- a b a )` | Copy second element to top |
 | `drop` | `( a -- )` | Drop top element |
 | `nip` | `( a b -- b )` | Remove second element |
+
+## Data (data.froth)
+
+Generic data structure utilities.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
 | `transform` | `( data fn -- data )` | Recursively transform data structure |
 
 The `transform` function applies a function to all leaf values in a data structure, recursively traversing into maps, arrays, and cons cells. Nil values are left unchanged.
