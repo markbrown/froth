@@ -168,7 +168,7 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 
 **Function node keys:**
 - `'body`: array of node maps (parallel to body terms)
-- `'free-vars`: map: identifier -> context slot number
+- `'free-vars-map`: map: identifier -> context slot number
 - `'free-vars-array`: array: slot index -> identifier
 - `'bound-set`: map: identifier -> nil (set of bound vars)
 - `'dead-set`: map: identifier -> nil (vars whose last use is capture)
@@ -179,7 +179,7 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 - `'body`: array of node maps (parallel to body terms)
 - `'bound-set`: map: identifier -> nil (set of bound vars)
 
-Generators share the containing function's frame and context, so they don't have `'max-slots`, `'free-vars`, or `'free-vars-array`.
+Generators share the containing function's frame and context, so they don't have `'max-slots`, `'free-vars-map`, or `'free-vars-array`.
 
 ## Boundness (boundness.froth)
 
@@ -191,7 +191,7 @@ Boundness analysis for the compiler.
 
 Analyzes a quoted function and returns a function-node. The node contains:
 - `'body`: array of node maps, one per term in the function body
-- `'free-vars`: map from identifiers to context slot numbers
+- `'free-vars-map`: map from identifiers to context slot numbers
 - `'free-vars-array`: array of identifiers indexed by context slot
 - `'bound-set`: map from identifiers to nil (marking presence)
 
@@ -201,7 +201,7 @@ Context slot numbers are assigned in order of first occurrence (0, 1, 2, ...).
 
 ```
 '{x} boundness! /bnd-map
-bnd-map 'free-vars @           ; $ 0 'x : (x gets slot 0)
+bnd-map 'free-vars-map @           ; $ 0 'x : (x gets slot 0)
 bnd-map 'body @ 0 @            ; identifier-node with is-bound=1 (free)
 
 '{/x x} boundness! /bnd-map
@@ -210,7 +210,7 @@ bnd-map 'body @                ; [ binder-node identifier-node ]
 
 '{/x {x}} boundness! /bnd-map
 bnd-map 'body @ 1 @            ; nested function-node
-; Has 'body, 'free-vars, 'bound-set keys
+; Has 'body, 'free-vars-map, 'bound-set keys
 ```
 
 The passes compose: `func boundness! liveness! slots!` returns `(func-node)`.

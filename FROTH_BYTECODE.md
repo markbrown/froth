@@ -23,7 +23,7 @@ Nodes are the single source of truth for a function and its metadata. Each node 
 
 **Function nodes** additionally contain:
 - `'body`: Array of child nodes (one per term in function body)
-- `'free-vars`: Map from identifier to context slot number
+- `'free-vars-map`: Map from identifier to context slot number
 - `'free-vars-array`: Array of identifiers indexed by context slot
 - `'bound-set`: Map of bound identifiers
 - `'dead-set`: Map of identifiers whose last use is capture
@@ -56,7 +56,7 @@ func boundness! liveness! slots! /func-node
 
 **Key behaviors:**
 - Passes recurse into generators (which share the outer frame)
-- Passes do NOT recurse into nested functions—they read `'free-vars` from the already-analyzed nested func-node
+- Passes do NOT recurse into nested functions—they read `'free-vars-map` from the already-analyzed nested func-node
 - Codegen handles nested functions by recursively compiling them and building context arrays
 
 ## Planned: Higher-Level Compilation API
@@ -85,7 +85,7 @@ compile (addr code-map closureval -- next-addr new-code-map bytecodeval)
 Would compile a closureval to a bytecodeval by:
 1. Opening the closureval to get environment and function body
 2. Calling `compile-func` on the function body
-3. Building a context array from the environment using `'free-vars`
+3. Building a context array from the environment using `'free-vars-map`
 4. Creating a bytecodeval with `close`
 
 ## Limitations
