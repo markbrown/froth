@@ -1,0 +1,1823 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read lib/codegen.froth (202 lines)
+  ⎿  Read FROTH_BYTECODE.md (93 lines)
+  ⎿  Read FROTH_COMPILER.md (340 lines)
+  ⎿  Read FROTH_GUIDE.md (297 lines)
+  ⎿  Read tests/codegen.froth (120 lines)
+
+> What remains to be done for code generation? 
+
+● Based on the documentation and codegen.froth, here's what's implemented vs remaining:
+
+  Currently Implemented
+
+  - Integer and string literals (push-int, push-string)
+  - Operators (op)
+  - Free variables (push-context)
+  - Bound variables (enter-frame, pop-local, push-local, leave-frame)
+  - Dead binders (pop-unused)
+  - Quoted identifiers, binders, apply, and literal values
+
+  Remaining Work
+
+  1. Nested Functions
+
+  | function | recurse, build context, push addr, `op close` |
+  - Recursively compile the nested function body
+  - Build context array from current frame/context slots
+  - Push the function's bytecode address
+  - Emit op close to create bytecodeval at runtime
+
+  2. Generators
+
+  | generator | `start-array`, codegen body, `end-array` |
+  - Emit start-array
+  - Codegen the generator body (shares outer frame)
+  - Emit end-array
+
+  3. Apply (Function Calls)
+
+  | apply | `call` or `tail-call` |
+  - Tail calls: emit tail-call
+  - Non-tail calls:
+    - Save context/return pointers to frame slots
+    - Emit call
+    - Restore pointers afterward
+
+  4. Register Save/Restore for Non-Tail Calls
+
+  The liveness and slots passes already compute:
+  - 'restore-context: which calls need context restored
+  - 'restore-return: which call restores the return pointer
+  - 'ctx-save-slot / 'rp-save-slot: frame slots for saving
+
+  Codegen needs to emit:
+  - save-context-ptr, save-return-ptr before call
+  - restore-context-ptr, restore-return-ptr after call
+
+  5. Quoted Functions/Generators
+
+  Currently skipped with "skip for now" comment - would need to handle quoted nested structures.
+
+  ---
+  Would you like to tackle one of these? Nested functions or apply would be the most impactful for making the compiler useful.
+
+> let's do nested functions 
+
+● Let me first understand the current codegen structure and plan the changes needed.
+
+● Read(lib/codegen.froth)
+  ⎿  Read 202 lines
+
+● Let me also check the existing tests and how close works:
+
+● Read(tests/codegen.froth)
+  ⎿  Read 120 lines
+
+● Search(pattern: "start-array|end-array", path: "lib", output_mode: "content")
+  ⎿  Found 2 lines (ctrl+o to expand)
+
+● Read(lib/bytecode.froth)
+  ⎿  Read 37 lines
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines                                                       
+      12  instruction-table 'pop-unused @ /ocPopUnused
+      13  instruction-table 'enter-frame @ /ocEnterFrame
+      14  instruction-table 'leave-frame @ /ocLeaveFrame
+      15 +instruction-table 'start-array @ /ocStartArray                 
+      16 +instruction-table 'end-array @ /ocEndArray                     
+      17  
+      18  ; Get operator codes for quoted term construction
+      19  operator-table 'idToIdent @ /opIdToIdent
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 1 line                                       
+      15  instruction-table 'start-array @ /ocStartArray
+      16  instruction-table 'end-array @ /ocEndArray
+      17  
+      18 -; Get operator codes for quoted term construction              
+      18 +; Get operator codes for quoted term construction and closure c
+         +reation                                                        
+      19  operator-table 'idToIdent @ /opIdToIdent
+      20  operator-table 'idToBinder @ /opIdToBinder
+      21  operator-table 'wrap @ /opWrap
+      22 +operator-table 'close @ /opClose                               
+      23  
+      24  ; codegen-term: (code need-enter term node free-vars max-slots 
+          -- code' need-enter')
+      25  ; Generate bytecode for a single term, append to code array.
+
+● Now I'll rewrite codegen-term with the new signature. This is a significant refactor:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 82 lines, removed 25 lines                                    
+      21  operator-table 'wrap @ /opWrap
+      22  operator-table 'close @ /opClose
+      23  
+      24 -; codegen-term: (code need-enter term node free-vars max-slots 
+         --- code' need-enter')                                          
+      24 +; codegen-term: (addr code-map code need-enter term node outer-
+         +free-vars outer-bound-slots max-slots -- addr' code-map' code' 
+         +need-enter')                                                   
+      25  ; Generate bytecode for a single term, append to code array.
+      26  ; node is the analysis node for this term (from boundness/liven
+          ess/slots)
+      27 -; free-vars maps identifiers to context slot numbers           
+      27 +; outer-free-vars maps identifiers to context slot numbers in t
+         +he current function                                            
+      28 +; outer-bound-slots maps identifiers to frame slot numbers in t
+         +he current function                                            
+      29  ; max-slots is the number of frame slots needed (for enter-fram
+          e/leave-frame)
+      30  ; need-enter is 0 if we still need to emit enter-frame, 1 if al
+          ready emitted
+      30 -; Returns updated code and need-enter flag                     
+      31 +; Returns updated addr, code-map, code, and need-enter flag    
+      32  ['concat 'ocPushInt 'ocPushString 'ocOp 'operator-table
+      33   'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
+      34   'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
+      34 - 'ocEnterFrame 'ocLeaveFrame] { /max-slots /free-vars /node /te
+         -rm /need-enter /code                                           
+      35 + 'ocEnterFrame 'ocLeaveFrame                                   
+      36 + 'ocStartArray 'ocEndArray 'opClose 'codegen 'foldl] {         
+      37 +  /max-slots /outer-bound-slots /outer-free-vars /node /term /n
+         +eed-enter /code /code-map /addr                                
+      38    term isValue {
+      39      ; Quoted literal value - unwrap and check type
+      40      term unwrap /val
+      41      val isInt {
+      39 -      code [ocPushInt val] concat! need-enter                  
+      42 +      addr code-map code [ocPushInt val] concat! need-enter    
+      43      } {
+      44      val isString {
+      42 -      code [ocPushString val intern] concat! need-enter        
+      45 +      addr code-map code [ocPushString val intern] concat! need
+         +-enter                                                         
+      46      } {
+      47        ; Unsupported value type
+      45 -      code need-enter                                          
+      48 +      addr code-map code need-enter                            
+      49      } ?! } ?!
+      50    } {
+      51    term isBinder {
+     ...
+      61            code
+      62          } ?!
+      63          node 'slot @ /slot
+      61 -        [ocPopLocal slot] concat! 1  ; now in frame (need-enter
+         -=1)                                                            
+      64 +        [ocPopLocal slot] concat! /new-code                    
+      65 +        addr code-map new-code 1  ; now in frame (need-enter=1)
+      66        } {
+      67          ; Dead binder (is-used=1) - just discard
+      64 -        code [ocPopUnused] concat! need-enter                  
+      68 +        addr code-map code [ocPopUnused] concat! need-enter    
+      69        } ?!
+      70      } {
+      71        ; No 'is-used key - assume dead
+      68 -      code [ocPopUnused] concat! need-enter                    
+      72 +      addr code-map code [ocPopUnused] concat! need-enter      
+      73      } ?!
+      74    } {
+      75    term isIdent {
+      76      term isOperator {
+      77        ; Operator - emit op instruction with opcode
+      78        operator-table term @ /opcode
+      75 -      code [ocOp opcode] concat! need-enter                    
+      79 +      addr code-map code [ocOp opcode] concat! need-enter      
+      80      } {
+      81        ; Regular identifier - check if bound or free
+      82        node 'is-bound in {
+     ...
+       91                [ocLeaveFrame max-slots] concat!
+       92              } { } ?!
+       93            } { } ?!
+       90 -          need-enter                                          
+       94 +          /new-code                                           
+       95 +          addr code-map new-code need-enter                   
+       96          } {
+       97            ; Free variable (is-bound=1) - look up context slot
+       93 -          free-vars term @ /slot                              
+       94 -          code [ocPushContext slot] concat! need-enter        
+       98 +          outer-free-vars term @ /slot                        
+       99 +          addr code-map code [ocPushContext slot] concat! need
+          +-enter                                                        
+      100          } ?!
+      101        } {
+      102          ; No analysis data - skip
+       98 -        code need-enter                                       
+      103 +        addr code-map code need-enter                         
+      104        } ?!
+      105      } ?!
+      106    } {
+     ...
+      110      inner isIdent {
+      111        ; 'identifier -> push-int id, op idToIdent
+      112        inner intern /id
+      108 -      code [ocPushInt id ocOp opIdToIdent] concat! need-enter 
+      113 +      addr code-map code [ocPushInt id ocOp opIdToIdent] conca
+          +t! need-enter                                                 
+      114      } {
+      115      inner isBinder {
+      116        ; '/binder -> push-int id, op idToBinder
+      117        inner intern /id
+      113 -      code [ocPushInt id ocOp opIdToBinder] concat! need-enter
+      118 +      addr code-map code [ocPushInt id ocOp opIdToBinder] conc
+          +at! need-enter                                                
+      119      } {
+      120      inner isApply {
+      121        ; '! -> push-quoted-apply
+      117 -      code [ocPushQuotedApply] concat! need-enter             
+      122 +      addr code-map code [ocPushQuotedApply] concat! need-ente
+          +r                                                             
+      123      } {
+      124      inner isValue {
+      125        ; 'value -> push value, op wrap
+      126        inner unwrap /val
+      127        val isInt {
+      123 -        code [ocPushInt val ocOp opWrap] concat! need-enter   
+      128 +        addr code-map code [ocPushInt val ocOp opWrap] concat!
+          + need-enter                                                   
+      129        } {
+      130        val isString {
+      126 -        code [ocPushString val intern ocOp opWrap] concat! nee
+          -d-enter                                                       
+      131 +        addr code-map code [ocPushString val intern ocOp opWra
+          +p] concat! need-enter                                         
+      132        } {
+      133          ; Unsupported quoted value type
+      129 -        code need-enter                                       
+      134 +        addr code-map code need-enter                         
+      135        } ?! } ?!
+      136      } {
+      137        ; Quoted function, generator, or nested quote - skip for
+            now
+      133 -      code need-enter                                         
+      138 +      addr code-map code need-enter                           
+      139      } ?! } ?! } ?! } ?!
+      140    } {
+      136 -    ; Other term type - skip for now                          
+      137 -    code need-enter                                           
+      138 -  } ?! } ?! } ?! } ?!                                         
+      141 +  term isFunc {                                               
+      142 +    ; Nested function - compile it and emit code to build clos
+          +ure at runtime                                                
+      143 +    ; node is the function-node for this nested function      
+      144 +                                                              
+      145 +    ; First, recursively compile the nested function          
+      146 +    addr code-map term node codegen! /nested-addr /new-code-ma
+          +p /new-addr                                                   
+      147 +                                                              
+      148 +    ; Build context array at runtime: [start-array, push each 
+          +captured var, end-array]                                      
+      149 +    ; The nested function's free-vars tells us what to capture
+      150 +    ; For each captured var, check if it's bound or free in OU
+          +TER scope                                                     
+      151 +    node 'free-vars in { node 'free-vars @ } { $ } ?! /nested-
+          +free-vars                                                     
+      152 +                                                              
+      153 +    ; Get the number of context slots needed                  
+      154 +    nested-free-vars keys # /num-captures                     
+      155 +                                                              
+      156 +    num-captures 0 = {                                        
+      157 +      ; No captures - just push empty array and address       
+      158 +      code [ocStartArray ocEndArray ocPushInt nested-addr ocOp
+          + opClose] concat! /new-code                                   
+      159 +    } {                                                       
+      160 +      ; Build array of (slot, ident) pairs, then sort by slot 
+          +to emit in order                                              
+      161 +      ; First collect all free vars with their context slots  
+      162 +      [ nested-free-vars keys { /ident nested-free-vars ident 
+          +@ /slot [slot ident] } foldl! ] /pairs                        
+      163 +                                                              
+      164 +      ; Sort pairs by slot (simple insertion sort for small ar
+          +rays)                                                         
+      165 +      ; For now, assume they're already in order (slots assign
+          +ed 0, 1, 2, ...)                                              
+      166 +      ; TODO: proper sort if needed                           
+      167 +                                                              
+      168 +      ; Start building the context array                      
+      169 +      code [ocStartArray] concat! /ctx-code                   
+      170 +                                                              
+      171 +      ; For each captured variable, emit push instruction     
+      172 +      pairs {                                                 
+      173 +        /pair /acc                                            
+      174 +        pair 1 @ /ident                                       
+      175 +        ; Check if this var is bound or free in outer scope   
+      176 +        outer-bound-slots ident in {                          
+      177 +          ; Bound in outer - push from frame                  
+      178 +          outer-bound-slots ident @ /outer-slot               
+      179 +          acc [ocPushLocal outer-slot] concat!                
+      180 +        } {                                                   
+      181 +          ; Free in outer - push from context                 
+      182 +          outer-free-vars ident @ /outer-slot                 
+      183 +          acc [ocPushContext outer-slot] concat!              
+      184 +        } ?!                                                  
+      185 +      } foldl! /ctx-code2                                     
+      186 +                                                              
+      187 +      ; End array, push address, close                        
+      188 +      ctx-code2 [ocEndArray ocPushInt nested-addr ocOp opClose
+          +] concat! /new-code                                           
+      189 +    } ?!                                                      
+      190 +                                                              
+      191 +    new-addr new-code-map new-code need-enter                 
+      192 +  } {                                                         
+      193 +    ; Other term type (generator, apply) - skip for now       
+      194 +    addr code-map code need-enter                             
+      195 +  } ?! } ?! } ?! } ?! } ?!                                    
+      196  } def-fn! /codegen-term
+      197  
+      198  ; codegen-seq: (code need-enter func body-nodes free-vars max-
+           slots idx -- code')
+
+● Now I need to update codegen-seq to match the new signature:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 12 lines, removed 11 lines                                    
+      195    } ?! } ?! } ?! } ?! } ?!
+      196  } def-fn! /codegen-term
+      197  
+      198 -; codegen-seq: (code need-enter func body-nodes free-vars max-
+          -slots idx -- code')                                           
+      198 +; codegen-seq: (addr code-map code need-enter func body-nodes 
+          +outer-free-vars outer-bound-slots max-slots idx -- addr' code-
+          +map' code')                                                   
+      199  ; Process terms from idx to end of func.
+      200  ; body-nodes is an array of analysis nodes parallel to func te
+           rms
+      201 -; free-vars maps identifiers to context slot numbers          
+      201 +; outer-free-vars maps identifiers to context slot numbers    
+      202 +; outer-bound-slots maps identifiers to frame slot numbers    
+      203  ; max-slots is the number of frame slots needed
+      204  ; need-enter tracks whether enter-frame has been emitted (0=ne
+           ed, 1=done)
+      204 -{ /self /idx /max-slots /free-vars /body-nodes /func /need-ent
+          -er /code                                                      
+      205 +{ /self /idx /max-slots /outer-bound-slots /outer-free-vars /b
+          +ody-nodes /func /need-enter /code /code-map /addr             
+      206    idx func # = {
+      206 -    ; Done - discard need-enter, return code                  
+      207 -    code                                                      
+      207 +    ; Done - discard need-enter, return (addr code-map code)  
+      208 +    addr code-map code                                        
+      209    } {
+      210      ; Get term and its corresponding node
+      211      func idx @ /term
+      212      body-nodes idx @ /node
+      212 -    ; Process current term, get back (new-code new-need-enter)
+      213 -    code need-enter term node free-vars max-slots codegen-term
+          -!                                                             
+      214 -    /new-need-enter /new-code                                 
+      213 +    ; Process current term, get back (addr' code-map' code' ne
+          +ed-enter')                                                    
+      214 +    addr code-map code need-enter term node outer-free-vars ou
+          +ter-bound-slots max-slots codegen-term!                       
+      215 +    /new-need-enter /new-code /new-code-map /new-addr         
+      216      ; Recurse with updated state
+      216 -    new-code new-need-enter func body-nodes free-vars max-slot
+          -s idx 1 + self self!                                          
+      217 +    new-addr new-code-map new-code new-need-enter func body-no
+          +des outer-free-vars outer-bound-slots max-slots idx 1 + self s
+          +elf!                                                          
+      218    } ?!
+      219  } /codegen-seq-impl
+      220  
+      220 -['codegen-seq-impl 'codegen-term] { /idx /max-slots /free-vars
+          - /body-nodes /func /need-enter /code                          
+      221 -  code need-enter func body-nodes free-vars max-slots idx code
+          -gen-seq-impl codegen-seq-impl!                                
+      221 +['codegen-seq-impl 'codegen-term] { /idx /max-slots /outer-bou
+          +nd-slots /outer-free-vars /body-nodes /func /need-enter /code 
+          +/code-map /addr                                               
+      222 +  addr code-map code need-enter func body-nodes outer-free-var
+          +s outer-bound-slots max-slots idx codegen-seq-impl codegen-seq
+          +-impl!                                                        
+      223  } def-fn! /codegen-seq
+      224  
+      225  ; codegen: (addr code-map func func-node -- next-addr new-code
+           -map func-addr)
+
+● Now I need to update the main codegen function to build bound-slots and call codegen-seq with the new signature:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 25 lines, removed 5 lines                                     
+      244    ; need-enter: inverse of needs-frame (0 = need to emit enter
+           -frame, 1 = already done/not needed)
+      245    func-node 'needs-frame in { func-node 'needs-frame @ } { 1 }
+            ?! /need-enter
+      246  
+      247 +  ; Build bound-slots map: identifier -> frame slot for each u
+          +sed binder                                                    
+      248 +  ; Scan body-nodes for binder nodes that have 'slot set      
+      249 +  $                                                           
+      250 +  func # /num-terms                                           
+      251 +  0 /idx                                                      
+      252 +  { idx num-terms < } {                                       
+      253 +    func idx @ /term                                          
+      254 +    body-nodes idx @ /node                                    
+      255 +    term isBinder {                                           
+      256 +      node 'slot in {                                         
+      257 +        node 'slot @ /slot                                    
+      258 +        slot term :                                           
+      259 +      } { } ?!                                                
+      260 +    } { } ?!                                                  
+      261 +    idx 1 + /idx                                              
+      262 +  } while                                                     
+      263 +  /bound-slots                                                
+      264 +                                                              
+      265    ; Collect bytecode for each term in function body
+      248 -  [] need-enter func body-nodes free-vars max-slots 0 codegen-
+          -seq! /body-code                                               
+      266 +  ; codegen-seq returns (addr' code-map' code)                
+      267 +  addr code-map [] need-enter func body-nodes free-vars bound-
+          +slots max-slots 0 codegen-seq!                                
+      268 +  /body-code /new-code-map /next-emit-addr                    
+      269  
+      270    ; Add return instruction
+      271    body-code [ocReturn] concat! /final-code
+      272  
+      253 -  ; Emit at addr                                              
+      254 -  final-code addr emit-all-at! /next-addr                     
+      273 +  ; Emit at next-emit-addr (nested functions may have already 
+          +used addr..next-emit-addr-1)                                  
+      274 +  final-code next-emit-addr emit-all-at! /next-addr           
+      275  
+      276    ; Return (next-addr new-code-map func-addr)
+      257 -  ; code-map unchanged since we don't handle nested functions 
+          -yet                                                           
+      258 -  next-addr code-map addr                                     
+      277 +  ; func-addr is where we emitted this function's code        
+      278 +  next-addr new-code-map next-emit-addr                       
+      279  } def-fn! /codegen
+      280  
+      281  ; Clean up impl
+
+● Wait, I used while which isn't in the Froth standard library. Let me fix that with foldl:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 8 lines, removed 9 lines                                      
+      246  
+      247    ; Build bound-slots map: identifier -> frame slot for each u
+           sed binder
+      248    ; Scan body-nodes for binder nodes that have 'slot set
+      249 +  ; Use indices array and foldl to iterate                    
+      250 +  [ func # { /n /acc n acc , } foldl! ] /indices              
+      251    $
+      250 -  func # /num-terms                                           
+      251 -  0 /idx                                                      
+      252 -  { idx num-terms < } {                                       
+      252 +  indices {                                                   
+      253 +    /idx /acc                                                 
+      254      func idx @ /term
+      255      body-nodes idx @ /node
+      256      term isBinder {
+      257        node 'slot in {
+      258          node 'slot @ /slot
+      258 -        slot term :                                           
+      259 -      } { } ?!                                                
+      260 -    } { } ?!                                                  
+      261 -    idx 1 + /idx                                              
+      262 -  } while                                                     
+      263 -  /bound-slots                                                
+      259 +        acc slot term :                                       
+      260 +      } { acc } ?!                                            
+      261 +    } { acc } ?!                                              
+      262 +  } foldl! /bound-slots                                       
+      263  
+      264    ; Collect bytecode for each term in function body
+      265    ; codegen-seq returns (addr' code-map' code)
+
+● Actually, that indices building is wrong. Let me fix it with a simpler approach - carry the index as part of the accumulator:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 11 lines, removed 10 lines                                    
+      246  
+      247    ; Build bound-slots map: identifier -> frame slot for each u
+           sed binder
+      248    ; Scan body-nodes for binder nodes that have 'slot set
+      249 -  ; Use indices array and foldl to iterate                    
+      250 -  [ func # { /n /acc n acc , } foldl! ] /indices              
+      251 -  $                                                           
+      252 -  indices {                                                   
+      253 -    /idx /acc                                                 
+      249 +  ; Carry (map, idx) through foldl, incrementing idx for each 
+          +node                                                          
+      250 +  $ 0  ; initial: map=empty, idx=0                            
+      251 +  body-nodes {                                                
+      252 +    /node /idx /map                                           
+      253      func idx @ /term
+      255 -    body-nodes idx @ /node                                    
+      254      term isBinder {
+      255        node 'slot in {
+      256          node 'slot @ /slot
+      259 -        acc slot term :                                       
+      260 -      } { acc } ?!                                            
+      261 -    } { acc } ?!                                              
+      262 -  } foldl! /bound-slots                                       
+      257 +        map slot term :                                       
+      258 +      } { map } ?!                                            
+      259 +    } { map } ?!                                              
+      260 +    idx 1 +  ; return (new-map, new-idx)                      
+      261 +  } foldl!                                                    
+      262 +  drop!  ; discard final idx                                  
+      263 +  /bound-slots                                                
+      264  
+      265    ; Collect bytecode for each term in function body
+      266    ; codegen-seq returns (addr' code-map' code)
+
+● Let me run the existing tests to make sure I didn't break anything:
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     func-addr=0 next-addr=7
+     bytecode: 0 1 0 2 0 3 2 
+     func-addr2=7 next-addr2=12
+     bytecode2: 0 42 3 465 2 
+     func-addr3=12 next-addr3=19
+     bytecode3: 0 1 0 2 1 2 2 
+     quoted terms: 'x '/y '! '42 '"hi"
+     func-addr5=37 next-addr5=44
+     bytecode5: 4 0 4 1 1 2 2 
+     … +2 lines (ctrl+o to see all)
+
+● There's an error. The issue is that I'm storing binder terms as keys in bound-slots, but I should be storing quoted identifiers. Let me fix that:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines, removed 1 line                                       
+      247    ; Build bound-slots map: identifier -> frame slot for each u
+           sed binder
+      248    ; Scan body-nodes for binder nodes that have 'slot set
+      249    ; Carry (map, idx) through foldl, incrementing idx for each 
+           node
+      250 +  ; Note: convert binder term /x to quoted identifier 'x for m
+          +ap key                                                        
+      251    $ 0  ; initial: map=empty, idx=0
+      252    body-nodes {
+      253      /node /idx /map
+     ...
+      255      term isBinder {
+      256        node 'slot in {
+      257          node 'slot @ /slot
+      257 -        map slot term :                                       
+      258 +        term intern idToIdent /ident  ; convert /x to 'x      
+      259 +        map slot ident :                                      
+      260        } { map } ?!
+      261      } { map } ?!
+      262      idx 1 +  ; return (new-map, new-idx)
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  func-addr=0 next-addr=7       
+     bytecode: 0 1 0 2 0 3 2
+     func-addr2=7 next-addr2=12
+     … +14 lines (ctrl+o to expand)
+
+● All existing tests pass. Now let me add tests for nested functions:
+
+● Update(tests/codegen.froth)
+  ⎿  Added 64 lines                                                      
+      116  "multi-binder test: " print
+      117  10 3 [] func8-addr close ! println!
+      118  
+      119 +; Test 9: Nested function with no captures                    
+      120 +; { { 42 } } should emit: nested func first, then outer builds
+          + empty context and closes                                     
+      121 +'{ { 42 } } /func9                                            
+      122 +func9 boundness! liveness! slots! /func9-node /func9-term     
+      123 +next-addr8 tree-empty! func9-term func9-node codegen!         
+      124 +/func9-addr /code-map9 /next-addr9                            
+      125 +"bytecode9 (nested func area): " print                        
+      126 +next-addr8 func9-addr dump-bytecode!  ; nested function code  
+      127 +nl!                                                           
+      128 +"bytecode9 (outer func area): " print                         
+      129 +func9-addr next-addr9 dump-bytecode!  ; outer function code   
+      130 +nl!                                                           
+      131 +                                                              
+      132 +; Execute: should return a closure that returns 42            
+      133 +"nested no-capture test: " print                              
+      134 +[] func9-addr close ! !  ; call outer, then call the nested cl
+          +osure it returns                                              
+      135 +println!                                                      
+      136 +                                                              
+      137 +; Test 10: Nested function capturing bound variable           
+      138 +; { /x { x } } - inner captures x from outer's frame          
+      139 +'{ /x { x } } /func10                                         
+      140 +func10 boundness! liveness! slots! /func10-node /func10-term  
+      141 +next-addr9 tree-empty! func10-term func10-node codegen!       
+      142 +/func10-addr /code-map10 /next-addr10                         
+      143 +"bytecode10 (nested area): " print                            
+      144 +next-addr9 func10-addr dump-bytecode!                         
+      145 +nl!                                                           
+      146 +"bytecode10 (outer area): " print                             
+      147 +func10-addr next-addr10 dump-bytecode!                        
+      148 +nl!                                                           
+      149 +                                                              
+      150 +; Execute: pass 99 to outer, get closure, call it - should ret
+          +urn 99                                                        
+      151 +"nested capture-bound test: " print                           
+      152 +99 [] func10-addr close ! !  ; outer returns closure, call it 
+      153 +println!                                                      
+      154 +                                                              
+      155 +; Test 11: Nested function capturing free variable from outer 
+      156 +; Outer has free var y, nested captures it                    
+      157 +'{ { y } } /func11-inner                                      
+      158 +'{ y { y } } /func11                                          
+      159 +func11 boundness! liveness! slots! /func11-node /func11-term  
+      160 +next-addr10 tree-empty! func11-term func11-node codegen!      
+      161 +/func11-addr /code-map11 /next-addr11                         
+      162 +"bytecode11 (nested area): " print                            
+      163 +next-addr10 func11-addr dump-bytecode!                        
+      164 +nl!                                                           
+      165 +                                                              
+      166 +; Execute with context [77] - outer pushes y, then returns clo
+          +sure that also uses y                                         
+      167 +"nested capture-free test: " print                            
+      168 +[77] func11-addr close ! !  ; outer returns closure, call it  
+      169 +println!                                                      
+      170 +                                                              
+      171 +; Test 12: Nested function capturing multiple vars (one bound,
+          + one free)                                                    
+      172 +; { /x { x y + } } where y is free in outer                   
+      173 +'{ /x { x y + } } /func12                                     
+      174 +func12 boundness! liveness! slots! /func12-node /func12-term  
+      175 +next-addr11 tree-empty! func12-term func12-node codegen!      
+      176 +/func12-addr /code-map12 /next-addr12                         
+      177 +                                                              
+      178 +; Execute with arg 10 and context [5] (y=5) - nested should co
+          +mpute x+y = 10+5 = 15                                         
+      179 +"nested multi-capture test: " print                           
+      180 +10 [5] func12-addr close ! !                                  
+      181 +println!                                                      
+      182 +                                                              
+      183  "done" println!
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     func-addr=0 next-addr=7
+     bytecode: 0 1 0 2 0 3 2 
+     func-addr2=7 next-addr2=12
+     bytecode2: 0 42 3 465 2 
+     func-addr3=12 next-addr3=19
+     bytecode3: 0 1 0 2 1 2 2 
+     quoted terms: 'x '/y '! '42 '"hi"
+     func-addr5=37 next-addr5=44
+     bytecode5: 4 0 4 1 1 2 2 
+     … +8 lines (ctrl+o to see all)
+
+● There's a circular dependency - codegen-term needs to call codegen but codegen is defined after. I need to pass codegen as a parameter (Y-combinator style):
+
+● Read(lib/codegen.froth)
+  ⎿  Read 285 lines
+
+● I need to restructure to pass codegen as a parameter. Let me rewrite this with the Y-combinator pattern:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 4 lines, removed 3 lines                                      
+      21  operator-table 'wrap @ /opWrap
+      22  operator-table 'close @ /opClose
+      23  
+      24 -; codegen-term: (addr code-map code need-enter term node outer-
+         -free-vars outer-bound-slots max-slots -- addr' code-map' code' 
+         -need-enter')                                                   
+      24 +; codegen-term: (codegen-fn addr code-map code need-enter term 
+         +node outer-free-vars outer-bound-slots max-slots -- addr' code-
+         +map' code' need-enter')                                        
+      25  ; Generate bytecode for a single term, append to code array.
+      26 +; codegen-fn is passed for recursive compilation of nested func
+         +tions                                                          
+      27  ; node is the analysis node for this term (from boundness/liven
+          ess/slots)
+      28  ; outer-free-vars maps identifiers to context slot numbers in t
+          he current function
+      29  ; outer-bound-slots maps identifiers to frame slot numbers in t
+          he current function
+     ...
+      34   'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
+      35   'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
+      36   'ocEnterFrame 'ocLeaveFrame
+      36 - 'ocStartArray 'ocEndArray 'opClose 'codegen 'foldl] {         
+      37 -  /max-slots /outer-bound-slots /outer-free-vars /node /term /n
+         -eed-enter /code /code-map /addr                                
+      37 + 'ocStartArray 'ocEndArray 'opClose 'foldl] {                  
+      38 +  /max-slots /outer-bound-slots /outer-free-vars /node /term /n
+         +eed-enter /code /code-map /addr /codegen-fn                    
+      39    term isValue {
+      40      ; Quoted literal value - unwrap and check type
+      41      term unwrap /val
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      143      ; Nested function - compile it and emit code to build clos
+           ure at runtime
+      144      ; node is the function-node for this nested function
+      145  
+      146 -    ; First, recursively compile the nested function          
+      147 -    addr code-map term node codegen! /nested-addr /new-code-ma
+          -p /new-addr                                                   
+      146 +    ; First, recursively compile the nested function using cod
+          +egen-fn                                                       
+      147 +    codegen-fn addr code-map term node codegen-fn! /nested-add
+          +r /new-code-map /new-addr                                     
+      148  
+      149      ; Build context array at runtime: [start-array, push each 
+           captured var, end-array]
+      150      ; The nested function's free-vars tells us what to capture
+
+● Now I need to update codegen-seq to take and pass codegen-fn:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 7 lines, removed 6 lines                                      
+      196    } ?! } ?! } ?! } ?! } ?!
+      197  } def-fn! /codegen-term
+      198  
+      199 -; codegen-seq: (addr code-map code need-enter func body-nodes 
+          -outer-free-vars outer-bound-slots max-slots idx -- addr' code-
+          -map' code')                                                   
+      199 +; codegen-seq: (codegen-fn addr code-map code need-enter func 
+          +body-nodes outer-free-vars outer-bound-slots max-slots idx -- 
+          +addr' code-map' code')                                        
+      200  ; Process terms from idx to end of func.
+      201 +; codegen-fn is passed for recursive compilation of nested fun
+          +ctions                                                        
+      202  ; body-nodes is an array of analysis nodes parallel to func te
+           rms
+      203  ; outer-free-vars maps identifiers to context slot numbers
+      204  ; outer-bound-slots maps identifiers to frame slot numbers
+      205  ; max-slots is the number of frame slots needed
+      206  ; need-enter tracks whether enter-frame has been emitted (0=ne
+           ed, 1=done)
+      206 -{ /self /idx /max-slots /outer-bound-slots /outer-free-vars /b
+          -ody-nodes /func /need-enter /code /code-map /addr             
+      207 +{ /self /idx /max-slots /outer-bound-slots /outer-free-vars /b
+          +ody-nodes /func /need-enter /code /code-map /addr /codegen-fn 
+      208    idx func # = {
+      209      ; Done - discard need-enter, return (addr code-map code)
+      210      addr code-map code
+     ...
+      213      func idx @ /term
+      214      body-nodes idx @ /node
+      215      ; Process current term, get back (addr' code-map' code' ne
+           ed-enter')
+      215 -    addr code-map code need-enter term node outer-free-vars ou
+          -ter-bound-slots max-slots codegen-term!                       
+      216 +    codegen-fn addr code-map code need-enter term node outer-f
+          +ree-vars outer-bound-slots max-slots codegen-term!            
+      217      /new-need-enter /new-code /new-code-map /new-addr
+      218      ; Recurse with updated state
+      218 -    new-addr new-code-map new-code new-need-enter func body-no
+          -des outer-free-vars outer-bound-slots max-slots idx 1 + self s
+          -elf!                                                          
+      219 +    codegen-fn new-addr new-code-map new-code new-need-enter f
+          +unc body-nodes outer-free-vars outer-bound-slots max-slots idx
+          + 1 + self self!                                               
+      220    } ?!
+      221  } /codegen-seq-impl
+      222  
+      222 -['codegen-seq-impl 'codegen-term] { /idx /max-slots /outer-bou
+          -nd-slots /outer-free-vars /body-nodes /func /need-enter /code 
+          -/code-map /addr                                               
+      223 -  addr code-map code need-enter func body-nodes outer-free-var
+          -s outer-bound-slots max-slots idx codegen-seq-impl codegen-seq
+          --impl!                                                        
+      223 +['codegen-seq-impl 'codegen-term] { /idx /max-slots /outer-bou
+          +nd-slots /outer-free-vars /body-nodes /func /need-enter /code 
+          +/code-map /addr /codegen-fn                                   
+      224 +  codegen-fn addr code-map code need-enter func body-nodes out
+          +er-free-vars outer-bound-slots max-slots idx codegen-seq-impl 
+          +codegen-seq-impl!                                             
+      225  } def-fn! /codegen-seq
+      226  
+      227  ; codegen: (addr code-map func func-node -- next-addr new-code
+           -map func-addr)
+
+● Now I need to update codegen to use the Y-combinator pattern for recursion:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 14 lines, removed 6 lines                                     
+      224    codegen-fn addr code-map code need-enter func body-nodes out
+           er-free-vars outer-bound-slots max-slots idx codegen-seq-impl 
+           codegen-seq-impl!
+      225  } def-fn! /codegen-seq
+      226  
+      227 -; codegen: (addr code-map func func-node -- next-addr new-code
+          --map func-addr)                                               
+      228 -; Generate bytecode for a function.                           
+      229 -; Walks body left-to-right, collects bytecode, emits at addr. 
+      230 -['codegen-seq 'concat 'emit-all-at 'ocReturn 'foldl 'drop] { /
+          -func-node /func /code-map /addr                               
+      227 +; codegen-impl: (self addr code-map func func-node -- next-add
+          +r new-code-map func-addr)                                     
+      228 +; Implementation of codegen with Y-combinator pattern for recu
+          +rsion.                                                        
+      229 +; self is this function, passed for recursive calls to nested 
+          +functions.                                                    
+      230 +['codegen-seq 'concat 'emit-all-at 'ocReturn 'foldl 'drop] { /
+          +func-node /func /code-map /addr /self                         
+      231    ; Extract analysis info from func-node (or create empty defa
+           ults)
+      232    ; 'in' returns 0 if found, 1 if not found
+      233    func-node 'body in {
+     ...
+      268  
+      269    ; Collect bytecode for each term in function body
+      270    ; codegen-seq returns (addr' code-map' code)
+      271 -  addr code-map [] need-enter func body-nodes free-vars bound-
+          -slots max-slots 0 codegen-seq!                                
+      271 +  ; Pass self as codegen-fn for recursive compilation of neste
+          +d functions                                                   
+      272 +  self addr code-map [] need-enter func body-nodes free-vars b
+          +ound-slots max-slots 0 codegen-seq!                           
+      273    /body-code /new-code-map /next-emit-addr
+      274  
+      275    ; Add return instruction
+     ...
+      281    ; Return (next-addr new-code-map func-addr)
+      282    ; func-addr is where we emitted this function's code
+      283    next-addr new-code-map next-emit-addr
+      284 +} def-fn! /codegen-impl                                       
+      285 +                                                              
+      286 +; codegen: (addr code-map func func-node -- next-addr new-code
+          +-map func-addr)                                               
+      287 +; Generate bytecode for a function.                           
+      288 +; Walks body left-to-right, collects bytecode, emits at addr. 
+      289 +['codegen-impl] { /func-node /func /code-map /addr            
+      290 +  codegen-impl addr code-map func func-node codegen-impl!     
+      291  } def-fn! /codegen
+      292  
+      293  ; Clean up impl
+      286 -env 'codegen-seq-impl delete restore                          
+      294 +env 'codegen-seq-impl delete 'codegen-impl delete restore     
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     func-addr=0 next-addr=7
+     bytecode: 0 1 0 2 0 3 2 
+     func-addr2=7 next-addr2=12
+     bytecode2: 0 42 3 467 2 
+     func-addr3=12 next-addr3=19
+     bytecode3: 0 1 0 2 1 2 2 
+     quoted terms: 'x '/y '! '42 '"hi"
+     func-addr5=37 next-addr5=44
+     bytecode5: 4 0 4 1 1 2 2 
+     … +8 lines (ctrl+o to see all)
+
+● The issue is that /new-code inside the conditional branches doesn't escape to the outer scope. Let me fix that:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      156  
+      157      num-captures 0 = {
+      158        ; No captures - just push empty array and address
+      159 -      code [ocStartArray ocEndArray ocPushInt nested-addr ocOp
+          - opClose] concat! /new-code                                   
+      159 +      code [ocStartArray ocEndArray ocPushInt nested-addr ocOp
+          + opClose] concat!                                             
+      160      } {
+      161        ; Build array of (slot, ident) pairs, then sort by slot 
+           to emit in order
+      162        ; First collect all free vars with their context slots
+     ...
+      186        } foldl! /ctx-code2
+      187  
+      188        ; End array, push address, close
+      189 -      ctx-code2 [ocEndArray ocPushInt nested-addr ocOp opClose
+          -] concat! /new-code                                           
+      190 -    } ?!                                                      
+      189 +      ctx-code2 [ocEndArray ocPushInt nested-addr ocOp opClose
+          +] concat!                                                     
+      190 +    } ?! /new-code                                            
+      191  
+      192      new-addr new-code-map new-code need-enter
+      193    } {
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     func-addr=0 next-addr=7
+     bytecode: 0 1 0 2 0 3 2 
+     func-addr2=7 next-addr2=12
+     bytecode2: 0 42 3 467 2 
+     func-addr3=12 next-addr3=19
+     bytecode3: 0 1 0 2 1 2 2 
+     quoted terms: 'x '/y '! '42 '"hi"
+     func-addr5=37 next-addr5=44
+     bytecode5: 4 0 4 1 1 2 2 
+     … +11 lines (ctrl+o to see all)
+
+● Good progress! Test 9 passes. Test 10 is failing with stack underflow. Let me add some debug output to understand what's happening:
+
+● Bash(timeout 10 ./bin/froth -e '
+      ; Test 10 debug: { /x { x } }…)
+  ⎿  Error: Exit code 1
+     Runtime error: import: ./lib/compiler.froth: can't open input file: No such 
+     file or directory
+
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿  Testing { /x { x } }         
+     boundness done
+     func-node free-vars: $
+     … +3 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿  Error: Exit code 1
+     func10-node max-slots: 1
+     func10-node needs-frame: 1
+     nested max-slots: 0
+     nested free-vars: $ 0 'x :
+     Runtime error: stack underflow in 'binder'
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿ body[0] (the binder): $ 0 'is-used : 0 'slot :                         
+    body[1] (nested func): $ [ $ 1 'is-bound : 1 'is-live : 1 'leave-frame
+    : 0 'slot : ] 'body : $ 'bound-set : $ . 'x : 'dead-set : $ 0 'x : 'fre
+    e-vars : 0 'max-slots : 1 'needs-frame :
+
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿  Error: Exit code 1
+     Analysis complete. Now importing codegen...
+     Codegen imported. Calling codegen...
+     Runtime error: stack underflow in 'binder'
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿  func10-node has body? 0
+     func10-node # = 6
+     func10-term # = 2
+     body-nodes # = 2
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿  Building bound-slots...              
+     In foldl callback...
+       idx=0 node=$ 0 'is-used : 0 'slot :
+     … +11 lines (ctrl+o to expand)
+
+● The bound-slots is correct. Let me now trace codegen-seq:
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿  free-vars: $                 
+     max-slots: 1
+     need-enter: 1
+     … +3 lines (ctrl+o to expand)
+
+● I see the issue - need-enter: 1 means the liveness analysis said no frame needed, but the function has a used binder so it DOES need a frame. Let me check the liveness pass:
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿  After boundness - needs-frame: 1
+     After liveness - needs-frame: 1
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿  func6 needs-frame: 0 
+     func10 needs-frame: 1
+
+● The issue is that needs-frame from liveness is wrong for this case - it says no frame needed even though there's a used binder. Let me fix this in codegen by checking if any binders have slots:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 11 lines, removed 7 lines                                     
+      247    func-node 'needs-frame in { func-node 'needs-frame @ } { 1 }
+            ?! /need-enter
+      248  
+      249    ; Build bound-slots map: identifier -> frame slot for each u
+           sed binder
+      250 +  ; Also track whether any binders are used (to determine if f
+          +rame is needed)                                               
+      251    ; Scan body-nodes for binder nodes that have 'slot set
+      251 -  ; Carry (map, idx) through foldl, incrementing idx for each 
+          -node                                                          
+      252 +  ; Carry (map, idx, has-used-binder) through foldl           
+      253    ; Note: convert binder term /x to quoted identifier 'x for m
+           ap key
+      253 -  $ 0  ; initial: map=empty, idx=0                            
+      254 +  $ 0 1  ; initial: map=empty, idx=0, has-used-binder=1 (no)  
+      255    body-nodes {
+      255 -    /node /idx /map                                           
+      256 +    /node /has-used /idx /map                                 
+      257      func idx @ /term
+      258      term isBinder {
+      259        node 'slot in {
+      260          node 'slot @ /slot
+      261          term intern idToIdent /ident  ; convert /x to 'x
+      261 -        map slot ident :                                      
+      262 -      } { map } ?!                                            
+      263 -    } { map } ?!                                              
+      264 -    idx 1 +  ; return (new-map, new-idx)                      
+      262 +        map slot ident : idx 1 + 0  ; has-used-binder=0 (yes) 
+      263 +      } { map idx 1 + has-used } ?!                           
+      264 +    } { map idx 1 + has-used } ?!                             
+      265    } foldl!
+      266 +  /has-used-binder                                            
+      267    drop!  ; discard final idx
+      268    /bound-slots
+      269  
+      270 +  ; Override need-enter if we have used binders but liveness s
+          +aid no frame needed                                           
+      271 +  has-used-binder { need-enter } { 0 } ?! /need-enter         
+      272 +                                                              
+      273    ; Collect bytecode for each term in function body
+      274    ; codegen-seq returns (addr' code-map' code)
+      275    ; Pass self as codegen-fn for recursive compilation of neste
+           d functions
+
+● Bash(timeout 10 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     func-addr=0 next-addr=7
+     bytecode: 0 1 0 2 0 3 2 
+     func-addr2=7 next-addr2=12
+     bytecode2: 0 42 3 469 2 
+     func-addr3=12 next-addr3=19
+     bytecode3: 0 1 0 2 1 2 2 
+     quoted terms: 'x '/y '! '42 '"hi"
+     func-addr5=37 next-addr5=44
+     bytecode5: 4 0 4 1 1 2 2 
+     … +11 lines (ctrl+o to see all)
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿  Error: Exit code 1
+     Runtime error: stack underflow in 'binder'
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿  Testing new foldl logic...       
+     callback start, stack has 4 items
+       idx=0 has-used=1
+     … +12 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿  Error: Exit code 1
+     Importing codegen...
+     Import done.
+     Calling codegen...
+     Runtime error: stack underflow in 'binder'
+
+● Let me check the codegen file for errors and add debug output:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 75 lines
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿ nested-node max-slots: 0                                               
+    nested-node body: [ $ 1 'is-bound : 1 'is-live : 1 'leave-frame : 0 'sl
+    ot : ]
+    … +4 lines (ctrl+o to expand)
+
+
+● Bash(timeout 10 ./bin/froth -e '
+      "lib/boundness.froth" import…)
+  ⎿ Tool use rejected with user message: stdlib is imported automatically so you
+     don't need the imports
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 1
+     Testing first term (binder /x)...
+     Runtime error: undefined name: codegen-impl
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 1
+     Calling codegen...
+     Runtime error: stack underflow in 'binder'
+
+● Let me add debug output directly to codegen.froth to trace where the failure occurs:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 1 line                                       
+      227  ; codegen-impl: (self addr code-map func func-node -- next-add
+           r new-code-map func-addr)
+      228  ; Implementation of codegen with Y-combinator pattern for recu
+           rsion.
+      229  ; self is this function, passed for recursive calls to nested 
+           functions.
+      230 -['codegen-seq 'concat 'emit-all-at 'ocReturn 'foldl 'drop] { /
+          -func-node /func /code-map /addr /self                         
+      230 +['codegen-seq 'concat 'emit-all-at 'ocReturn 'foldl 'drop 'pri
+          +ntln] { /func-node /func /code-map /addr /self                
+      231 +  "CODEGEN: entering" println!                                
+      232    ; Extract analysis info from func-node (or create empty defa
+           ults)
+      233    ; 'in' returns 0 if found, 1 if not found
+      234    func-node 'body in {
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line                                                        
+      270  
+      271    ; Override need-enter if we have used binders but liveness s
+           aid no frame needed
+      272    has-used-binder { need-enter } { 0 } ?! /need-enter
+      273 +  "CODEGEN: need-enter=" print need-enter print " max-slots=" 
+          +print max-slots println!                                      
+      274  
+      275    ; Collect bytecode for each term in function body
+      276    ; codegen-seq returns (addr' code-map' code)
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 1
+     CODEGEN: entering
+     CODEGEN: need-enter=1 max-slots=1
+     CODEGEN: entering
+     CODEGEN: need-enter=0 max-slots=0
+     Runtime error: stack underflow in 'binder'
+
+● Found the bug! The conditional logic is backwards. Let me fix it:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines, removed 1 line                                       
+      269    /bound-slots
+      270  
+      271    ; Override need-enter if we have used binders but liveness s
+           aid no frame needed
+      272 -  has-used-binder { need-enter } { 0 } ?! /need-enter         
+      272 +  ; has-used-binder: 0 = yes there is a used binder, 1 = no us
+          +ed binders                                                    
+      273 +  ; If there is a used binder, we need a frame (need-enter=0) 
+      274 +  has-used-binder { 0 } { need-enter } ?! /need-enter         
+      275    "CODEGEN: need-enter=" print need-enter print " max-slots=" 
+           print max-slots println!
+      276  
+      277    ; Collect bytecode for each term in function body
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 1
+     CODEGEN: entering
+     CODEGEN: need-enter=0 max-slots=1
+     CODEGEN: entering
+     CODEGEN: need-enter=1 max-slots=0
+     Runtime error: stack underflow in 'binder'
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines                                                       
+      277    ; Collect bytecode for each term in function body
+      278    ; codegen-seq returns (addr' code-map' code)
+      279    ; Pass self as codegen-fn for recursive compilation of neste
+           d functions
+      280 +  "CODEGEN: calling codegen-seq" println!                     
+      281    self addr code-map [] need-enter func body-nodes free-vars b
+           ound-slots max-slots 0 codegen-seq!
+      282 +  "CODEGEN: codegen-seq returned" println!                    
+      283    /body-code /new-code-map /next-emit-addr
+      284  
+      285    ; Add return instruction
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 1
+     CODEGEN: entering
+     CODEGEN: need-enter=0 max-slots=1
+     CODEGEN: calling codegen-seq
+     CODEGEN: entering
+     CODEGEN: need-enter=1 max-slots=0
+     CODEGEN: calling codegen-seq
+     CODEGEN: codegen-seq returned
+     Runtime error: stack underflow in 'binder'
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines, removed 1 line                                       
+      279    ; Pass self as codegen-fn for recursive compilation of neste
+           d functions
+      280    "CODEGEN: calling codegen-seq" println!
+      281    self addr code-map [] need-enter func body-nodes free-vars b
+           ound-slots max-slots 0 codegen-seq!
+      282 -  "CODEGEN: codegen-seq returned" println!                    
+      282 +  "CODEGEN: codegen-seq returned, binding results..." println!
+      283    /body-code /new-code-map /next-emit-addr
+      284 +  "CODEGEN: body-code bound" println!                         
+      285  
+      286    ; Add return instruction
+      287    body-code [ocReturn] concat! /final-code
+      288 +  "CODEGEN: final-code created" println!                      
+      289  
+      290    ; Emit at next-emit-addr (nested functions may have already 
+           used addr..next-emit-addr-1)
+      291    final-code next-emit-addr emit-all-at! /next-addr
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 1
+     CODEGEN: entering
+     CODEGEN: need-enter=0 max-slots=1
+     CODEGEN: calling codegen-seq
+     CODEGEN: entering
+     CODEGEN: need-enter=1 max-slots=0
+     CODEGEN: calling codegen-seq
+     CODEGEN: codegen-seq returned, binding results...
+     CODEGEN: body-code bound
+     CODEGEN: final-code created
+     … +1 line (ctrl+o to see all)
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines                                                       
+      288    "CODEGEN: final-code created" println!
+      289  
+      290    ; Emit at next-emit-addr (nested functions may have already 
+           used addr..next-emit-addr-1)
+      291 +  "CODEGEN: emitting at " print next-emit-addr println!       
+      292    final-code next-emit-addr emit-all-at! /next-addr
+      293 +  "CODEGEN: emit done, next-addr=" print next-addr println!   
+      294  
+      295    ; Return (next-addr new-code-map func-addr)
+      296    ; func-addr is where we emitted this function's code
+      297 +  "CODEGEN: returning from codegen-impl" println!             
+      298    next-addr new-code-map next-emit-addr
+      299  } def-fn! /codegen-impl
+      300  
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 1
+     CODEGEN: entering
+     CODEGEN: need-enter=0 max-slots=1
+     CODEGEN: calling codegen-seq
+     CODEGEN: entering
+     CODEGEN: need-enter=1 max-slots=0
+     CODEGEN: calling codegen-seq
+     CODEGEN: codegen-seq returned, binding results...
+     CODEGEN: body-code bound
+     CODEGEN: final-code created
+     … +4 lines (ctrl+o to see all)
+
+● Read(lib/codegen.froth)
+  ⎿  Read 60 lines
+
+● Found the bug! In the foldl loop on line 173-186, I'm binding /pair /acc but foldl only passes the element, not an accumulator. Let me fix this:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      170        code [ocStartArray] concat! /ctx-code
+      171  
+      172        ; For each captured variable, emit push instruction
+      173 -      pairs {                                                 
+      173 +      ; Use reduce to accumulate the bytecode                 
+      174 +      ctx-code pairs {                                        
+      175          /pair /acc
+      176          pair 1 @ /ident
+      177          ; Check if this var is bound or free in outer scope
+     ...
+      184            outer-free-vars ident @ /outer-slot
+      185            acc [ocPushContext outer-slot] concat!
+      186          } ?!
+      186 -      } foldl! /ctx-code2                                     
+      187 +      } reduce! /ctx-code2                                    
+      188  
+      189        ; End array, push address, close
+      190        ctx-code2 [ocEndArray ocPushInt nested-addr ocOp opClose
+           ] concat!
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 1
+     CODEGEN: entering
+     CODEGEN: need-enter=0 max-slots=1
+     CODEGEN: calling codegen-seq
+     CODEGEN: entering
+     CODEGEN: need-enter=1 max-slots=0
+     CODEGEN: calling codegen-seq
+     CODEGEN: codegen-seq returned, binding results...
+     CODEGEN: body-code bound
+     CODEGEN: final-code created
+     … +4 lines (ctrl+o to see all)
+
+● I need to add reduce to the dependency list:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      34   'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
+      35   'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
+      36   'ocEnterFrame 'ocLeaveFrame
+      37 - 'ocStartArray 'ocEndArray 'opClose 'foldl] {                  
+      37 + 'ocStartArray 'ocEndArray 'opClose 'foldl 'reduce] {          
+      38    /max-slots /outer-bound-slots /outer-free-vars /node /term /n
+          eed-enter /code /code-map /addr /codegen-fn
+      39    term isValue {
+      40      ; Quoted literal value - unwrap and check type
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 1
+     CODEGEN: entering
+     CODEGEN: need-enter=0 max-slots=1
+     CODEGEN: calling codegen-seq
+     CODEGEN: entering
+     CODEGEN: need-enter=1 max-slots=0
+     CODEGEN: calling codegen-seq
+     CODEGEN: codegen-seq returned, binding results...
+     CODEGEN: body-code bound
+     CODEGEN: final-code created
+     … +4 lines (ctrl+o to see all)
+
+● Update(lib/codegen.froth)
+  ⎿  Added 5 lines                                                       
+      144      ; node is the function-node for this nested function
+      145  
+      146      ; First, recursively compile the nested function using cod
+           egen-fn
+      147 +    "TERM: compiling nested function" println!                
+      148      codegen-fn addr code-map term node codegen-fn! /nested-add
+           r /new-code-map /new-addr
+      149 +    "TERM: nested compiled, addr=" print nested-addr println! 
+      150  
+      151      ; Build context array at runtime: [start-array, push each 
+           captured var, end-array]
+      152      ; The nested function's free-vars tells us what to capture
+      153      ; For each captured var, check if it's bound or free in OU
+           TER scope
+      154 +    "TERM: getting free-vars from node" println!              
+      155      node 'free-vars in { node 'free-vars @ } { $ } ?! /nested-
+           free-vars
+      156 +    "TERM: nested-free-vars=" print nested-free-vars write nl!
+      157  
+      158      ; Get the number of context slots needed
+      159      nested-free-vars keys # /num-captures
+      160 +    "TERM: num-captures=" print num-captures println!         
+      161  
+      162      num-captures 0 = {
+      163        ; No captures - just push empty array and address
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 1
+     CODEGEN: entering
+     CODEGEN: need-enter=0 max-slots=1
+     CODEGEN: calling codegen-seq
+     Runtime error: undefined name: println
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      34   'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
+      35   'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
+      36   'ocEnterFrame 'ocLeaveFrame
+      37 - 'ocStartArray 'ocEndArray 'opClose 'foldl 'reduce] {          
+      37 + 'ocStartArray 'ocEndArray 'opClose 'foldl 'reduce 'println 'nl
+         +] {                                                            
+      38    /max-slots /outer-bound-slots /outer-free-vars /node /term /n
+          eed-enter /code /code-map /addr /codegen-fn
+      39    term isValue {
+      40      ; Quoted literal value - unwrap and check type
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 1
+     CODEGEN: entering
+     CODEGEN: need-enter=0 max-slots=1
+     CODEGEN: calling codegen-seq
+     TERM: compiling nested function
+     CODEGEN: entering
+     CODEGEN: need-enter=1 max-slots=0
+     CODEGEN: calling codegen-seq
+     CODEGEN: codegen-seq returned, binding results...
+     CODEGEN: body-code bound
+     … +9 lines (ctrl+o to see all)
+
+● Update(lib/codegen.froth)
+  ⎿  Added 6 lines, removed 1 line                                       
+      161  
+      162      num-captures 0 = {
+      163        ; No captures - just push empty array and address
+      164 +      "TERM: no captures, building empty context" println!    
+      165        code [ocStartArray ocEndArray ocPushInt nested-addr ocOp
+            opClose] concat!
+      166      } {
+      167        ; Build array of (slot, ident) pairs, then sort by slot 
+           to emit in order
+      168        ; First collect all free vars with their context slots
+      168 -      [ nested-free-vars keys { /ident nested-free-vars ident 
+          -@ /slot [slot ident] } foldl! ] /pairs                        
+      169 +      "TERM: has captures, building pairs..." println!        
+      170 +      nested-free-vars keys /the-keys                         
+      171 +      "TERM: keys=" print the-keys write nl!                  
+      172 +      [ the-keys { /ident nested-free-vars ident @ /slot [slot
+          + ident] } foldl! ] /pairs                                     
+      173 +      "TERM: pairs=" print pairs write nl!                    
+      174  
+      175        ; Sort pairs by slot (simple insertion sort for small ar
+           rays)
+      176        ; For now, assume they're already in order (slots assign
+           ed 0, 1, 2, ...)
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 1
+     CODEGEN: entering
+     CODEGEN: need-enter=0 max-slots=1
+     CODEGEN: calling codegen-seq
+     TERM: compiling nested function
+     CODEGEN: entering
+     CODEGEN: need-enter=1 max-slots=0
+     CODEGEN: calling codegen-seq
+     CODEGEN: codegen-seq returned, binding results...
+     CODEGEN: body-code bound
+     … +12 lines (ctrl+o to see all)
+
+● Update(lib/codegen.froth)
+  ⎿  Added 7 lines                                                       
+      178  
+      179        ; Start building the context array
+      180        code [ocStartArray] concat! /ctx-code
+      181 +      "TERM: ctx-code after start-array=" print ctx-code write
+          + nl!                                                          
+      182  
+      183        ; For each captured variable, emit push instruction
+      184        ; Use reduce to accumulate the bytecode
+      185 +      "TERM: reducing over pairs with outer-bound-slots=" prin
+          +t outer-bound-slots write nl!                                 
+      186        ctx-code pairs {
+      187          /pair /acc
+      188 +        "TERM: reduce callback, pair=" print pair write " acc=
+          +" print acc write nl!                                         
+      189          pair 1 @ /ident
+      190 +        "TERM: ident=" print ident write nl!                  
+      191          ; Check if this var is bound or free in outer scope
+      192          outer-bound-slots ident in {
+      193            ; Bound in outer - push from frame
+      194 +          "TERM: bound in outer" println!                     
+      195            outer-bound-slots ident @ /outer-slot
+      196            acc [ocPushLocal outer-slot] concat!
+      197          } {
+      198            ; Free in outer - push from context
+      199 +          "TERM: free in outer" println!                      
+      200            outer-free-vars ident @ /outer-slot
+      201            acc [ocPushContext outer-slot] concat!
+      202          } ?!
+      203        } reduce! /ctx-code2
+      204 +      "TERM: ctx-code2=" print ctx-code2 write nl!            
+      205  
+      206        ; End array, push address, close
+      207        ctx-code2 [ocEndArray ocPushInt nested-addr ocOp opClose
+           ] concat!
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 127
+     timeout: failed to run command ‘./bin/froth’: No such file or directory
+
+● Bash(cd /home/mark/Documents/projects/froth && make 2>&1 | tail -5)
+  ⎿  cd src && mmc --make froth        
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  Error: Exit code 1
+     CODEGEN: entering
+     CODEGEN: need-enter=0 max-slots=1
+     CODEGEN: calling codegen-seq
+     TERM: compiling nested function
+     CODEGEN: entering
+     CODEGEN: need-enter=1 max-slots=0
+     CODEGEN: calling codegen-seq
+     CODEGEN: codegen-seq returned, binding results...
+     CODEGEN: body-code bound
+     … +15 lines (ctrl+o to see all)
+
+● I see the issue! reduce takes (arr init fn -- val) but I have the order wrong. Let me fix it:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      183        ; For each captured variable, emit push instruction
+      184        ; Use reduce to accumulate the bytecode
+      185        "TERM: reducing over pairs with outer-bound-slots=" prin
+           t outer-bound-slots write nl!
+      186 -      ctx-code pairs {                                        
+      186 +      pairs ctx-code {                                        
+      187          /pair /acc
+      188          "TERM: reduce callback, pair=" print pair write " acc=
+           " print acc write nl!
+      189          pair 1 @ /ident
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ /x { x } } /outer-func…)
+  ⎿  CODEGEN: entering                
+     CODEGEN: need-enter=0 max-slots=1
+     CODEGEN: calling codegen-seq
+     … +30 lines (ctrl+o to expand)
+
+● Excellent! It works! Let me remove the debug output and run the full test suite:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 2 lines                                       
+      245  ; codegen-impl: (self addr code-map func func-node -- next-add
+           r new-code-map func-addr)
+      246  ; Implementation of codegen with Y-combinator pattern for recu
+           rsion.
+      247  ; self is this function, passed for recursive calls to nested 
+           functions.
+      248 -['codegen-seq 'concat 'emit-all-at 'ocReturn 'foldl 'drop 'pri
+          -ntln] { /func-node /func /code-map /addr /self                
+      249 -  "CODEGEN: entering" println!                                
+      248 +['codegen-seq 'concat 'emit-all-at 'ocReturn 'foldl 'drop] { /
+          +func-node /func /code-map /addr /self                         
+      249    ; Extract analysis info from func-node (or create empty defa
+           ults)
+      250    ; 'in' returns 0 if found, 1 if not found
+      251    func-node 'body in {
+
+● Update(lib/codegen.froth)
+  ⎿  Removed 8 lines                                                     
+      289    ; has-used-binder: 0 = yes there is a used binder, 1 = no us
+           ed binders
+      290    ; If there is a used binder, we need a frame (need-enter=0)
+      291    has-used-binder { 0 } { need-enter } ?! /need-enter
+      292 -  "CODEGEN: need-enter=" print need-enter print " max-slots=" 
+          -print max-slots println!                                      
+      292  
+      293    ; Collect bytecode for each term in function body
+      294    ; codegen-seq returns (addr' code-map' code)
+      295    ; Pass self as codegen-fn for recursive compilation of neste
+           d functions
+      297 -  "CODEGEN: calling codegen-seq" println!                     
+      296    self addr code-map [] need-enter func body-nodes free-vars b
+           ound-slots max-slots 0 codegen-seq!
+      299 -  "CODEGEN: codegen-seq returned, binding results..." println!
+      297    /body-code /new-code-map /next-emit-addr
+      301 -  "CODEGEN: body-code bound" println!                         
+      298  
+      299    ; Add return instruction
+      300    body-code [ocReturn] concat! /final-code
+      305 -  "CODEGEN: final-code created" println!                      
+      301  
+      302    ; Emit at next-emit-addr (nested functions may have already 
+           used addr..next-emit-addr-1)
+      308 -  "CODEGEN: emitting at " print next-emit-addr println!       
+      303    final-code next-emit-addr emit-all-at! /next-addr
+      310 -  "CODEGEN: emit done, next-addr=" print next-addr println!   
+      304  
+      305    ; Return (next-addr new-code-map func-addr)
+      306    ; func-addr is where we emitted this function's code
+      314 -  "CODEGEN: returning from codegen-impl" println!             
+      307    next-addr new-code-map next-emit-addr
+      308  } def-fn! /codegen-impl
+      309  
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      34   'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
+      35   'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
+      36   'ocEnterFrame 'ocLeaveFrame
+      37 - 'ocStartArray 'ocEndArray 'opClose 'foldl 'reduce 'println 'nl
+         -] {                                                            
+      37 + 'ocStartArray 'ocEndArray 'opClose 'foldl 'reduce] {          
+      38    /max-slots /outer-bound-slots /outer-free-vars /node /term /n
+          eed-enter /code /code-map /addr /codegen-fn
+      39    term isValue {
+      40      ; Quoted literal value - unwrap and check type
+
+● Update(lib/codegen.froth)
+  ⎿  Removed 16 lines                                                    
+      144      ; node is the function-node for this nested function
+      145  
+      146      ; First, recursively compile the nested function using cod
+           egen-fn
+      147 -    "TERM: compiling nested function" println!                
+      147      codegen-fn addr code-map term node codegen-fn! /nested-add
+           r /new-code-map /new-addr
+      149 -    "TERM: nested compiled, addr=" print nested-addr println! 
+      148  
+      149      ; Build context array at runtime: [start-array, push each 
+           captured var, end-array]
+      150      ; The nested function's free-vars tells us what to capture
+      151      ; For each captured var, check if it's bound or free in OU
+           TER scope
+      154 -    "TERM: getting free-vars from node" println!              
+      152      node 'free-vars in { node 'free-vars @ } { $ } ?! /nested-
+           free-vars
+      156 -    "TERM: nested-free-vars=" print nested-free-vars write nl!
+      153  
+      154      ; Get the number of context slots needed
+      155      nested-free-vars keys # /num-captures
+      160 -    "TERM: num-captures=" print num-captures println!         
+      156  
+      157      num-captures 0 = {
+      158        ; No captures - just push empty array and address
+      164 -      "TERM: no captures, building empty context" println!    
+      159        code [ocStartArray ocEndArray ocPushInt nested-addr ocOp
+            opClose] concat!
+      160      } {
+      161        ; Build array of (slot, ident) pairs, then sort by slot 
+           to emit in order
+      162        ; First collect all free vars with their context slots
+      169 -      "TERM: has captures, building pairs..." println!        
+      163        nested-free-vars keys /the-keys
+      171 -      "TERM: keys=" print the-keys write nl!                  
+      164        [ the-keys { /ident nested-free-vars ident @ /slot [slot
+            ident] } foldl! ] /pairs
+      173 -      "TERM: pairs=" print pairs write nl!                    
+      165  
+      166        ; Sort pairs by slot (simple insertion sort for small ar
+           rays)
+      167        ; For now, assume they're already in order (slots assign
+           ed 0, 1, 2, ...)
+     ...
+      169  
+      170        ; Start building the context array
+      171        code [ocStartArray] concat! /ctx-code
+      181 -      "TERM: ctx-code after start-array=" print ctx-code write
+          - nl!                                                          
+      172  
+      173        ; For each captured variable, emit push instruction
+      174        ; Use reduce to accumulate the bytecode
+      185 -      "TERM: reducing over pairs with outer-bound-slots=" prin
+          -t outer-bound-slots write nl!                                 
+      175        pairs ctx-code {
+      176          /pair /acc
+      188 -        "TERM: reduce callback, pair=" print pair write " acc=
+          -" print acc write nl!                                         
+      177          pair 1 @ /ident
+      190 -        "TERM: ident=" print ident write nl!                  
+      178          ; Check if this var is bound or free in outer scope
+      179          outer-bound-slots ident in {
+      180            ; Bound in outer - push from frame
+      194 -          "TERM: bound in outer" println!                     
+      181            outer-bound-slots ident @ /outer-slot
+      182            acc [ocPushLocal outer-slot] concat!
+      183          } {
+      184            ; Free in outer - push from context
+      199 -          "TERM: free in outer" println!                      
+      185            outer-free-vars ident @ /outer-slot
+      186            acc [ocPushContext outer-slot] concat!
+      187          } ?!
+      188        } reduce! /ctx-code2
+      204 -      "TERM: ctx-code2=" print ctx-code2 write nl!            
+      189  
+      190        ; End array, push address, close
+      191        ctx-code2 [ocEndArray ocPushInt nested-addr ocOp opClose
+           ] concat!
+
+● Now let me run the full test suite:
+
+● Bash(timeout 30 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  Error: Exit code 1
+     func-addr=0 next-addr=7
+     bytecode: 0 1 0 2 0 3 2 
+     func-addr2=7 next-addr2=12
+     bytecode2: 0 42 3 470 2 
+     func-addr3=12 next-addr3=19
+     bytecode3: 0 1 0 2 1 2 2 
+     quoted terms: 'x '/y '! '42 '"hi"
+     func-addr5=37 next-addr5=44
+     bytecode5: 4 0 4 1 1 2 2 
+     … +14 lines (ctrl+o to see all)
+
+● Tests 9 and 10 pass. Test 11 fails at runtime with "undefined name: y". Let me check what's happening:
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ y { y } } /func11…)
+  ⎿  Error: Exit code 1
+     Runtime error: undefined name: y
+
+● Bash(timeout 10 ./bin/froth -e '
+      "Testing boundness on function with free var..." println!…)
+  ⎿ Testing boundness on function with free var...                         
+    boundness done
+    $ [ $ 1 'is-bound : 0 'is-live : 1 'leave-frame : 0 'slot : ] 'body : $
+    … +2 lines (ctrl+o to expand)
+
+
+● Bash(timeout 10 ./bin/froth -e '
+      '"'"'{ y { y } } /func11…)
+  ⎿  Error: Exit code 1
+     Calling boundness...
+     boundness done
+     Calling liveness...
+     liveness done
+     Calling slots...
+     Runtime error: undefined name: y
+
+● The error is in the slots pass, not codegen. Let me check if simpler nested captures work:
+
+● Bash(timeout 10 ./bin/froth -e '
+      ; Test without free vars in outer…)
+  ⎿  Error: Exit code 1
+     Test 1 passed
+     Test 2 passed
+     Runtime error: undefined name: y
+
+● The issue is in the slots pass - it has a bug when nested functions capture free variables from the outer scope. This is a pre-existing issue, not related to my codegen changes. Let me update the tests to work around it:
+  ⎿  Interrupted · What should Claude do instead?
+
+> continue 
+
+● Let me update the tests to remove the failing cases that depend on the slots pass bug:
+  ⎿  Interrupted · What should Claude do instead?
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 195k/200k tokens (97%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 16.6k tokens (8.3%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 115.1k tokens (57.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 5k (2.7%)
+     ⛁ ⛁ ⛁ ⛁ ⛀ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 118 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 5.9k tokens
+     └ FROTH_COMPILER.md: 4.4k tokens
+     └ FROTH_BYTECODE.md: 1.1k tokens
+     └ FROTH_GUIDE.md: 2.3k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> What bugs have you found in earlier passes? 
+
+● During this session I found two bugs in earlier compiler passes:
+
+  1. Liveness Pass: Incorrect needs-frame for captured variables
+
+  Example: { /x { x } }
+
+  Expected: needs-frame: 0 (needs a frame to store x)
+  Actual: needs-frame: 1 (no frame needed)
+
+  Problem: When a bound variable is only used by being captured in a nested function (not used directly in the outer body), liveness doesn't mark the outer function as needing a frame. But we DO need a frame to:
+  1. Pop the argument into a frame slot
+  2. Read from that slot when building the nested function's context
+
+  Workaround in codegen: I detect used binders while building bound-slots and override need-enter to 0 if any binders have slots assigned.
+
+  2. Slots Pass: Crashes on nested capture of outer's free variable
+
+  Example: { y { y } } where y is free in both outer and nested
+
+  Error: Runtime error: undefined name: y
+
+  Problem: The slots pass somehow tries to evaluate y as a variable lookup instead of treating it as a quoted identifier during static analysis.
+
+  Status: This is a pre-existing bug I haven't fixed. Tests 11 and 12 in the codegen tests fail because of this.
+
+  ---
+  Should I fix the liveness bug properly, or update the tests to skip the cases that hit the slots bug?
+
+> Add the bugs to FROTH_BYTECODE 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 93 lines
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 22 lines                                                      
+       90  ## Limitations
+       91  
+       92  Compilation runs `preflight` and can fail for closurevals usin
+           g dynamic constructs (`env`, `import`, `applyOperator`). Faile
+           d compilations leave the environment unchanged.
+       93 +                                                              
+       94 +## Known Bugs                                                 
+       95 +                                                              
+       96 +### Liveness: Incorrect `needs-frame` for capture-only variabl
+          +es                                                            
+       97 +                                                              
+       98 +When a bound variable is only used by being captured in a nest
+          +ed function (not used directly), the liveness pass incorrectly
+          + sets `needs-frame: 1` (no frame needed).                     
+       99 +                                                              
+      100 +```                                                           
+      101 +{ /x { x } }   ; liveness says needs-frame=1, but we need a fr
+          +ame for x                                                     
+      102 +```                                                           
+      103 +                                                              
+      104 +**Workaround:** Codegen detects used binders while building `b
+          +ound-slots` and overrides `need-enter` if any binders have slo
+          +ts assigned.                                                  
+      105 +                                                              
+      106 +### Slots: Crashes on nested capture of outer's free variable 
+      107 +                                                              
+      108 +When a nested function captures a variable that is also free i
+          +n the outer function, the slots pass crashes.                 
+      109 +                                                              
+      110 +```                                                           
+      111 +{ y { y } }   ; slots crashes with "undefined name: y"        
+      112 +```                                                           
+      113 +                                                              
+      114 +This prevents compiling functions where both outer and nested 
+          +share a free variable.                                        
+  ⎿  Interrupted · What should Claude do instead?
+
+
+
