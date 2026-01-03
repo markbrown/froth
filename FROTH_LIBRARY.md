@@ -52,6 +52,8 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `scanl` | array | Iterate left-to-right until predicate returns 0 |
 | `scanr` | array | Iterate right-to-left until predicate returns 0 |
 | `swap` | data | Swap top two elements |
+| `times` | control | Execute body n times |
+| `times-loop` | control | Execute body n times with state |
 | `transform` | data | Recursively transform data structure |
 | `transform-values` | map | Transform each value in map |
 | `tree-empty` | tree23 | Create an empty tree |
@@ -63,6 +65,10 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `tree-set` | tree23 | Set or update key-value pair |
 | `tree-size` | tree23 | Get number of entries |
 | `tree-values` | tree23 | Get all values as array (in key order) |
+| `until` | control | Execute body until condition is true |
+| `until-loop` | control | Loop until condition with state |
+| `while` | control | Execute body while condition is true |
+| `while-loop` | control | Loop while condition with state |
 | `writeln` | io | Write in executable form with newline |
 
 Unlike operators, functions must be followed by `!` to be applied (e.g., `println!`, `foldl!`).
@@ -355,6 +361,43 @@ Boolean operations where 0 represents true and non-zero represents false.
 0 1 or!            ; 0 (true or false)
 1 1 or!            ; 1 (false or false)
 ```
+
+## Control (control.froth)
+
+Control flow utilities for loops and iteration. State is passed through the stack because Froth closures capture their environment at creation time, and bindings don't escape closure boundaries.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `while-loop` | `( state cond body -- state' )` | Loop while condition is true, with state |
+| `until-loop` | `( state cond body -- state' )` | Loop until condition is true, with state |
+| `times-loop` | `( state n body -- state' )` | Execute body n times, with state |
+| `times` | `( n body -- )` | Execute body n times |
+| `while` | `( cond body -- )` | Execute body while condition is true |
+| `until` | `( cond body -- )` | Execute body until condition is true |
+
+The `-loop` variants pass state through the stack and are the recommended way to write loops:
+
+```
+; Count from 0 to 4
+0 { dup! 5 < } { dup! print " " print 1 + } while-loop! drop! nl!
+; Output: 0 1 2 3 4
+
+; Count until reaching 5
+0 { dup! 5 = } { dup! print " " print 1 + } until-loop! drop! nl!
+; Output: 0 1 2 3 4
+
+; Sum 1 to 5
+0 5 { 1 + } times-loop!    ; Result: 5
+
+; Print "x" five times
+5 { "x" print } times! nl! ; Output: xxxxx
+```
+
+For `-loop` variants:
+- `cond`: `( state -- state flag )` - examines state, returns flag (0 = continue for while-loop, 0 = stop for until-loop)
+- `body`: `( state -- state' )` - transforms state
+
+**Important**: The non-loop variants (`while`, `until`) do NOT update captured variables between iterations. Use the `-loop` variants for any loop that needs to track state.
 
 ## Math (math.froth)
 
