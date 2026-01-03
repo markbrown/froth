@@ -238,8 +238,18 @@ func18-addr 1 + peek 0 = { "slot 0 ok" } { "ERROR: expected slot 0" } ?! println
 func18-addr 2 + peek 17 = { "tail-call ok" } { "ERROR: expected tail-call" } ?! println!
 next-addr18 func18-addr - 3 = { "length ok" } { "ERROR: expected length 3" } ?! println!
 
-; Test 19: Non-tail call (middle of function) - apply skipped for now
-; { f! 1 } should emit: (nothing for f!), push-int 1, return
+; Test 19: Non-tail call (middle of function)
+; { f! 1 } should emit:
+;   push-context 0 (f)
+;   enter-frame 1
+;   save-return-ptr
+;   pop-local 0
+;   call
+;   push-local 0
+;   restore-return-ptr
+;   leave-frame 1
+;   push-int 1
+;   return
 '{ f! 1 } boundness! liveness! slots! /func19-node /func19-term
 next-addr18 tree-empty! func19-term func19-node codegen!
 /func19-addr /code-map19 /next-addr19
@@ -248,10 +258,11 @@ next-addr18 tree-empty! func19-term func19-node codegen!
 func19-addr next-addr19 dump-bytecode!
 nl!
 
-; Currently emits: push-context 0, push-int 1, return (f! skipped since non-tail not implemented)
-; push-context=4, push-int=0, return=2
-; Note: once non-tail calls are implemented, this will change
-next-addr19 func19-addr - 5 = { "length ok (5 with push-context)" } { "ERROR" } ?! println!
+; Verify key instructions are present
+; push-context=4, call=12, save-return-ptr=13, restore-return-ptr=14
+func19-addr peek 4 = { "push-context ok" } { "ERROR: expected push-context" } ?! println!
+; call is at offset 7 (after push-context 0, enter-frame 1, save-return-ptr, pop-local 0)
+func19-addr 7 + peek 12 = { "call ok" } { "ERROR: expected call" } ?! println!
 
 ; Test 20: Tail call execution test
 ; Use the existing bytecode from earlier tests instead of codegen
@@ -288,5 +299,60 @@ inner-bv! println!
 ; Execute outer - should tail-call inner and return 42
 "tail call execution test: " print
 outer-bv! println!
+
+; Test 21: Non-tail call execution
+; Compile a simple function that returns 10
+'{ 10 } boundness! liveness! slots! /ret10-node /ret10-term
+after-outer tree-empty! ret10-term ret10-node codegen!
+/ret10-addr /ret10-code-map /after-ret10
+[] ret10-addr close /ret10-bv
+
+; Compile { f! 1 + } where f is in context slot 0
+'{ f! 1 + } boundness! liveness! slots! /func21-node /func21-term
+after-ret10 ret10-code-map func21-term func21-node codegen!
+/func21-addr /func21-code-map /after-func21
+
+; Create bytecodeval with context containing ret10-bv
+[ret10-bv] func21-addr close /func21-bv
+
+"non-tail call execution: " print
+func21-bv! println!
+; Expected: 11 (f returns 10, then 10 + 1 = 11)
+
+; Test 22: Multiple non-tail calls
+; Compile { 5 }
+'{ 5 } boundness! liveness! slots! /ret5-node /ret5-term
+after-func21 func21-code-map ret5-term ret5-node codegen!
+/ret5-addr /ret5-code-map /after-ret5
+[] ret5-addr close /ret5-bv
+
+; Compile { f! g! + } where f and g are in context
+'{ f! g! + } boundness! liveness! slots! /func22-node /func22-term
+after-ret5 ret5-code-map func22-term func22-node codegen!
+/func22-addr /func22-code-map /after-func22
+
+; Create bytecodeval with context [ret10-bv, ret5-bv]
+[ret10-bv ret5-bv] func22-addr close /func22-bv
+
+"multiple non-tail calls: " print
+func22-bv! println!
+; Expected: 15 (f returns 10, g returns 5, 10 + 5 = 15)
+
+; Test 23: Non-tail call with bound variable
+; Compile { /x f! x + } where f returns 100
+'{ 100 } boundness! liveness! slots! /ret100-node /ret100-term
+after-func22 func22-code-map ret100-term ret100-node codegen!
+/ret100-addr /ret100-code-map /after-ret100
+[] ret100-addr close /ret100-bv
+
+'{ /x f! x + } boundness! liveness! slots! /func23-node /func23-term
+after-ret100 ret100-code-map func23-term func23-node codegen!
+/func23-addr /func23-code-map /after-func23
+
+[ret100-bv] func23-addr close /func23-bv
+
+"non-tail with bound var: " print
+7 func23-bv! println!
+; Expected: 107 (f returns 100, x=7, 100 + 7 = 107)
 
 "done" println!

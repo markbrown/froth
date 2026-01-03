@@ -329,6 +329,7 @@ Supports:
 - Dead binders (`pop-unused`)
 - Quoted identifiers, binders, apply, and values
 - Tail calls (`tail-call` instead of `return`)
+- Non-tail calls (`call` with register save/restore)
 
 ```
 ; Simple literals (no analysis needed)

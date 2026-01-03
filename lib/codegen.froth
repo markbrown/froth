@@ -15,6 +15,11 @@ instruction-table 'leave-frame @ /ocLeaveFrame
 instruction-table 'start-array @ /ocStartArray
 instruction-table 'end-array @ /ocEndArray
 instruction-table 'tail-call @ /ocTailCall
+instruction-table 'call @ /ocCall
+instruction-table 'save-context-ptr @ /ocSaveContextPtr
+instruction-table 'restore-context-ptr @ /ocRestoreContextPtr
+instruction-table 'save-return-ptr @ /ocSaveReturnPtr
+instruction-table 'restore-return-ptr @ /ocRestoreReturnPtr
 
 ; Get operator codes for quoted term construction and closure creation
 operator-table 'idToIdent @ /opIdToIdent
@@ -37,7 +42,9 @@ operator-table 'deref @ /opDeref
  'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
  'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
  'ocEnterFrame 'ocLeaveFrame
- 'ocStartArray 'ocEndArray 'opClose 'opDeref 'ocTailCall 'foldl 'reduce 'drop] {
+ 'ocStartArray 'ocEndArray 'opClose 'opDeref 'ocTailCall 'ocCall
+ 'ocSaveContextPtr 'ocRestoreContextPtr 'ocSaveReturnPtr 'ocRestoreReturnPtr
+ 'foldl 'reduce 'drop 'or 'and] {
   /max-slots /outer-bound-slots /outer-free-vars /node /term /need-enter /code /code-map /addr /seq-fn /codegen-fn
   term isValue {
     ; Quoted literal value - unwrap and check type
@@ -226,13 +233,57 @@ operator-table 'deref @ /opDeref
     gen-addr gen-code-map gen-code [ocEndArray] concat! need-enter
   } {
   term isApply {
-    ; Apply - check node for tail call flag (only set by liveness for tail calls)
+    ; Apply - check node for tail call flag
     node 'is-tail-call in { node 'is-tail-call @ } { 1 } ?! {
       ; Tail call (is-tail-call=0) - emit tail-call
       addr code-map code [ocTailCall] concat! need-enter
     } {
-      ; Non-tail call - skip for now
-      addr code-map code need-enter
+      ; Non-tail call - handle register saves/restores
+      ; Check if we need to save context or return pointer
+      node 'save-context in { node 'save-context @ 0 = } { 1 } ?! /needs-save-ctx
+      node 'save-return in { node 'save-return @ 0 = } { 1 } ?! /needs-save-rp
+
+      ; Step 1: Enter frame if needed (haven't entered yet AND need to save registers)
+      need-enter needs-save-ctx needs-save-rp 0 = or! 0 = and! {
+        ; need-enter=0 AND (needs-save-ctx OR needs-save-rp) - enter frame first
+        code [ocEnterFrame max-slots] concat! 1
+      } {
+        code need-enter
+      } ?! /new-need-enter /code1
+
+      ; Step 2: Save context if this is the first call needing it
+      needs-save-ctx {
+        node 'ctx-save-slot @ /ctx-slot
+        code1 [ocSaveContextPtr ocPopLocal ctx-slot] concat!
+      } { code1 } ?! /code2
+
+      ; Step 3: Save return pointer if this is the first non-tail call
+      needs-save-rp {
+        node 'rp-save-slot @ /rp-slot
+        code2 [ocSaveReturnPtr ocPopLocal rp-slot] concat!
+      } { code2 } ?! /code3
+
+      ; Step 4: Emit call
+      code3 [ocCall] concat! /code4
+
+      ; Step 5: Restore context if needed
+      node 'restore-context in { node 'restore-context @ 0 = } { 1 } ?! {
+        node 'ctx-save-slot @ /ctx-slot
+        code4 [ocPushLocal ctx-slot ocRestoreContextPtr] concat!
+      } { code4 } ?! /code5
+
+      ; Step 6: Restore return pointer if this is the last non-tail call
+      node 'restore-return in { node 'restore-return @ 0 = } { 1 } ?! {
+        node 'rp-save-slot @ /rp-slot
+        code5 [ocPushLocal rp-slot ocRestoreReturnPtr] concat!
+      } { code5 } ?! /code6
+
+      ; Step 7: Leave frame if this is the last term using the frame
+      node 'leave-frame in { node 'leave-frame @ 0 = } { 1 } ?! {
+        code6 [ocLeaveFrame max-slots] concat!
+      } { code6 } ?! /code7
+
+      addr code-map code7 new-need-enter
     } ?!
   } {
     ; Other term type - skip

@@ -46,21 +46,36 @@ compile (addr code-map env-map id -- new-addr new-code-map new-env-map)
 
 **Deduplication:** `ref` returns unique ID for each function term. The `code-map` (tree23) maps these to bytecode addresses, enabling code sharing across closurevals with same body but different environments.
 
-## Codegen Details
+## Non-Tail Call Handling
 
-See FROTH_COMPILER.md for the `codegen` function signature and supported terms.
+Non-tail calls require saving and restoring the context pointer (CP) and return pointer (RP) across the call. The analysis passes provide flags on apply nodes:
 
-Codegen walks the function body left-to-right, collecting bytecode into an array. When it encounters a nested function, it recursively codegens that function first (emitting at `addr`), then continues collecting. After processing all terms, it emits the collected bytecode. This ensures nested functions appear first in the bytecode store.
+**From liveness:**
+- `is-tail-call`: 0 = tail call, 1 = non-tail call
+- `restore-context`: 0 = needs CP restore after call
+- `restore-return`: 0 = needs RP restore after call (last non-tail call)
+- `leave-frame`: 0 = last term using the frame
 
-**Nested function handling:**
+**From slots:**
+- `save-context`: 0 = first call needing CP save
+- `save-return`: 0 = first non-tail call needing RP save
+- `ctx-save-slot`: frame slot for saving CP
+- `rp-save-slot`: frame slot for saving RP
 
-1. Use `ref` on nested function; check `code-map` for existing address
-2. If not found: recurse, get `func-addr`, update `code-map`
-3. Collect code to build context array from current frame/context slots
-4. Collect code to push the nested function's `func-addr`
-5. Collect `op close` to create bytecodeval at runtime
+**Codegen algorithm for non-tail calls:**
 
-The `free-vars` map tells which variables to capture. At runtime, these are looked up from the enclosing function's frame (bound variables) or context (free variables).
+Before call:
+1. If `need-enter` = 0 AND (`save-context` = 0 OR `save-return` = 0): emit `enter-frame`, set `need-enter` = 1
+2. If `save-context` = 0: emit `save-context-ptr`, `pop-local ctx-save-slot`
+3. If `save-return` = 0: emit `save-return-ptr`, `pop-local rp-save-slot`
+4. Emit `call`
+
+After call:
+5. If `restore-context` = 0: emit `push-local ctx-save-slot`, `restore-context-ptr`
+6. If `restore-return` = 0: emit `push-local rp-save-slot`, `restore-return-ptr`
+7. If `leave-frame` = 0: emit `leave-frame max-slots`
+
+The save instructions push CP/RP to the data stack; `pop-local` stores them in the frame. Restoring reverses this: `push-local` retrieves from frame, restore instruction sets CP/RP.
 
 ## Limitations
 
