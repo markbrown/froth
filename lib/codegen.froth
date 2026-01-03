@@ -21,9 +21,10 @@ operator-table 'idToBinder @ /opIdToBinder
 operator-table 'wrap @ /opWrap
 operator-table 'close @ /opClose
 
-; codegen-term: (codegen-fn addr code-map code need-enter term node outer-free-vars outer-bound-slots max-slots -- addr' code-map' code' need-enter')
+; codegen-term: (codegen-fn seq-fn addr code-map code need-enter term node outer-free-vars outer-bound-slots max-slots -- addr' code-map' code' need-enter')
 ; Generate bytecode for a single term, append to code array.
 ; codegen-fn is passed for recursive compilation of nested functions
+; seq-fn is passed for processing generator bodies (calls codegen-term for each term)
 ; node is the analysis node for this term (from boundness/liveness/slots)
 ; outer-free-vars maps identifiers to context slot numbers in the current function
 ; outer-bound-slots maps identifiers to frame slot numbers in the current function
@@ -34,8 +35,8 @@ operator-table 'close @ /opClose
  'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
  'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
  'ocEnterFrame 'ocLeaveFrame
- 'ocStartArray 'ocEndArray 'opClose 'foldl 'reduce] {
-  /max-slots /outer-bound-slots /outer-free-vars /node /term /need-enter /code /code-map /addr /codegen-fn
+ 'ocStartArray 'ocEndArray 'opClose 'foldl 'reduce 'drop] {
+  /max-slots /outer-bound-slots /outer-free-vars /node /term /need-enter /code /code-map /addr /seq-fn /codegen-fn
   term isValue {
     ; Quoted literal value - unwrap and check type
     term unwrap /val
@@ -193,20 +194,49 @@ operator-table 'close @ /opClose
 
     new-addr new-code-map new-code need-enter
   } {
-    ; Other term type (generator, apply) - skip for now
+  term isGen {
+    ; Generator - wrap body in start-array/end-array, share outer frame
+    node 'body in { node 'body @ } { [ term { drop! $ } foldl! ] } ?! /gen-body-nodes
+
+    ; Build combined bound-slots including generator's binders
+    ; Scan gen-body-nodes for binder nodes with 'slot set
+    outer-bound-slots 0  ; start with outer's bound-slots, idx=0
+    gen-body-nodes {
+      /gnode /idx /gmap
+      term idx @ /gterm
+      gterm isBinder {
+        gnode 'slot in {
+          gnode 'slot @ /slot
+          gterm intern idToIdent /ident
+          gmap slot ident : idx 1 +
+        } { gmap idx 1 + } ?!
+      } { gmap idx 1 + } ?!
+    } foldl!
+    drop!  ; discard final idx
+    /gen-bound-slots
+
+    ; Process: start-array, generator body, end-array
+    ; Use seq-fn to process terms (shares outer's frame)
+    codegen-fn seq-fn addr code-map code [ocStartArray] concat! need-enter term gen-body-nodes outer-free-vars gen-bound-slots max-slots 0 seq-fn!
+    /gen-code /gen-code-map /gen-addr
+
+    gen-addr gen-code-map gen-code [ocEndArray] concat! need-enter
+  } {
+    ; Other term type (apply) - skip for now
     addr code-map code need-enter
-  } ?! } ?! } ?! } ?! } ?!
+  } ?! } ?! } ?! } ?! } ?! } ?!
 } def-fn! /codegen-term
 
-; codegen-seq: (codegen-fn addr code-map code need-enter func body-nodes outer-free-vars outer-bound-slots max-slots idx -- addr' code-map' code')
+; codegen-seq: (codegen-fn seq-fn addr code-map code need-enter func body-nodes outer-free-vars outer-bound-slots max-slots idx -- addr' code-map' code')
 ; Process terms from idx to end of func.
 ; codegen-fn is passed for recursive compilation of nested functions
+; seq-fn is this function, passed for generator body processing
 ; body-nodes is an array of analysis nodes parallel to func terms
 ; outer-free-vars maps identifiers to context slot numbers
 ; outer-bound-slots maps identifiers to frame slot numbers
 ; max-slots is the number of frame slots needed
 ; need-enter tracks whether enter-frame has been emitted (0=need, 1=done)
-{ /self /idx /max-slots /outer-bound-slots /outer-free-vars /body-nodes /func /need-enter /code /code-map /addr /codegen-fn
+{ /self /idx /max-slots /outer-bound-slots /outer-free-vars /body-nodes /func /need-enter /code /code-map /addr /seq-fn /codegen-fn
   idx func # = {
     ; Done - discard need-enter, return (addr code-map code)
     addr code-map code
@@ -215,15 +245,16 @@ operator-table 'close @ /opClose
     func idx @ /term
     body-nodes idx @ /node
     ; Process current term, get back (addr' code-map' code' need-enter')
-    codegen-fn addr code-map code need-enter term node outer-free-vars outer-bound-slots max-slots codegen-term!
+    ; Pass seq-fn (wrapped self) for generator body processing
+    codegen-fn seq-fn addr code-map code need-enter term node outer-free-vars outer-bound-slots max-slots codegen-term!
     /new-need-enter /new-code /new-code-map /new-addr
     ; Recurse with updated state
-    codegen-fn new-addr new-code-map new-code new-need-enter func body-nodes outer-free-vars outer-bound-slots max-slots idx 1 + self self!
+    codegen-fn seq-fn new-addr new-code-map new-code new-need-enter func body-nodes outer-free-vars outer-bound-slots max-slots idx 1 + self self!
   } ?!
 } /codegen-seq-impl
 
-['codegen-seq-impl 'codegen-term] { /idx /max-slots /outer-bound-slots /outer-free-vars /body-nodes /func /need-enter /code /code-map /addr /codegen-fn
-  codegen-fn addr code-map code need-enter func body-nodes outer-free-vars outer-bound-slots max-slots idx codegen-seq-impl codegen-seq-impl!
+['codegen-seq-impl 'codegen-term] { /idx /max-slots /outer-bound-slots /outer-free-vars /body-nodes /func /need-enter /code /code-map /addr /seq-fn /codegen-fn
+  codegen-fn seq-fn addr code-map code need-enter func body-nodes outer-free-vars outer-bound-slots max-slots idx codegen-seq-impl codegen-seq-impl!
 } def-fn! /codegen-seq
 
 ; codegen-impl: (self addr code-map func func-node -- next-addr new-code-map func-addr)
@@ -270,7 +301,8 @@ operator-table 'close @ /opClose
   ; Collect bytecode for each term in function body
   ; codegen-seq returns (addr' code-map' code)
   ; Pass self as codegen-fn for recursive compilation of nested functions
-  self addr code-map [] need-enter func body-nodes free-vars bound-slots max-slots 0 codegen-seq!
+  ; Pass codegen-seq as seq-fn for generator body processing
+  self codegen-seq addr code-map [] need-enter func body-nodes free-vars bound-slots max-slots 0 codegen-seq!
   /body-code /new-code-map /next-emit-addr
 
   ; Add return instruction
