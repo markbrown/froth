@@ -154,6 +154,7 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 - `'slot`: frame slot number (only set if used)
 
 **Apply node keys:**
+- `'is-tail-call`: 0 = tail call, 1 = non-tail call
 - `'restore-context`: 0 = non-tail call needing context restore after
 - `'restore-return`: 0 = last non-tail call (needs return restore)
 - `'leave-frame`: 0 = last term using the frame
@@ -222,6 +223,7 @@ Takes the function-node from `boundness` and adds liveness information.
 - `'is-live`: `0` (still live) or `1` (last reference) for identifiers
 - `'is-used`: `0` (used) or `1` (dead) for binders
 - `'dead-set`: set of vars whose last use is capture (for closures only)
+- `'is-tail-call`: `0` for apply in tail position (last term in function)
 - `'restore-context`: `0` for non-tail calls that need context restored after
 - `'restore-return`: `0` for the last non-tail call (where return pointer is restored)
 - `'leave-frame`: `0` for the last term that uses the frame
@@ -322,6 +324,7 @@ Supports:
 - Bound variables (`enter-frame`, `pop-local`, `push-local`, `leave-frame`)
 - Dead binders (`pop-unused`)
 - Quoted identifiers, binders, apply, and values
+- Tail calls (`tail-call` instead of `return`)
 
 ```
 ; Simple literals (no analysis needed)

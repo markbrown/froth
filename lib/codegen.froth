@@ -23,7 +23,7 @@ operator-table 'wrap @ /opWrap
 operator-table 'close @ /opClose
 operator-table 'deref @ /opDeref
 
-; codegen-term: (codegen-fn seq-fn addr code-map code need-enter term node outer-free-vars outer-bound-slots max-slots is-tail -- addr' code-map' code' need-enter' ends-tail')
+; codegen-term: (codegen-fn seq-fn addr code-map code need-enter term node outer-free-vars outer-bound-slots max-slots -- addr' code-map' code' need-enter')
 ; Generate bytecode for a single term, append to code array.
 ; codegen-fn is passed for recursive compilation of nested functions
 ; seq-fn is passed for processing generator bodies (calls codegen-term for each term)
@@ -32,25 +32,24 @@ operator-table 'deref @ /opDeref
 ; outer-bound-slots maps identifiers to frame slot numbers in the current function
 ; max-slots is the number of frame slots needed (for enter-frame/leave-frame)
 ; need-enter is 0 if we still need to emit enter-frame, 1 if already emitted
-; is-tail is 0 if this term is in tail position, 1 otherwise
-; Returns updated addr, code-map, code, need-enter, and ends-tail flag (0 if ends with tail-call)
+; Returns updated addr, code-map, code, and need-enter flag
 ['concat 'ocPushInt 'ocPushString 'ocOp 'operator-table
  'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
  'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
  'ocEnterFrame 'ocLeaveFrame
  'ocStartArray 'ocEndArray 'opClose 'opDeref 'ocTailCall 'foldl 'reduce 'drop] {
-  /is-tail /max-slots /outer-bound-slots /outer-free-vars /node /term /need-enter /code /code-map /addr /seq-fn /codegen-fn
+  /max-slots /outer-bound-slots /outer-free-vars /node /term /need-enter /code /code-map /addr /seq-fn /codegen-fn
   term isValue {
     ; Quoted literal value - unwrap and check type
     term unwrap /val
     val isInt {
-      addr code-map code [ocPushInt val] concat! need-enter 1
+      addr code-map code [ocPushInt val] concat! need-enter
     } {
     val isString {
-      addr code-map code [ocPushString val intern] concat! need-enter 1
+      addr code-map code [ocPushString val intern] concat! need-enter
     } {
       ; Unsupported value type
-      addr code-map code need-enter 1
+      addr code-map code need-enter
     } ?! } ?!
   } {
   term isBinder {
@@ -67,21 +66,21 @@ operator-table 'deref @ /opDeref
         } ?!
         node 'slot @ /slot
         [ocPopLocal slot] concat! /new-code
-        addr code-map new-code 1 1  ; now in frame (need-enter=1), not tail
+        addr code-map new-code 1  ; now in frame (need-enter=1)
       } {
         ; Dead binder (is-used=1) - just discard
-        addr code-map code [ocPopUnused] concat! need-enter 1
+        addr code-map code [ocPopUnused] concat! need-enter
       } ?!
     } {
       ; No 'is-used key - assume dead
-      addr code-map code [ocPopUnused] concat! need-enter 1
+      addr code-map code [ocPopUnused] concat! need-enter
     } ?!
   } {
   term isIdent {
     term isOperator {
       ; Operator - emit op instruction with opcode
       operator-table term @ /opcode
-      addr code-map code [ocOp opcode] concat! need-enter 1
+      addr code-map code [ocOp opcode] concat! need-enter
     } {
       ; Regular identifier - check if bound or free
       node 'is-bound in {
@@ -97,15 +96,15 @@ operator-table 'deref @ /opDeref
             } { } ?!
           } { } ?!
           /new-code
-          addr code-map new-code need-enter 1
+          addr code-map new-code need-enter
         } {
           ; Free variable (is-bound=1) - look up context slot
           outer-free-vars term @ /slot
-          addr code-map code [ocPushContext slot] concat! need-enter 1
+          addr code-map code [ocPushContext slot] concat! need-enter
         } ?!
       } {
         ; No analysis data - skip
-        addr code-map code need-enter 1
+        addr code-map code need-enter
       } ?!
     } ?!
   } {
@@ -115,33 +114,33 @@ operator-table 'deref @ /opDeref
     inner isIdent {
       ; 'identifier -> push-int id, op idToIdent
       inner intern /id
-      addr code-map code [ocPushInt id ocOp opIdToIdent] concat! need-enter 1
+      addr code-map code [ocPushInt id ocOp opIdToIdent] concat! need-enter
     } {
     inner isBinder {
       ; '/binder -> push-int id, op idToBinder
       inner intern /id
-      addr code-map code [ocPushInt id ocOp opIdToBinder] concat! need-enter 1
+      addr code-map code [ocPushInt id ocOp opIdToBinder] concat! need-enter
     } {
     inner isApply {
       ; '! -> push-quoted-apply
-      addr code-map code [ocPushQuotedApply] concat! need-enter 1
+      addr code-map code [ocPushQuotedApply] concat! need-enter
     } {
     inner isValue {
       ; 'value -> push value, op wrap
       inner unwrap /val
       val isInt {
-        addr code-map code [ocPushInt val ocOp opWrap] concat! need-enter 1
+        addr code-map code [ocPushInt val ocOp opWrap] concat! need-enter
       } {
       val isString {
-        addr code-map code [ocPushString val intern ocOp opWrap] concat! need-enter 1
+        addr code-map code [ocPushString val intern ocOp opWrap] concat! need-enter
       } {
         ; Unsupported quoted value type
-        addr code-map code need-enter 1
+        addr code-map code need-enter
       } ?! } ?!
     } {
       ; Quoted function, generator, or nested quote - store in constant pool
       term ref /idx
-      addr code-map code [ocPushInt idx ocOp opDeref] concat! need-enter 1
+      addr code-map code [ocPushInt idx ocOp opDeref] concat! need-enter
     } ?! } ?! } ?! } ?!
   } {
   term isFunc {
@@ -196,7 +195,7 @@ operator-table 'deref @ /opDeref
       ctx-code2 [ocEndArray ocPushInt nested-addr ocOp opClose] concat!
     } ?! /new-code
 
-    new-addr new-code-map new-code need-enter 1
+    new-addr new-code-map new-code need-enter
   } {
   term isGen {
     ; Generator - wrap body in start-array/end-array, share outer frame
@@ -221,28 +220,27 @@ operator-table 'deref @ /opDeref
 
     ; Process: start-array, generator body, end-array
     ; Use seq-fn to process terms (shares outer's frame)
-    ; Pass 1 for allow-tail to disable tail calls inside generators
-    codegen-fn seq-fn addr code-map code [ocStartArray] concat! need-enter term gen-body-nodes outer-free-vars gen-bound-slots max-slots 1 0 seq-fn!
-    /gen-ends-tail /gen-code /gen-code-map /gen-addr
+    codegen-fn seq-fn addr code-map code [ocStartArray] concat! need-enter term gen-body-nodes outer-free-vars gen-bound-slots max-slots 0 seq-fn!
+    /gen-code /gen-code-map /gen-addr
 
-    gen-addr gen-code-map gen-code [ocEndArray] concat! need-enter 1
+    gen-addr gen-code-map gen-code [ocEndArray] concat! need-enter
   } {
   term isApply {
-    ; Apply - emit tail-call for tail position, skip non-tail for now
-    is-tail {
-      ; Tail position - emit tail-call
-      addr code-map code [ocTailCall] concat! need-enter 0
+    ; Apply - check node for tail call flag (only set by liveness for tail calls)
+    node 'is-tail-call in { node 'is-tail-call @ } { 1 } ?! {
+      ; Tail call (is-tail-call=0) - emit tail-call
+      addr code-map code [ocTailCall] concat! need-enter
     } {
-      ; Non-tail position - skip for now
-      addr code-map code need-enter 1
+      ; Non-tail call - skip for now
+      addr code-map code need-enter
     } ?!
   } {
     ; Other term type - skip
-    addr code-map code need-enter 1
+    addr code-map code need-enter
   } ?! } ?! } ?! } ?! } ?! } ?! } ?!
 } def-fn! /codegen-term
 
-; codegen-seq: (codegen-fn seq-fn addr code-map code need-enter func body-nodes outer-free-vars outer-bound-slots max-slots allow-tail idx -- addr' code-map' code' ends-tail')
+; codegen-seq: (codegen-fn seq-fn addr code-map code need-enter func body-nodes outer-free-vars outer-bound-slots max-slots idx -- addr' code-map' code')
 ; Process terms from idx to end of func.
 ; codegen-fn is passed for recursive compilation of nested functions
 ; seq-fn is this function, passed for generator body processing
@@ -251,34 +249,25 @@ operator-table 'deref @ /opDeref
 ; outer-bound-slots maps identifiers to frame slot numbers
 ; max-slots is the number of frame slots needed
 ; need-enter tracks whether enter-frame has been emitted (0=need, 1=done)
-; allow-tail is 0 to allow tail calls at the last position, 1 to disable (for generators)
-; Returns (addr' code-map' code' ends-tail') where ends-tail is 0 if last term was tail-call
-{ /self /idx /allow-tail /max-slots /outer-bound-slots /outer-free-vars /body-nodes /func /need-enter /code /code-map /addr /seq-fn /codegen-fn
+{ /self /idx /max-slots /outer-bound-slots /outer-free-vars /body-nodes /func /need-enter /code /code-map /addr /seq-fn /codegen-fn
   idx func # = {
-    ; Done - discard need-enter, return (addr code-map code ends-tail)
-    ; Empty body doesn't end with tail call
-    addr code-map code 1
+    ; Done - discard need-enter, return (addr code-map code)
+    addr code-map code
   } {
-    ; Compute is-tail: 0 if this is the last term AND tail calls are allowed
-    allow-tail { idx func # 1 - = { 0 } { 1 } ?! } { 1 } ?! /is-tail
     ; Get term and its corresponding node
     func idx @ /term
     body-nodes idx @ /node
-    ; Process current term, get back (addr' code-map' code' need-enter' ends-tail')
+    ; Process current term, get back (addr' code-map' code' need-enter')
     ; Pass seq-fn (wrapped self) for generator body processing
-    codegen-fn seq-fn addr code-map code need-enter term node outer-free-vars outer-bound-slots max-slots is-tail codegen-term!
-    /ends-tail /new-need-enter /new-code /new-code-map /new-addr
+    codegen-fn seq-fn addr code-map code need-enter term node outer-free-vars outer-bound-slots max-slots codegen-term!
+    /new-need-enter /new-code /new-code-map /new-addr
     ; Recurse with updated state
-    codegen-fn seq-fn new-addr new-code-map new-code new-need-enter func body-nodes outer-free-vars outer-bound-slots max-slots allow-tail idx 1 + self self!
-    /rest-ends-tail /rest-code /rest-code-map /rest-addr
-    ; Return results - use our ends-tail if this was the last term, else use rest's
-    is-tail { ends-tail } { rest-ends-tail } ?! /final-ends-tail
-    rest-addr rest-code-map rest-code final-ends-tail
+    codegen-fn seq-fn new-addr new-code-map new-code new-need-enter func body-nodes outer-free-vars outer-bound-slots max-slots idx 1 + self self!
   } ?!
 } /codegen-seq-impl
 
-['codegen-seq-impl 'codegen-term] { /idx /allow-tail /max-slots /outer-bound-slots /outer-free-vars /body-nodes /func /need-enter /code /code-map /addr /seq-fn /codegen-fn
-  codegen-fn seq-fn addr code-map code need-enter func body-nodes outer-free-vars outer-bound-slots max-slots allow-tail idx codegen-seq-impl codegen-seq-impl!
+['codegen-seq-impl 'codegen-term] { /idx /max-slots /outer-bound-slots /outer-free-vars /body-nodes /func /need-enter /code /code-map /addr /seq-fn /codegen-fn
+  codegen-fn seq-fn addr code-map code need-enter func body-nodes outer-free-vars outer-bound-slots max-slots idx codegen-seq-impl codegen-seq-impl!
 } def-fn! /codegen-seq
 
 ; codegen-impl: (self addr code-map func func-node -- next-addr new-code-map func-addr)
@@ -323,15 +312,20 @@ operator-table 'deref @ /opDeref
   /bound-slots
 
   ; Collect bytecode for each term in function body
-  ; codegen-seq returns (addr' code-map' code' ends-tail')
+  ; codegen-seq returns (addr' code-map' code')
   ; Pass self as codegen-fn for recursive compilation of nested functions
   ; Pass codegen-seq as seq-fn for generator body processing
-  ; Pass 0 for allow-tail to enable tail calls at end of function
-  self codegen-seq addr code-map [] need-enter func body-nodes free-vars bound-slots max-slots 0 0 codegen-seq!
-  /ends-tail /body-code /new-code-map /next-emit-addr
+  self codegen-seq addr code-map [] need-enter func body-nodes free-vars bound-slots max-slots 0 codegen-seq!
+  /body-code /new-code-map /next-emit-addr
 
-  ; Add return instruction only if we didn't end with a tail-call
-  ends-tail { body-code } { body-code [ocReturn] concat! } ?! /final-code
+  ; Check if last term is a tail call by looking at its node
+  ; If so, don't emit return (tail-call handles the return)
+  ; Only apply nodes have 'is-tail-call, so check with 'in first
+  func # 0 > {
+    body-nodes func # 1 - @ /last-node
+    last-node 'is-tail-call in { last-node 'is-tail-call @ } { 1 } ?!
+  } { 1 } ?! /last-is-tail
+  last-is-tail { body-code } { body-code [ocReturn] concat! } ?! /final-code
 
   ; Emit at next-emit-addr (nested functions may have already used addr..next-emit-addr-1)
   final-code next-emit-addr emit-all-at! /next-addr
