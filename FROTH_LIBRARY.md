@@ -18,7 +18,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `alist-values` | alist | Get all values as array |
 | `and` | bool | Logical and |
 | `bench` | bench | Benchmark closure execution |
-| `concat` | array | Concatenate two arrays |
+| `concat` | array | Concatenate two arrays (copies both) |
 | `contains` | array | Check if array contains element |
 | `count-bindings` | optimize | Count bindings in environments |
 | `def-fn` | defs | Create closure with minimal environment |
@@ -119,7 +119,7 @@ This is definition-time optimization: later definitions that capture `c-lean` wi
 | `map` | `( arr fn -- arr )` | Apply fn to each element, return new array |
 | `filter` | `( arr fn -- arr )` | Keep elements where fn returns 0 |
 | `reduce` | `( arr init fn -- val )` | Reduce array with binary function |
-| `concat` | `( arr1 arr2 -- arr )` | Concatenate two arrays |
+| `concat` | `( arr1 arr2 -- arr )` | Concatenate two arrays (copies both, O(n+m)) |
 | `flatten` | `( arr-of-arrs -- arr )` | Flatten nested arrays |
 | `reverse` | `( arr -- arr )` | Reverse an array |
 | `scanl` | `( arr fn -- 0 \| 1 )` | Iterate left-to-right until fn returns 0 |

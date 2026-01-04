@@ -148,6 +148,24 @@ Closures communicate results by leaving values on the stack:
 3 4 add! println!    ; prints 7
 ```
 
+## Avoid Arrays as Accumulators
+
+Arrays in Froth are immutable—every modification creates a copy. Never use arrays as accumulators:
+
+```
+; WRONG: O(n²) - each concat copies the entire array
+result [item] concat! /result
+```
+
+Instead, use lists or maps which support O(1) updates:
+
+```
+; RIGHT: O(1) - cons just creates a new cell
+result item , /result
+```
+
+Convert to an array at the end if needed: `[ list { } lfoldl! ]`
+
 ## Common Patterns
 
 ### Early Return via Conditional
