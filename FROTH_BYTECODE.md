@@ -6,13 +6,17 @@ A bytecode compiler for Froth to improve execution performance by eliminating tr
 
 ## Compiler Pipeline
 
-1. **Preflight**: Checks for unsupported constructs (`env`, `import`, `applyOperator`)
+The `compile-func` function orchestrates bottom-up compilation:
+
+1. Build node tree (recurses into nested functions first)
 2. **Boundness**: Classifies identifiers as bound or free, assigns context slots
 3. **Liveness**: Marks last references, dead binders, register save/restore points
 4. **Slots**: Allocates frame slots with reuse
-5. **Codegen**: Emits bytecode
+5. **Codegen**: Emits bytecode, stores `'func-addr` in node
 
-See FROTH_COMPILER.md for analysis pass documentation and bytecode helpers.
+Nested functions are compiled before their containing function. This means each pass operates on a function where nested func-nodes are already complete.
+
+See FROTH_COMPILER.md for detailed pass documentation.
 
 ## Node Structure
 
@@ -37,57 +41,24 @@ Nodes are the single source of truth for a function and its metadata. Each node 
 
 **Other nodes** (literal, identifier, binder, quote, apply) contain type-specific analysis keys as documented in FROTH_COMPILER.md.
 
-A `make-node` function creates the appropriate node type based on the term.
+## Pass Signatures
 
-## Current Implementation
-
-The compiler pipeline chains the individual passes:
-
-```
-func boundness! liveness! slots! /func-node
-0 tree-empty! func-node codegen! /func-addr /code-map /next-addr
-```
-
-**Pass signatures:**
-- `boundness: (func -- func-node)` — builds node tree, classifies variables
+- `compile-func: (code-map addr func -- code-map addr func-node)` — orchestrates compilation
+- `boundness: (func-node -- func-node)` — classifies variables
 - `liveness: (func-node -- func-node)` — marks last references, tail calls
 - `slots: (func-node -- func-node)` — allocates frame slots
-- `codegen: (addr code-map func-node -- next-addr new-code-map func-addr)` — emits bytecode
+- `codegen: (addr func-node -- next-addr func-node)` — emits bytecode, stores `'func-addr` in node
 
-**Key behaviors:**
-- Passes recurse into generators (which share the outer frame)
-- Passes do NOT recurse into nested functions—they read `'free-vars-map` from the already-analyzed nested func-node
-- Codegen handles nested functions by recursively compiling them and building context arrays
+## Key Behaviors
 
-## Planned: Higher-Level Compilation API
+**Bottom-up compilation**: When `compile-func` encounters a nested function term, it recursively compiles the nested function first. The resulting func-node (with `'func-addr` already set) replaces the original term in the outer function's body.
 
-The following functions are planned but not yet implemented:
+**Passes don't recurse into nested functions**: The analysis passes (boundness, liveness, slots) and codegen read data from already-complete nested func-nodes rather than recursing into them. They do recurse into generators, which share the outer frame.
 
-### compile-func (planned)
+**Codegen reads `'func-addr` from nested nodes**: For nested function terms, codegen emits code to build the context array and create a closure using the pre-computed `node 'func-addr @`. It does not recursively compile.
 
-```
-compile-func (addr code-map func -- next-addr new-code-map func-node)
-```
-
-Would combine preflight checking, pass chaining, and caching into a single function that:
-1. Checks `code-map` for existing entry (deduplication)
-2. Runs `preflight` to check for dynamic constructs
-3. Chains the passes: `func boundness! liveness! slots!`
-4. Runs codegen: `addr code-map func-node codegen!`
-5. Caches the result in `code-map`
-
-### compile (planned)
-
-```
-compile (addr code-map closureval -- next-addr new-code-map bytecodeval)
-```
-
-Would compile a closureval to a bytecodeval by:
-1. Opening the closureval to get environment and function body
-2. Calling `compile-func` on the function body
-3. Building a context array from the environment using `'free-vars-map`
-4. Creating a bytecodeval with `close`
+**`'func-addr` stored in node**: After emitting bytecode, codegen updates the func-node with `addr 'func-addr :`. This allows outer functions to reference the nested function's bytecode address.
 
 ## Limitations
 
-Compilation runs `preflight` and can fail for closurevals using dynamic constructs (`env`, `import`, `applyOperator`). Failed compilations leave the environment unchanged.
+Compilation can fail for functions using dynamic constructs (`env`, `import`, `applyOperator`) that prevent static analysis.

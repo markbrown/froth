@@ -1,35 +1,35 @@
 ; boundness.froth - Boundness analysis for compiler
 
-; boundness-term-impl: (term bound acc-free-map acc-free-list seq-fn term-fn -- result-map term-bound-set updated-bound new-acc-free-map new-acc-free-list)
-; Analyze a single term for boundness.
-; result-map: node map appropriate to term type
+; boundness-term-impl: (node bound acc-free-map acc-free-list seq-fn term-fn -- result-node term-bound-set updated-bound new-acc-free-map new-acc-free-list)
+; Analyze a single node for boundness.
+; result-node: input node with boundness info added
 ; term-bound-set: map (set) of bound identifiers (binders) found in this term
-; For closures: recurse with fresh bound set (new scope)
+; For closures: don't recurse (already analyzed by compile-func), just propagate free vars
 ; For generators: recurse with current bound set (bindings don't escape)
 ; acc-free-map accumulates free variables with context slot numbers (slot = map size)
 ; acc-free-list accumulates free variable identifiers in reverse slot order
-['foldl 'lfoldl 'lreverse 'make-node 'new-node] { /term-fn /seq-fn /acc-free-list /acc-free-map /bound /term
+['foldl] { /term-fn /seq-fn /acc-free-list /acc-free-map /bound /node
+  node 'term @ /term
   term isIdent {
     ; Identifier: check if bound
     bound term in {
-      ; Bound identifier: is-bound=0 (default)
-      term make-node! $ bound acc-free-map acc-free-list
+      ; Bound identifier: is-bound=0 (default from make-node)
+      node $ bound acc-free-map acc-free-list
     } {
       ; Not bound - check if it's an operator (no slot needed)
       term isOperator {
-        ; Operator: looked up in operator-table, not captured
-        ; Use new-node (not make-node) to avoid is-bound key
-        term new-node! $ bound acc-free-map acc-free-list
+        ; Operator: mark as operator, looked up in operator-table at runtime
+        node 0 'is-operator : $ bound acc-free-map acc-free-list
       } {
         ; Free identifier - check if already seen
         acc-free-map term in {
           ; Already seen free var
-          term make-node! 1 'is-bound : acc-free-map term @ 'slot :
+          node 1 'is-bound : acc-free-map term @ 'slot :
           $ bound acc-free-map acc-free-list
         } {
           ; New free var: assign slot (slot number = current map size)
           acc-free-map # /slot
-          term make-node! 1 'is-bound : slot 'slot :
+          node 1 'is-bound : slot 'slot :
           $ bound acc-free-map slot term : acc-free-list term ,
         } ?!
       } ?!
@@ -39,15 +39,12 @@
     ; Binder: add to bound set with nil value
     term intern idToIdent /ident
     bound . ident : /new-bound
-    term make-node! $ . ident : new-bound acc-free-map acc-free-list
+    node $ . ident : new-bound acc-free-map acc-free-list
   } {
   term isFunc {
-    ; Closure: new scope (fresh bound set, fresh acc-free-map, fresh acc-free-list)
-    term $ 0 $ . seq-fn term-fn seq-fn! /inner-free-list /inner-body /inner-bound-set /inner-free-set
-    ; Convert free-list to array (reverse to get slot order, then collect into array)
-    [ inner-free-list lreverse! { } lfoldl! ] /inner-free-array
-    ; Build result map with body, free-vars, free-vars-array, bound-set
-    term make-node! inner-body 'body : inner-free-set 'free-vars-map : inner-free-array 'free-vars-array : inner-bound-set 'bound-set : /result-map
+    ; Closure: already analyzed by compile-func, just propagate free vars
+    ; Node already has 'body, 'free-vars-map, 'free-vars-array, 'bound-set
+    node 'free-vars-map @ /inner-free-set
     ; Update outer's acc-free-map/list with inner's free variables that aren't bound in outer
     acc-free-map acc-free-list inner-free-set keys { /v /lst /acc
       bound v in {
@@ -60,61 +57,69 @@
         } ?!
       } ?!
     } foldl! /new-acc-free-list /new-acc-free-map
-    result-map $ bound new-acc-free-map new-acc-free-list
+    node $ bound new-acc-free-map new-acc-free-list
   } {
   term isGen {
     ; Generator: shares outer scope's free variable tracking
-    ; Pass current acc-free-map/list so identifiers get correct outer slots
-    term bound 0 acc-free-map acc-free-list seq-fn term-fn seq-fn! /new-acc-free-list /inner-body /inner-bound-set /new-acc-free-map
-    ; Build result map with body and bound-set only (no free-vars for generators)
-    term make-node! inner-body 'body : inner-bound-set 'bound-set : /result-map
-    result-map $ bound new-acc-free-map new-acc-free-list
+    ; Recurse into node's body (array of child nodes)
+    node 'body @ bound 0 acc-free-map acc-free-list seq-fn term-fn seq-fn! /new-acc-free-list /inner-body /inner-bound-set /new-acc-free-map
+    ; Update node with new body and bound-set
+    node inner-body 'body : inner-bound-set 'bound-set :
+    $ bound new-acc-free-map new-acc-free-list
   } {
   term isQuote {
     ; Quoted term
-    term make-node! $ bound acc-free-map acc-free-list
+    node $ bound acc-free-map acc-free-list
   } {
     ; Literal, apply, value
-    term make-node! $ bound acc-free-map acc-free-list
+    node $ bound acc-free-map acc-free-list
   } ?! } ?! } ?! } ?! } ?!
 } def-fn! /boundness-term-impl
 
-; boundness-seq-impl: (body bound idx acc-free-map acc-free-list seq-fn term-fn -- free-set bound-set body-array free-list)
-; Analyze a sequence of terms for boundness.
-; Returns free-set (map with slots), bound-set (map with nil), body array of node maps, and free-list.
-['foldl 'concat] { /term-fn /seq-fn /acc-free-list /acc-free-map /idx /bound /body
-  idx body # = {
-    ; Done: return accumulated free-set, empty bound-set, empty children, free-list
-    acc-free-map $ [] acc-free-list
+; boundness-seq-impl: (body-nodes bound idx acc-free-map acc-free-list seq-fn term-fn -- free-set bound-set body-list free-list)
+; Analyze a sequence of nodes for boundness.
+; Returns free-set (map with slots), bound-set (map with nil), body list of node maps, and free-list.
+; Converts body list to array at idx=0.
+['foldl 'lfoldl] { /term-fn /seq-fn /acc-free-list /acc-free-map /idx /bound /body-nodes
+  idx body-nodes # = {
+    ; Done: return accumulated free-set, empty bound-set, empty body list, free-list
+    acc-free-map $ . acc-free-list
   } {
-    ; Process current term
-    body idx @ /term
-    term bound acc-free-map acc-free-list seq-fn term-fn term-fn! /new-acc-free-list /new-acc-free-map /new-bound /term-bound-set /term-map
+    ; Process current node
+    body-nodes idx @ /node
+    node bound acc-free-map acc-free-list seq-fn term-fn term-fn! /new-acc-free-list /new-acc-free-map /new-bound /term-bound-set /result-node
     ; Recurse for rest of sequence (with updated state)
-    body new-bound idx 1 + new-acc-free-map new-acc-free-list seq-fn term-fn seq-fn! /rest-free-list /rest-children /rest-bound-set /rest-free-set
+    body-nodes new-bound idx 1 + new-acc-free-map new-acc-free-list seq-fn term-fn seq-fn! /rest-free-list /rest-body /rest-bound-set /rest-free-set
     ; Combine results: free-set is already accumulated, merge bound-sets with nil
     rest-free-set
     rest-bound-set term-bound-set keys { /k . k : } foldl!
-    [term-map] rest-children concat!
+    rest-body result-node ,  ; cons node onto rest (building list)
     rest-free-list
   } ?!
+  ; Convert body list to array at top level (idx=0)
+  idx 0 = {
+    /free-list /body-list
+    [ body-list { } lfoldl! ]
+    free-list
+  } { } ?!
 } def-fn! /boundness-seq-impl
 
-; boundness: (func -- func-node)
-; Analyze a function for boundness of each term.
-; Returns a function-node with:
+; boundness: (func-node -- func-node)
+; Analyze a function node for boundness of each term.
+; Takes a func-node from compile-func (with 'term and 'body).
+; Returns updated func-node with:
 ;   'term: the original function
-;   'body: array of node maps parallel to function body
+;   'body: array of node maps parallel to function body (updated with boundness info)
 ;   'free-vars-map: map from identifiers to context slot numbers
 ;   'free-vars-array: array of identifiers indexed by context slot
 ;   'bound-set: map from identifiers to nil (marking presence)
 ; Each node map contains keys appropriate to the term type (see node.froth).
-['boundness-seq-impl 'boundness-term-impl 'lreverse 'lfoldl 'make-node] { /func
-  func $ 0 $ . boundness-seq-impl boundness-term-impl boundness-seq-impl!
+['boundness-seq-impl 'boundness-term-impl 'lreverse 'lfoldl] { /func-node
+  func-node 'body @ $ 0 $ . boundness-seq-impl boundness-term-impl boundness-seq-impl!
   /free-list /body /bound-set /free-set
   ; Convert free-list to array (reverse to get slot order, then collect into array)
   [ free-list lreverse! { } lfoldl! ] /free-array
-  func make-node! body 'body : free-set 'free-vars-map : free-array 'free-vars-array : bound-set 'bound-set :
+  func-node body 'body : free-set 'free-vars-map : free-array 'free-vars-array : bound-set 'bound-set :
 } def-fn! /boundness
 
 ; Remove impl functions from the environment

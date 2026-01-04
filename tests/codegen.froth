@@ -1,4 +1,5 @@
-; Test codegen
+; Test codegen via compile-func
+; compile-func runs boundness -> liveness -> slots -> codegen
 
 ; Helper to dump bytecode from start to end
 { /self /end /start
@@ -10,9 +11,8 @@
 { /end /start start end dump-impl dump-impl! } /dump-bytecode
 
 ; Test 1: Simple integers
-'{ 1 2 3 } /func
-0 tree-empty! func make-node! codegen!
-/func-addr /code-map /next-addr
+tree-empty! 0 '{ 1 2 3 } compile-func! /node /next-addr /code-map
+node 'func-addr @ /func-addr
 "func-addr=" print func-addr print " next-addr=" print next-addr println!
 
 ; Show bytecode (should be: 0 1 0 2 0 3 2)
@@ -22,31 +22,29 @@
 nl!
 
 ; Test 2: With string
-'{ 42 "hello" } /func2
-next-addr tree-empty! func2 make-node! codegen!
-/func-addr2 /code-map2 /next-addr2
+code-map next-addr '{ 42 "hello" } compile-func! /node2 /next-addr2 /code-map2
+node2 'func-addr @ /func-addr2
 "func-addr2=" print func-addr2 print " next-addr2=" print next-addr2 println!
 
 "bytecode2: " print
-next-addr next-addr2 dump-bytecode!
+func-addr2 next-addr2 dump-bytecode!
 nl!
 
 ; Test 3: With operator
-'{ 1 2 + } /func3
-next-addr2 tree-empty! func3 make-node! codegen!
-/func-addr3 /code-map3 /next-addr3
+code-map2 next-addr2 '{ 1 2 + } compile-func! /node3 /next-addr3 /code-map3
+node3 'func-addr @ /func-addr3
 "func-addr3=" print func-addr3 print " next-addr3=" print next-addr3 println!
 
 ; Should be: 0 1 0 2 1 2 2
 ; push-int=0, op=1, +=2, return=2
 "bytecode3: " print
-next-addr2 next-addr3 dump-bytecode!
+func-addr3 next-addr3 dump-bytecode!
 nl!
 
 ; Test 4: Quoted terms (test execution, not bytecode, to avoid intern ID dependency)
 "quoted terms: " print
-next-addr3 tree-empty! '{ 'x '/y '! '42 '"hi" } make-node! codegen!
-/func-addr4 /code-map4 /next-addr4
+code-map3 next-addr3 '{ 'x '/y '! '42 '"hi" } compile-func! /node4 /next-addr4 /code-map4
+node4 'func-addr @ /func-addr4
 [] func-addr4 close ! /r5 /r4 /r3 /r2 /r1
 r1 write " " print
 r2 write " " print
@@ -56,16 +54,14 @@ r5 write nl!
 
 ; Test 5: Context variables (free variables)
 ; Function with two free variables: x and y
-'{ x y + } /func5
-func5 boundness! /func5-node
-next-addr4 tree-empty! func5-node codegen!
-/func-addr5 /code-map5 /next-addr5
+code-map4 next-addr4 '{ x y + } compile-func! /node5 /next-addr5 /code-map5
+node5 'func-addr @ /func-addr5
 "func-addr5=" print func-addr5 print " next-addr5=" print next-addr5 println!
 
 ; Bytecode should be: push-context 0, push-context 1, op +, return
 ; push-context=4, op=1, +=2, return=2
 "bytecode5: " print
-next-addr4 next-addr5 dump-bytecode!
+func-addr5 next-addr5 dump-bytecode!
 nl!
 
 ; Execute with context [10 20] - should return 30
@@ -75,12 +71,10 @@ nl!
 ; Test 6: Bound variable - simple binder with usage
 ; { /x x } should emit: enter-frame 1, pop-local 0, push-local 0, leave-frame 1, return
 ; Instruction codes: enter-frame=8, pop-local=7, push-local=6, leave-frame=9, return=2
-'{ /x x } /func6
-func6 boundness! liveness! slots! /func6-node
-next-addr5 tree-empty! func6-node codegen!
-/func6-addr /code-map6 /next-addr6
+code-map5 next-addr5 '{ /x x } compile-func! /node6 /next-addr6 /code-map6
+node6 'func-addr @ /func6-addr
 "bytecode6: " print
-next-addr5 next-addr6 dump-bytecode!
+func6-addr next-addr6 dump-bytecode!
 nl!
 
 ; Execute with context [] and arg 42 - should return 42
@@ -90,12 +84,10 @@ nl!
 ; Test 7: Dead binder
 ; { /x 99 } should emit: pop-unused, push-int 99, return
 ; Instruction codes: pop-unused=5, push-int=0, return=2
-'{ /x 99 } /func7
-func7 boundness! liveness! slots! /func7-node
-next-addr6 tree-empty! func7-node codegen!
-/func7-addr /code-map7 /next-addr7
+code-map6 next-addr6 '{ /x 99 } compile-func! /node7 /next-addr7 /code-map7
+node7 'func-addr @ /func7-addr
 "bytecode7: " print
-next-addr6 next-addr7 dump-bytecode!
+func7-addr next-addr7 dump-bytecode!
 nl!
 
 ; Execute with arg 42 (discarded) - should return 99
@@ -104,12 +96,10 @@ nl!
 
 ; Test 8: Multiple binders with addition
 ; { /x /y x y + } should emit: enter-frame 2, pop-local 0, pop-local 1, push-local 0, push-local 1, op +, leave-frame 2, return
-'{ /x /y x y + } /func8
-func8 boundness! liveness! slots! /func8-node
-next-addr7 tree-empty! func8-node codegen!
-/func8-addr /code-map8 /next-addr8
+code-map7 next-addr7 '{ /x /y x y + } compile-func! /node8 /next-addr8 /code-map8
+node8 'func-addr @ /func8-addr
 "bytecode8: " print
-next-addr7 next-addr8 dump-bytecode!
+func8-addr next-addr8 dump-bytecode!
 nl!
 
 ; Execute with args 10 and 3 - should return 13 (10 + 3)
@@ -118,12 +108,12 @@ nl!
 
 ; Test 9: Nested function with no captures
 ; { { 42 } } should emit: nested func first, then outer builds empty context and closes
-'{ { 42 } } /func9
-func9 boundness! liveness! slots! /func9-node
-next-addr8 tree-empty! func9-node codegen!
-/func9-addr /code-map9 /next-addr9
+code-map8 next-addr8 '{ { 42 } } compile-func! /node9 /next-addr9 /code-map9
+node9 'func-addr @ /func9-addr
+; Find nested func addr from body
+node9 'body @ 0 @ 'func-addr @ /nested9-addr
 "bytecode9 (nested func area): " print
-next-addr8 func9-addr dump-bytecode!  ; nested function code
+nested9-addr func9-addr dump-bytecode!  ; nested function code
 nl!
 "bytecode9 (outer func area): " print
 func9-addr next-addr9 dump-bytecode!  ; outer function code
@@ -136,12 +126,11 @@ println!
 
 ; Test 10: Nested function capturing bound variable
 ; { /x { x } } - inner captures x from outer's frame
-'{ /x { x } } /func10
-func10 boundness! liveness! slots! /func10-node
-next-addr9 tree-empty! func10-node codegen!
-/func10-addr /code-map10 /next-addr10
+code-map9 next-addr9 '{ /x { x } } compile-func! /node10 /next-addr10 /code-map10
+node10 'func-addr @ /func10-addr
+node10 'body @ 1 @ 'func-addr @ /nested10-addr
 "bytecode10 (nested area): " print
-next-addr9 func10-addr dump-bytecode!
+nested10-addr func10-addr dump-bytecode!
 nl!
 "bytecode10 (outer area): " print
 func10-addr next-addr10 dump-bytecode!
@@ -154,13 +143,11 @@ println!
 
 ; Test 11: Nested function capturing free variable from outer
 ; Outer has free var y, nested captures it
-'{ { y } } /func11-inner
-'{ y { y } } /func11
-func11 boundness! liveness! slots! /func11-node
-next-addr10 tree-empty! func11-node codegen!
-/func11-addr /code-map11 /next-addr11
+code-map10 next-addr10 '{ y { y } } compile-func! /node11 /next-addr11 /code-map11
+node11 'func-addr @ /func11-addr
+node11 'body @ 1 @ 'func-addr @ /nested11-addr
 "bytecode11 (nested area): " print
-next-addr10 func11-addr dump-bytecode!
+nested11-addr func11-addr dump-bytecode!
 nl!
 
 ; Execute with context [77] - outer pushes y, then returns closure that also uses y
@@ -170,10 +157,8 @@ println!
 
 ; Test 12: Nested function capturing multiple vars (one bound, one free)
 ; { /x { x y + } } where y is free in outer
-'{ /x { x y + } } /func12
-func12 boundness! liveness! slots! /func12-node
-next-addr11 tree-empty! func12-node codegen!
-/func12-addr /code-map12 /next-addr12
+code-map11 next-addr11 '{ /x { x y + } } compile-func! /node12 /next-addr12 /code-map12
+node12 'func-addr @ /func12-addr
 
 ; Execute with arg 10 and context [5] (y=5) - nested should compute x+y = 10+5 = 15
 "nested multi-capture test: " print
@@ -181,41 +166,36 @@ next-addr11 tree-empty! func12-node codegen!
 println!
 
 ; Test 13: Simple generator
-'{ [ 1 2 3 ] } boundness! liveness! slots! /func13-node
-next-addr12 tree-empty! func13-node codegen!
-/func13-addr /code-map13 /next-addr13
+code-map12 next-addr12 '{ [ 1 2 3 ] } compile-func! /node13 /next-addr13 /code-map13
+node13 'func-addr @ /func13-addr
 
 "generator test: " print
 [] func13-addr close ! writeln!
 
 ; Test 14: Generator with outer bound variable
-'{ /x [ x x 1 + x 2 + ] } boundness! liveness! slots! /func14-node
-next-addr13 tree-empty! func14-node codegen!
-/func14-addr /code-map14 /next-addr14
+code-map13 next-addr13 '{ /x [ x x 1 + x 2 + ] } compile-func! /node14 /next-addr14 /code-map14
+node14 'func-addr @ /func14-addr
 
 "generator bound var test: " print
 10 [] func14-addr close ! writeln!
 
 ; Test 15: Generator with free variable
-'{ [ y y 1 + ] } boundness! liveness! slots! /func15-node
-next-addr14 tree-empty! func15-node codegen!
-/func15-addr /code-map15 /next-addr15
+code-map14 next-addr14 '{ [ y y 1 + ] } compile-func! /node15 /next-addr15 /code-map15
+node15 'func-addr @ /func15-addr
 
 "generator free var test: " print
 [7] func15-addr close ! writeln!
 
 ; Test 16: Nested function inside generator
-'{ [ { 42 } ] } boundness! liveness! slots! /func16-node
-next-addr15 tree-empty! func16-node codegen!
-/func16-addr /code-map16 /next-addr16
+code-map15 next-addr15 '{ [ { 42 } ] } compile-func! /node16 /next-addr16 /code-map16
+node16 'func-addr @ /func16-addr
 
 "generator with nested func test: " print
 [] func16-addr close ! 0 @ ! println!
 
 ; Test 17: Quoted function, generator, nested quote (via constant pool)
-'{ '{ 1 } '[ 2 ] ''x } boundness! liveness! slots! /func17-node
-next-addr16 tree-empty! func17-node codegen!
-/func17-addr /code-map17 /next-addr17
+code-map16 next-addr16 '{ '{ 1 } '[ 2 ] ''x } compile-func! /node17 /next-addr17 /code-map17
+node17 'func-addr @ /func17-addr
 
 "quoted complex terms test: " print
 [] func17-addr close ! /r3 /r2 /r1
@@ -224,9 +204,8 @@ r1 write " " print r2 write " " print r3 writeln!
 ; Test 18: Tail call
 ; Function { f! } should emit: push-context 0 (f), tail-call (17)
 ; No return instruction since we end with tail-call
-'{ f! } boundness! liveness! slots! /func18-node
-next-addr17 tree-empty! func18-node codegen!
-/func18-addr /code-map18 /next-addr18
+code-map17 next-addr17 '{ f! } compile-func! /node18 /next-addr18 /code-map18
+node18 'func-addr @ /func18-addr
 
 "tail call bytecode: " print
 func18-addr next-addr18 dump-bytecode!
@@ -250,9 +229,8 @@ next-addr18 func18-addr - 3 = { "length ok" } { "ERROR: expected length 3" } ?! 
 ;   leave-frame 1
 ;   push-int 1
 ;   return
-'{ f! 1 } boundness! liveness! slots! /func19-node
-next-addr18 tree-empty! func19-node codegen!
-/func19-addr /code-map19 /next-addr19
+code-map18 next-addr18 '{ f! 1 } compile-func! /node19 /next-addr19 /code-map19
+node19 'func-addr @ /func19-addr
 
 "non-tail call bytecode: " print
 func19-addr next-addr19 dump-bytecode!
@@ -302,15 +280,13 @@ outer-bv! println!
 
 ; Test 21: Non-tail call execution
 ; Compile a simple function that returns 10
-'{ 10 } boundness! liveness! slots! /ret10-node
-after-outer tree-empty! ret10-node codegen!
-/ret10-addr /ret10-code-map /after-ret10
+code-map19 after-outer '{ 10 } compile-func! /ret10-node /after-ret10 /ret10-code-map
+ret10-node 'func-addr @ /ret10-addr
 [] ret10-addr close /ret10-bv
 
 ; Compile { f! 1 + } where f is in context slot 0
-'{ f! 1 + } boundness! liveness! slots! /func21-node
-after-ret10 ret10-code-map func21-node codegen!
-/func21-addr /func21-code-map /after-func21
+ret10-code-map after-ret10 '{ f! 1 + } compile-func! /func21-node /after-func21 /func21-code-map
+func21-node 'func-addr @ /func21-addr
 
 ; Create bytecodeval with context containing ret10-bv
 [ret10-bv] func21-addr close /func21-bv
@@ -321,15 +297,13 @@ func21-bv! println!
 
 ; Test 22: Multiple non-tail calls
 ; Compile { 5 }
-'{ 5 } boundness! liveness! slots! /ret5-node
-after-func21 func21-code-map ret5-node codegen!
-/ret5-addr /ret5-code-map /after-ret5
+func21-code-map after-func21 '{ 5 } compile-func! /ret5-node /after-ret5 /ret5-code-map
+ret5-node 'func-addr @ /ret5-addr
 [] ret5-addr close /ret5-bv
 
 ; Compile { f! g! + } where f and g are in context
-'{ f! g! + } boundness! liveness! slots! /func22-node
-after-ret5 ret5-code-map func22-node codegen!
-/func22-addr /func22-code-map /after-func22
+ret5-code-map after-ret5 '{ f! g! + } compile-func! /func22-node /after-func22 /func22-code-map
+func22-node 'func-addr @ /func22-addr
 
 ; Create bytecodeval with context [ret10-bv, ret5-bv]
 [ret10-bv ret5-bv] func22-addr close /func22-bv
@@ -340,14 +314,12 @@ func22-bv! println!
 
 ; Test 23: Non-tail call with bound variable
 ; Compile { /x f! x + } where f returns 100
-'{ 100 } boundness! liveness! slots! /ret100-node
-after-func22 func22-code-map ret100-node codegen!
-/ret100-addr /ret100-code-map /after-ret100
+func22-code-map after-func22 '{ 100 } compile-func! /ret100-node /after-ret100 /ret100-code-map
+ret100-node 'func-addr @ /ret100-addr
 [] ret100-addr close /ret100-bv
 
-'{ /x f! x + } boundness! liveness! slots! /func23-node
-after-ret100 ret100-code-map func23-node codegen!
-/func23-addr /func23-code-map /after-func23
+ret100-code-map after-ret100 '{ /x f! x + } compile-func! /func23-node /after-func23 /func23-code-map
+func23-node 'func-addr @ /func23-addr
 
 [ret100-bv] func23-addr close /func23-bv
 

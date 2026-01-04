@@ -20,7 +20,6 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `bench` | bench | Benchmark closure execution |
 | `concat` | array | Concatenate two arrays (copies both) |
 | `contains` | array | Check if array contains element |
-| `count-bindings` | optimize | Count bindings in environments |
 | `def-fn` | defs | Create closure with minimal environment |
 | `delete-keys` | map | Delete array of keys from map |
 | `drop` | stack | Drop top of stack |
@@ -41,13 +40,11 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `nl` | io | Print newline |
 | `nip` | stack | Remove second element from stack |
 | `not` | bool | Logical not (0→1, else→0) |
-| `optimize` | optimize | Recursively optimize closures |
 | `or` | bool | Logical or |
 | `over` | stack | Copy second element to top |
 | `println` | io | Print value with newline |
 | `reduce` | array | Reduce with binary function |
 | `restrict` | map | Restrict map to specified keys |
-| `restrict-closure-env` | optimize | Restrict closure to free variables |
 | `reverse` | array | Reverse an array |
 | `scanl` | array | Iterate left-to-right until predicate returns 0 |
 | `scanr` | array | Iterate right-to-left until predicate returns 0 |
@@ -437,49 +434,3 @@ Values produced by the closure are discarded after all iterations.
 { 0 1 20 fib! } 1000 bench! println!
 ```
 
-## Optimize (optimize.froth)
-
-Closure optimization utilities.
-
-| Name | Stack Effect | Description |
-|------|--------------|-------------|
-| `restrict-closure-env` | `( closure -- closure 0 \| 1 )` | Restrict closure environment to free variables |
-| `optimize` | `( data -- data )` | Recursively optimize all closures in a data structure |
-| `count-bindings` | `( data -- count )` | Count total bindings in closure environments |
-
-Restricts a closure's captured environment to only the variables that are actually used (free) in the function body. Uses `preflight` to check for safety, then `boundness` to find free variables. Returns `(optimized-closure 0)` on success, or `1` if preflight failed (due to `env` or `import` usage).
-
-```
-1 /a 2 /b { a } /f        ; f captures both a and b
-f open /body /env env #    ; many bindings (includes stdlib)
-f restrict-closure-env!
-{ /opt
-  opt open /body /env env # ; 1 (only 'a)
-  opt!                      ; 1 (still works)
-} { "failed" } ?!
-```
-
-The `optimize` function uses `transform` to traverse any data structure (arrays, maps, cons cells) and optimize all closures within it. For each closure:
-1. Restricts the environment to only free variables
-2. Recursively optimizes the closure's environment
-
-```
-1 /unused 2 /used
-{ used } /f
-[ f f ] optimize!          ; array with optimized closures
-$ f 'fn : optimize!        ; map with optimized closure value
-```
-
-To optimize all closures in the current environment, use inline (not in a closure, due to lexical scoping):
-
-```
-env optimize! restore      ; optimize and replace current environment
-```
-
-The `count-bindings` function counts the total number of bindings across all closure environments in a data structure. Useful for measuring optimization effectiveness:
-
-```
-1 /a 2 /b { a } /f
-f count-bindings!          ; count before optimization
-f optimize! count-bindings! ; count after (should be less)
-```

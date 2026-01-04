@@ -8,7 +8,7 @@
 ; max: next slot number to allocate if free list is empty
 ; ctx-slot: allocated context save slot (nil if not yet allocated)
 ; rp-slot: allocated return pointer save slot (nil if not yet allocated)
-['delete-keys 'reduce 'swap 'and 'not 'or] { /term-fn /seq-fn /rp-slot /ctx-slot /max /free /slot-map /live-map
+['delete-keys 'reduce 'swap 'and 'not 'or 'lfoldl] { /term-fn /seq-fn /rp-slot /ctx-slot /max /free /slot-map /live-map
   live-map 'term @ /term
   term isBinder {
     ; Binder: allocate slot if used (is-used=0), else no slot
@@ -30,11 +30,9 @@
     } ?!
   } {
   term isFunc {
-    ; Closure: fresh frame (own slot space), fresh register save slots
-    live-map 'body @ /inner-body
+    ; Closure: already analyzed by compile-func, just free dead-set slots
+    ; Node already has 'body with slot info and 'max-slots
     live-map 'dead-set @ /dead-set
-    inner-body $ . 0 . . 0 seq-fn term-fn seq-fn!
-    /discard-rp /discard-ctx /inner-max /discard-free /discard-slot-map /new-body
     ; Free slots for vars in dead-set (their last use was this capture)
     ; Only free if variable is bound (has a slot) - free vars don't have slots
     dead-set keys free { /v /f
@@ -46,36 +44,42 @@
         f
       } ?!
     } reduce! /new-free
-    ; Return map with updated body and max-slots; keep outer ctx-slot and rp-slot
-    live-map new-body 'body : inner-max 'max-slots : slot-map new-free max ctx-slot rp-slot
+    ; Return node unchanged; update outer state
+    live-map slot-map new-free max ctx-slot rp-slot
   } {
   term isGen {
     ; Generator: same frame, but binders are locally scoped
     ; Shares ctx-slot and rp-slot with outer scope
     live-map 'body @ /inner-body
-    live-map 'bound-set @ /inner-bound-set
-    inner-bound-set keys /bound-vars
+    ; Save outer slot-map to restore after generator (inner binders may shadow outer)
+    slot-map /outer-slot-map
     ; Thread state through generator (including ctx-slot and rp-slot)
     inner-body slot-map free max ctx-slot rp-slot 0 seq-fn term-fn seq-fn!
-    /after-rp /after-ctx /after-max /after-free /after-slot-map /new-body
-    ; Remove inner binders from slot-map (out of scope)
-    after-slot-map bound-vars delete-keys! /new-slot-map
-    live-map new-body 'body : new-slot-map after-free after-max after-ctx after-rp
+    /after-rp /after-ctx /after-max /after-free /after-slot-map /new-body-list
+    ; Convert list to array
+    [ new-body-list { } lfoldl! ] /new-body
+    ; Restore outer slot-map (inner binders are now out of scope)
+    live-map new-body 'body : outer-slot-map after-free after-max after-ctx after-rp
   } {
-  ; Check for bound identifier (has 'is-bound key with value 0)
-  term isIdent live-map 'is-bound in 0 = and! {
-    live-map 'is-bound @ 0 = {
-      ; Bound identifier: lookup slot
-      slot-map term @ /slot
-      live-map 'is-live @ 1 = {
-        ; Last use: add slot to free list
-        live-map slot 'slot : slot-map free slot , max ctx-slot rp-slot
+  ; Check for variable (not an operator)
+  term isIdent {
+    live-map 'is-operator @ 1 = {
+      live-map 'is-bound @ 0 = {
+        ; Bound identifier: lookup slot
+        slot-map term @ /slot
+        live-map 'is-live @ 1 = {
+          ; Last use: add slot to free list
+          live-map slot 'slot : slot-map free slot , max ctx-slot rp-slot
+        } {
+          ; Still live
+          live-map slot 'slot : slot-map free max ctx-slot rp-slot
+        } ?!
       } {
-        ; Still live
-        live-map slot 'slot : slot-map free max ctx-slot rp-slot
+        ; Free identifier (is-bound = 1): no frame slot
+        live-map slot-map free max ctx-slot rp-slot
       } ?!
     } {
-      ; Free identifier (is-bound = 1): no frame slot
+      ; Operator: no slot tracking
       live-map slot-map free max ctx-slot rp-slot
     } ?!
   } {
@@ -148,12 +152,13 @@
   } ?! } ?! } ?! } ?! } ?!
 } def-fn! /slots-term-impl
 
-; slots-seq-impl: (body-arr slot-map free max ctx-slot rp-slot idx seq-fn term-fn -- new-body-arr new-slot-map new-free new-max new-ctx-slot new-rp-slot)
+; slots-seq-impl: (body-arr slot-map free max ctx-slot rp-slot idx seq-fn term-fn -- new-body-list new-slot-map new-free new-max new-ctx-slot new-rp-slot)
 ; Process terms from idx to end (left-to-right).
-['concat] { /term-fn /seq-fn /idx /rp-slot /ctx-slot /max /free /slot-map /body-arr
+; Returns a list in correct order.
+['slots-term-impl] { /term-fn /seq-fn /idx /rp-slot /ctx-slot /max /free /slot-map /body-arr
   idx body-arr # = {
-    ; Done
-    [] slot-map free max ctx-slot rp-slot
+    ; Done: return empty list
+    . slot-map free max ctx-slot rp-slot
   } {
     ; Process current term
     body-arr idx @ slot-map free max ctx-slot rp-slot seq-fn term-fn term-fn!
@@ -161,20 +166,24 @@
     ; Recurse for rest
     body-arr after-slot-map after-free after-max after-ctx after-rp idx 1 + seq-fn term-fn seq-fn!
     /final-rp /final-ctx /final-max /final-free /final-slot-map /rest-body
-    ; Prepend current result
-    [term-map] rest-body concat! final-slot-map final-free final-max final-ctx final-rp
+    ; Cons current node onto rest (builds list in correct order)
+    rest-body term-map , final-slot-map final-free final-max final-ctx final-rp
   } ?!
 } def-fn! /slots-seq-impl
 
 ; slots: (func-node -- func-node)
 ; Allocate frame slots for a function.
-; Adds 'slot key to binders and bound identifiers.
-; Adds 'save-context and 'save-return keys to apply nodes.
-; Adds 'max-slots key to closures.
-['slots-seq-impl 'slots-term-impl] { /func-node
+; Takes function-node from compile-func (with liveness info) and adds slot info:
+;   'slot: frame slot number for binders and bound identifiers
+;   'save-context, 'save-return: flags for first call needing register saves
+;   'ctx-save-slot, 'rp-save-slot: frame slots for register saves
+;   'max-slots: maximum frame slots needed (function-level)
+['slots-seq-impl 'slots-term-impl 'lfoldl] { /func-node
   func-node 'body @ /body
   body $ . 0 . . 0 slots-seq-impl slots-term-impl slots-seq-impl!
-  /discard-rp /discard-ctx /max /free /slot-map /new-body
+  /discard-rp /discard-ctx /max /free /slot-map /new-body-list
+  ; Convert list to array
+  [ new-body-list { } lfoldl! ] /new-body
   func-node new-body 'body : max 'max-slots :
 } def-fn! /slots
 

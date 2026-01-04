@@ -1,0 +1,74 @@
+; compile.froth - Compiler orchestration
+
+; compile-term-impl: (code-map addr term seq-fn term-fn func-fn -- code-map addr node)
+; Build a node for a single term.
+; Recurses into nested functions and generators.
+['make-node] { /func-fn /term-fn /seq-fn /term
+  term isFunc {
+    ; Nested function: recursively compile it
+    term seq-fn term-fn func-fn func-fn!
+  } {
+  term isGen {
+    ; Generator: process body, create generator-node
+    term make-node! /node
+    term 0 seq-fn term-fn func-fn seq-fn! /body
+    node body 'body :
+  } {
+    ; Other terms: just create node
+    term make-node!
+  } ?! } ?!
+} def-fn! /compile-term-impl
+
+; compile-seq-impl: (code-map addr terms idx seq-fn term-fn func-fn -- code-map addr body-arr)
+; Process terms from idx to end (left-to-right).
+; Uses list accumulation internally, converts to array at idx=0.
+['lfoldl] { /func-fn /term-fn /seq-fn /idx /terms
+  idx terms # = {
+    ; Base case: empty list
+    .
+  } {
+    ; Process current term
+    terms idx @ seq-fn term-fn func-fn term-fn! /node
+    ; Recurse for rest (returns a list)
+    terms idx 1 + seq-fn term-fn func-fn seq-fn! /rest
+    ; Cons node onto rest
+    rest node ,
+  } ?!
+  ; Convert list to array at top level (idx=0)
+  idx 0 = { /list [ list { } lfoldl! ] } { } ?!
+} def-fn! /compile-seq-impl
+
+; compile-func-impl: (code-map addr func seq-fn term-fn func-fn -- code-map addr func-node)
+; Build the node tree for a function and run analysis passes.
+; Checks code-map for existing node (deduplication via ref ID).
+['make-node 'tree-get 'tree-set 'boundness 'liveness 'slots 'codegen] { /func-fn /term-fn /seq-fn /func /addr
+  /code-map  ; pop to check cache
+  func ref /func-id
+  code-map func-id tree-get! {
+    ; In cache (tree-get returned 0): return cached node
+    /cached-node
+    code-map addr cached-node
+  } {
+    ; Not in cache (tree-get returned 1): build node, run passes, add to cache
+    ; seq-fn returns (code-map addr body) - leave code-map and addr on stack
+    code-map addr func 0 seq-fn term-fn func-fn seq-fn! /body
+    ; Stack: new-code-map new-addr
+    func make-node! body 'body : boundness! liveness! slots! codegen!
+    ; Stack: new-code-map final-addr func-node
+    /func-node /final-addr
+    ; Stack: new-code-map
+    func-id func-node tree-set! final-addr func-node
+    ; Stack: updated-code-map final-addr func-node
+  } ?!
+} def-fn! /compile-func-impl
+
+; compile-func: (code-map addr func -- code-map addr func-node)
+; Build the node tree for a function and run all compiler passes.
+; Pipeline: boundness -> liveness -> slots -> codegen
+; Recurses into nested functions to build complete analyzed nodes with bytecode.
+['compile-seq-impl 'compile-term-impl 'compile-func-impl] {
+  compile-seq-impl compile-term-impl compile-func-impl compile-func-impl!
+} def-fn! /compile-func
+
+; Remove impl functions
+env 'compile-term-impl delete 'compile-seq-impl delete 'compile-func-impl delete restore
