@@ -223,14 +223,14 @@ $ ['x 'y] add-keys!            ; $ . 'x : . 'y :
 
 ## Alist (alist.froth)
 
-Association lists for key-value storage with arbitrary key types. Unlike maps (which only support identifier keys), alists can use any value as a key. Operations are O(n) but simple and sufficient for small dictionaries.
+Association lists for key-value storage with arbitrary key types. Unlike maps (which only support identifier keys), alists can use any value as a key. Insert is O(1), lookup/update/delete are O(n).
 
-An alist is an array of `[key value]` pairs:
+An alist is a cons list of `[key value]` pairs:
 
 ```
-[ ]                            ; empty alist
-[ [1 "one"] [2 "two"] ]        ; alist with integer keys
-[ ["a" 1] ["b" 2] ]            ; alist with string keys
+.                              ; empty alist
+. [1 "one"] , [2 "two"] ,      ; alist with integer keys (2 is head)
+. ["a" 1] , ["b" 2] ,          ; alist with string keys
 ```
 
 | Name | Stack Effect | Description |
@@ -248,20 +248,20 @@ An alist is an array of `[key value]` pairs:
 Lookup functions return a success flag (0 = found, 1 = not found):
 
 ```
-[ [1 "one"] [2 "two"] ] /a
+. [1 "one"] , [2 "two"] , /a
 a 1 alist-get!                 ; "one" 0 (found)
 a 3 alist-get!                 ; 1 (not found)
 a 2 alist-has!                 ; 0 (exists)
 ```
 
-Mutation functions return a new alist (immutable updates):
+Mutation functions return a new alist (immutable updates). Insert prepends (O(1)), update and delete rebuild the list:
 
 ```
-[ ] /a
-a 1 "one" alist-set! /a        ; [ [1 "one"] ]
-a 2 "two" alist-set! /a        ; [ [1 "one"] [2 "two"] ]
-a 1 "ONE" alist-set! /a        ; [ [1 "ONE"] [2 "two"] ] (updated)
-a 1 alist-delete! /a           ; [ [2 "two"] ]
+. /a
+a 1 "one" alist-set! /a        ; . [1 "one"] ,
+a 2 "two" alist-set! /a        ; . [1 "one"] , [2 "two"] ,
+a 1 "ONE" alist-set! /a        ; . [1 "ONE"] , [2 "two"] , (updated)
+a 1 alist-delete! /a           ; . [2 "two"] ,
 ```
 
 ## Tree23 (tree23.froth)
