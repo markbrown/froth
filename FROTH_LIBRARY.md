@@ -18,6 +18,9 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `alist-values` | alist | Get all values as array |
 | `and` | bool | Logical and |
 | `bench` | bench | Benchmark closure execution |
+| `cache-empty` | cache | Create an empty cache |
+| `cache-get` | cache | Look up key under identifier |
+| `cache-set` | cache | Store key-value pair under identifier |
 | `concat` | array | Concatenate two arrays (copies both) |
 | `contains` | array | Check if array contains element |
 | `def-fn` | defs | Create closure with minimal environment |
@@ -263,6 +266,29 @@ a 2 "two" alist-set! /a        ; . [1 "one"] , [2 "two"] ,
 a 1 "ONE" alist-set! /a        ; . [1 "ONE"] , [2 "two"] , (updated)
 a 1 alist-delete! /a           ; . [2 "two"] ,
 ```
+
+## Cache (cache.froth)
+
+Two-level cache mapping identifiers to alists of (key, value) pairs. Used by the compiler to cache compiled closures, avoiding recompilation when the same closure is encountered multiple times.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `cache-empty` | `( -- cache )` | Create an empty cache |
+| `cache-get` | `( cache 'ident key -- value 0 \| 1 )` | Look up key under identifier |
+| `cache-set` | `( cache 'ident key value -- cache' )` | Store key-value pair under identifier |
+
+The cache uses a map for the outer structure (identifier → alist) and alists for the inner structure (key → value). This provides O(1) lookup in the common case where each identifier maps to a single entry.
+
+```
+cache-empty! /c
+{1} /f
+
+c 'my-func f "compiled" cache-set! /c
+c 'my-func f cache-get!            ; "compiled" 0 (found)
+c 'my-func {2} cache-get!          ; 1 (not found - different closure)
+```
+
+Note: Closures are compared by identity, not structural equality. Two `{1}` literals are different closures.
 
 ## Tree23 (tree23.froth)
 
