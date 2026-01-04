@@ -1,0 +1,1513 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Referenced file lib/codegen.froth
+  ⎿  Read FROTH_BYTECODE.md (125 lines)
+  ⎿  Read FROTH_COMPILER.md (360 lines)
+  ⎿  Read lib/compile.froth (70 lines)
+  ⎿  Read lib/slots.froth (188 lines)
+
+> We are in the middle of refactoring according to the plan in 
+FROTH_BYTECODE. We have just completed step 2. Please review the code and 
+documentation to understand where we are up to. 
+
+● I'll review the current state of the codegen refactoring by reading the relevant files.
+
+● Read(lib/codegen.froth)
+  ⎿  Read 388 lines
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 125 lines
+
+● Based on my review of the code and documentation, here's the current status:
+
+  Completed Steps
+
+  Step 1 ✅ - Changed isFunc to read 'func-addr:
+  - Lines 153-192: Now reads node 'func-addr @ to get the pre-compiled bytecode address
+  - Emits context array building code without recursive compilation
+
+  Step 2 ✅ - Removed codegen-fn parameter:
+  - codegen-term signature (line 31): (seq-fn addr code-map code need-enter node outer-free-vars outer-bound-slots max-slots -- ...)
+  - codegen-seq-impl and codegen-seq: no longer pass codegen-fn
+  - codegen merged the former codegen-impl since Y-combinator for nested function recursion is no longer needed
+
+  Remaining Steps (from FROTH_BYTECODE.md)
+
+  Step 3: Restructure to match other passes
+  - Rename to codegen-term-impl and codegen-seq-impl
+  - Move seq-fn term-fn to end of parameter lists
+  - Update codegen entry point
+
+  Step 4: Remove code-map threading
+  - Currently still threaded through all functions but never modified
+  - Can be removed from internal signatures
+
+  Step 5: Update signature and return value
+  - Change to (addr func-node -- next-addr func-node)
+  - Store 'func-addr in node before returning
+
+  Step 6: Use list accumulation
+  - Replace concat! with list cons (,)
+  - Convert to array when emitting
+
+  The code is functional after step 2. Ready to proceed with step 3 when you'd like.
+
+> proceed with step 3 
+
+● I'll restructure codegen to match the pattern used in slots/boundness/liveness. Let me first check the exact pattern in slots.froth for reference:
+
+● Read(lib/slots.froth)
+  ⎿  Read 50 lines
+
+● Read(lib/slots.froth)
+  ⎿  Read 80 lines
+
+● Read(lib/slots.froth)
+  ⎿  Read 41 lines
+
+● Now I understand the pattern. Let me make the changes:
+
+  1. Rename codegen-term → codegen-term-impl, move seq-fn to end, add term-fn
+  2. Rewrite codegen-seq-impl to use seq-fn term-fn pattern instead of Y-combinator
+  3. Remove codegen-seq wrapper
+  4. Update codegen to wire up impl functions
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      28  operator-table 'close @ /opClose
+      29  operator-table 'deref @ /opDeref
+      30  
+      31 -; codegen-term: (seq-fn addr code-map code need-enter node oute
+         -r-free-vars outer-bound-slots max-slots -- addr' code-map' code
+         -' need-enter')                                                 
+      31 +; codegen-term-impl: (addr code-map code need-enter node outer-
+         +free-vars outer-bound-slots max-slots seq-fn term-fn -- addr' c
+         +ode-map' code' need-enter')                                    
+      32  ; Generate bytecode for a single term, append to code array.
+      33 -; seq-fn is passed for processing generator bodies (calls codeg
+         -en-term for each term)                                         
+      33 +; seq-fn/term-fn are passed for processing generator bodies    
+      34  ; node is the analysis node for this term (from boundness/liven
+          ess/slots), contains 'term
+      35  ; outer-free-vars maps identifiers to context slot numbers in t
+          he current function
+      36  ; outer-bound-slots maps identifiers to frame slot numbers in t
+          he current function
+     ...
+      44   'ocStartArray 'ocEndArray 'opClose 'opDeref 'ocTailCall 'ocCal
+          l
+      45   'ocSaveContextPtr 'ocRestoreContextPtr 'ocSaveReturnPtr 'ocRes
+          toreReturnPtr
+      46   'foldl 'reduce 'drop 'or 'and] {
+      47 -  /max-slots /outer-bound-slots /outer-free-vars /node /need-en
+         -ter /code /code-map /addr /seq-fn                              
+      47 +  /term-fn /seq-fn /max-slots /outer-bound-slots /outer-free-va
+         +rs /node /need-enter /code /code-map /addr                     
+      48    node 'term @ /term
+      49    term isValue {
+      50      ; Quoted literal value - unwrap and check type
+
+● Now update the isGen case to use the new calling pattern:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      214  
+      215      ; Process: start-array, generator body, end-array
+      216      ; Use seq-fn to process terms (shares outer's frame)
+      217 -    seq-fn addr code-map code [ocStartArray] concat! need-ente
+          -r gen-body-nodes outer-free-vars gen-bound-slots max-slots 0 s
+          -eq-fn!                                                        
+      217 +    addr code-map code [ocStartArray] concat! need-enter gen-b
+          +ody-nodes outer-free-vars gen-bound-slots max-slots 0 seq-fn t
+          +erm-fn seq-fn!                                                
+      218      /gen-code /gen-code-map /gen-addr
+      219  
+      220      gen-addr gen-code-map gen-code [ocEndArray] concat! need-e
+           nter
+
+● Now update the def-fn binding name:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      276      ; Other term type - skip
+      277      addr code-map code need-enter
+      278    } ?! } ?! } ?! } ?! } ?! } ?! } ?!
+      279 -} def-fn! /codegen-term                                       
+      279 +} def-fn! /codegen-term-impl                                  
+      280  
+      281  ; codegen-seq: (seq-fn addr code-map code need-enter body-node
+           s outer-free-vars outer-bound-slots max-slots idx -- addr' cod
+           e-map' code')
+      282  ; Process terms from idx to end of body-nodes.
+
+● Now rewrite codegen-seq-impl to use the new pattern (and remove codegen-seq wrapper):
+
+● Update(lib/codegen.froth)
+  ⎿  Added 7 lines, removed 13 lines                                     
+      278    } ?! } ?! } ?! } ?! } ?! } ?! } ?!
+      279  } def-fn! /codegen-term-impl
+      280  
+      281 -; codegen-seq: (seq-fn addr code-map code need-enter body-node
+          -s outer-free-vars outer-bound-slots max-slots idx -- addr' cod
+          -e-map' code')                                                 
+      281 +; codegen-seq-impl: (addr code-map code need-enter body-nodes 
+          +outer-free-vars outer-bound-slots max-slots idx seq-fn term-fn
+          + -- addr' code-map' code')                                    
+      282  ; Process terms from idx to end of body-nodes.
+      283 -; seq-fn is this function, passed for generator body processin
+          -g                                                             
+      283  ; body-nodes is an array of analysis nodes (each contains 'ter
+           m)
+      284  ; outer-free-vars maps identifiers to context slot numbers
+      285  ; outer-bound-slots maps identifiers to frame slot numbers
+      286  ; max-slots is the number of frame slots needed
+      287  ; need-enter tracks whether enter-frame has been emitted (0=ne
+           ed, 1=done)
+      289 -{ /self /idx /max-slots /outer-bound-slots /outer-free-vars /b
+          -ody-nodes /need-enter /code /code-map /addr /seq-fn           
+      288 +['codegen-term-impl] { /term-fn /seq-fn /idx /max-slots /outer
+          +-bound-slots /outer-free-vars /body-nodes /need-enter /code /c
+          +ode-map /addr                                                 
+      289    idx body-nodes # = {
+      290      ; Done - discard need-enter, return (addr code-map code)
+      291      addr code-map code
+      292    } {
+      293      ; Get node for current term
+      294      body-nodes idx @ /node
+      296 -    ; Process current term, get back (addr' code-map' code' ne
+          -ed-enter')                                                    
+      297 -    ; Pass seq-fn (wrapped self) for generator body processing
+      298 -    seq-fn addr code-map code need-enter node outer-free-vars 
+          -outer-bound-slots max-slots codegen-term!                     
+      295 +    ; Process current term with term-fn                       
+      296 +    addr code-map code need-enter node outer-free-vars outer-b
+          +ound-slots max-slots seq-fn term-fn term-fn!                  
+      297      /new-need-enter /new-code /new-code-map /new-addr
+      300 -    ; Recurse with updated state                              
+      301 -    seq-fn new-addr new-code-map new-code new-need-enter body-
+          -nodes outer-free-vars outer-bound-slots max-slots idx 1 + self
+          - self!                                                        
+      298 +    ; Recurse with seq-fn                                     
+      299 +    new-addr new-code-map new-code new-need-enter body-nodes o
+          +uter-free-vars outer-bound-slots max-slots idx 1 + seq-fn term
+          +-fn seq-fn!                                                   
+      300    } ?!
+      303 -} /codegen-seq-impl                                           
+      301 +} def-fn! /codegen-seq-impl                                   
+      302  
+      305 -['codegen-seq-impl 'codegen-term] { /idx /max-slots /outer-bou
+          -nd-slots /outer-free-vars /body-nodes /need-enter /code /code-
+          -map /addr /seq-fn                                             
+      306 -  seq-fn addr code-map code need-enter body-nodes outer-free-v
+          -ars outer-bound-slots max-slots idx codegen-seq-impl codegen-s
+          -eq-impl!                                                      
+      307 -} def-fn! /codegen-seq                                        
+      308 -                                                              
+      303  ; codegen: (addr code-map func-node -- next-addr new-code-map 
+           func-addr)
+      304  ; Generate bytecode for a function.
+      305  ; Walks body left-to-right, collects bytecode, emits at addr.
+
+● Now update the codegen function to use the new calling pattern:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      347    /bound-slots
+      348  
+      349    ; Collect bytecode for each term in function body
+      350 -  ; codegen-seq returns (addr' code-map' code')               
+      351 -  ; Pass codegen-seq as seq-fn for generator body processing  
+      352 -  codegen-seq addr code-map [] need-enter body-nodes free-vars
+          - bound-slots max-slots 0 codegen-seq!                         
+      350 +  ; codegen-seq-impl returns (addr' code-map' code')          
+      351 +  ; Pass impl functions for generator body processing         
+      352 +  addr code-map [] need-enter body-nodes free-vars bound-slots
+          + max-slots 0 codegen-seq-impl codegen-term-impl codegen-seq-im
+          +pl!                                                           
+      353    /body-code /new-code-map /next-emit-addr
+      354  
+      355    ; Check if last term is a tail call by looking at its node
+
+● Now update the dependencies in codegen's def-fn (replace codegen-seq with the impl functions):
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      304  ; Generate bytecode for a function.
+      305  ; Walks body left-to-right, collects bytecode, emits at addr.
+      306  ; func-node contains 'term (the function) and analysis data.
+      307 -['codegen-seq 'concat 'emit-all-at 'ocReturn 'foldl 'drop 'mak
+          -e-node] { /func-node /code-map /addr                          
+      307 +['codegen-seq-impl 'codegen-term-impl 'concat 'emit-all-at 'oc
+          +Return 'foldl 'drop 'make-node] { /func-node /code-map /addr  
+      308    ; Extract the function term from the node
+      309    func-node 'term @ /func
+      310  
+
+● Now update the cleanup section at the end - codegen-seq no longer exists:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 13 lines
+
+● Add codegen-term-impl to the cleanup:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      370  } def-fn! /codegen
+      371  
+      372  ; Clean up impl and instruction/operator code bindings
+      373 -env 'codegen-seq-impl delete                                  
+      373 +env 'codegen-seq-impl delete 'codegen-term-impl delete        
+      374      'ocPushInt delete 'ocPushString delete 'ocOp delete 'ocRet
+           urn delete
+      375      'ocPushQuotedApply delete 'ocPushContext delete 'ocPushLoc
+           al delete
+      376      'ocPopLocal delete 'ocPopUnused delete 'ocEnterFrame delet
+           e 'ocLeaveFrame delete
+
+● Let me run the tests to verify the changes work:
+
+● Bash(make test 2>&1 | head -50)
+  ⎿  cd src && mmc --make froth        
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+     … +47 lines (ctrl+o to expand)
+
+● Let me check what's failing in the codegen test:
+
+● Bash(timeout 5 ./bin/froth tests/codegen.froth 2>&1)
+  ⎿  Interrupted · What should Claude do instead?
+
+> The refactoring will break a lot of tests, unfortunately, so we need to do
+ our best with code reviews for the time being. How does the resulting code 
+look to you? 
+
+● Let me review the full restructured code:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 382 lines
+
+● The restructured code looks good to me. Here's my review:
+
+  Structure ✓
+
+  The code now follows the same pattern as slots.froth:
+  - codegen-term-impl: processes single terms, seq-fn term-fn at end of params
+  - codegen-seq-impl: processes sequences, calls term-fn! for terms and seq-fn! to recurse
+  - codegen: entry point wires up impl functions
+
+  Key call sites verified ✓
+
+  Generator body processing (line 217):
+  addr code-map code [ocStartArray] concat! need-enter gen-body-nodes outer-free-vars gen-bound-slots max-slots 0 seq-fn term-fn seq-fn!
+
+  seq-impl calling term-impl (line 296):
+  addr code-map code need-enter node outer-free-vars outer-bound-slots max-slots seq-fn term-fn term-fn!
+
+  seq-impl recursing (line 299):
+  new-addr new-code-map new-code new-need-enter body-nodes outer-free-vars outer-bound-slots max-slots idx 1 + seq-fn term-fn seq-fn!
+
+  codegen entry point (line 352):
+  addr code-map [] need-enter body-nodes free-vars bound-slots max-slots 0 codegen-seq-impl codegen-term-impl codegen-seq-impl!
+
+  Minor note
+
+  Line 288: ['codegen-term-impl] in codegen-seq-impl's def-fn deps is technically unnecessary since term-fn comes as a parameter, but it matches the pattern in slots.froth and is harmless.
+
+  Summary
+
+  Step 3 is complete. The structure now matches the other passes (boundness, liveness, slots). Remaining steps:
+  - Step 4: Remove code-map threading
+  - Step 5: Update signature to (addr func-node -- next-addr func-node)
+  - Step 6: Use list accumulation
+
+> proceed with step 4 
+
+● Step 4: Remove code-map threading from internal functions. It's never modified (was only for nested function compilation which we removed in step 1).
+
+  First, update codegen-term-impl signature and remove code-map:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      28  operator-table 'close @ /opClose
+      29  operator-table 'deref @ /opDeref
+      30  
+      31 -; codegen-term-impl: (addr code-map code need-enter node outer-
+         -free-vars outer-bound-slots max-slots seq-fn term-fn -- addr' c
+         -ode-map' code' need-enter')                                    
+      31 +; codegen-term-impl: (addr code need-enter node outer-free-vars
+         + outer-bound-slots max-slots seq-fn term-fn -- addr' code' need
+         +-enter')                                                       
+      32  ; Generate bytecode for a single term, append to code array.
+      33  ; seq-fn/term-fn are passed for processing generator bodies
+      34  ; node is the analysis node for this term (from boundness/liven
+          ess/slots), contains 'term
+     ...
+      36  ; outer-bound-slots maps identifiers to frame slot numbers in t
+          he current function
+      37  ; max-slots is the number of frame slots needed (for enter-fram
+          e/leave-frame)
+      38  ; need-enter is 0 if we still need to emit enter-frame, 1 if al
+          ready emitted
+      39 -; Returns updated addr, code-map, code, and need-enter flag    
+      39 +; Returns updated addr, code, and need-enter flag              
+      40  ['concat 'ocPushInt 'ocPushString 'ocOp 'operator-table
+      41   'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
+      42   'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
+     ...
+      44   'ocStartArray 'ocEndArray 'opClose 'opDeref 'ocTailCall 'ocCal
+          l
+      45   'ocSaveContextPtr 'ocRestoreContextPtr 'ocSaveReturnPtr 'ocRes
+          toreReturnPtr
+      46   'foldl 'reduce 'drop 'or 'and] {
+      47 -  /term-fn /seq-fn /max-slots /outer-bound-slots /outer-free-va
+         -rs /node /need-enter /code /code-map /addr                     
+      47 +  /term-fn /seq-fn /max-slots /outer-bound-slots /outer-free-va
+         +rs /node /need-enter /code /addr                               
+      48    node 'term @ /term
+      49    term isValue {
+      50      ; Quoted literal value - unwrap and check type
+
+● Now update all return statements in codegen-term-impl to remove code-map. Let me find them:
+
+● Bash(grep -n "addr code-map code"
+      /home/mark/Documents/projects/froth/lib/codegen.froth | head -30)
+  ⎿ 53:      addr code-map code [ocPushInt val] concat! need-enter         
+    56:      addr code-map code [ocPushString val intern] concat! need-ente
+    r
+    … +31 lines (ctrl+o to expand)
+
+
+● Update(lib/codegen.froth)
+  ⎿  Added 23 lines, removed 23 lines                                    
+      50      ; Quoted literal value - unwrap and check type
+      51      term unwrap /val
+      52      val isInt {
+      53 -      addr code-map code [ocPushInt val] concat! need-enter    
+      53 +      addr code [ocPushInt val] concat! need-enter             
+      54      } {
+      55      val isString {
+      56 -      addr code-map code [ocPushString val intern] concat! need
+         --enter                                                         
+      56 +      addr code [ocPushString val intern] concat! need-enter   
+      57      } {
+      58        ; Unsupported value type
+      59 -      addr code-map code need-enter                            
+      59 +      addr code need-enter                                     
+      60      } ?! } ?!
+      61    } {
+      62    term isBinder {
+     ...
+      76          addr code-map new-code 1  ; now in frame (need-enter=1)
+      77        } {
+      78          ; Dead binder (is-used=1) - just discard
+      79 -        addr code-map code [ocPopUnused] concat! need-enter    
+      79 +        addr code [ocPopUnused] concat! need-enter             
+      80        } ?!
+      81      } {
+      82        ; No 'is-used key - assume dead
+      83 -      addr code-map code [ocPopUnused] concat! need-enter      
+      83 +      addr code [ocPopUnused] concat! need-enter               
+      84      } ?!
+      85    } {
+      86    term isIdent {
+      87      term isOperator {
+      88        ; Operator - emit op instruction with opcode
+      89        operator-table term @ /opcode
+      90 -      addr code-map code [ocOp opcode] concat! need-enter      
+      90 +      addr code [ocOp opcode] concat! need-enter               
+      91      } {
+      92        ; Regular identifier - check if bound or free
+      93        node 'is-bound in {
+     ...
+      107          } {
+      108            ; Free variable (is-bound=1) - look up context slot
+      109            outer-free-vars term @ /slot
+      110 -          addr code-map code [ocPushContext slot] concat! need
+          --enter                                                        
+      110 +          addr code [ocPushContext slot] concat! need-enter   
+      111          } ?!
+      112        } {
+      113          ; No analysis data - skip
+      114 -        addr code-map code need-enter                         
+      114 +        addr code need-enter                                  
+      115        } ?!
+      116      } ?!
+      117    } {
+     ...
+      121      inner isIdent {
+      122        ; 'identifier -> push-int id, op idToIdent
+      123        inner intern /id
+      124 -      addr code-map code [ocPushInt id ocOp opIdToIdent] conca
+          -t! need-enter                                                 
+      124 +      addr code [ocPushInt id ocOp opIdToIdent] concat! need-e
+          +nter                                                          
+      125      } {
+      126      inner isBinder {
+      127        ; '/binder -> push-int id, op idToBinder
+      128        inner intern /id
+      129 -      addr code-map code [ocPushInt id ocOp opIdToBinder] conc
+          -at! need-enter                                                
+      129 +      addr code [ocPushInt id ocOp opIdToBinder] concat! need-
+          +enter                                                         
+      130      } {
+      131      inner isApply {
+      132        ; '! -> push-quoted-apply
+      133 -      addr code-map code [ocPushQuotedApply] concat! need-ente
+          -r                                                             
+      133 +      addr code [ocPushQuotedApply] concat! need-enter        
+      134      } {
+      135      inner isValue {
+      136        ; 'value -> push value, op wrap
+      137        inner unwrap /val
+      138        val isInt {
+      139 -        addr code-map code [ocPushInt val ocOp opWrap] concat!
+          - need-enter                                                   
+      139 +        addr code [ocPushInt val ocOp opWrap] concat! need-ent
+          +er                                                            
+      140        } {
+      141        val isString {
+      142 -        addr code-map code [ocPushString val intern ocOp opWra
+          -p] concat! need-enter                                         
+      142 +        addr code [ocPushString val intern ocOp opWrap] concat
+          +! need-enter                                                  
+      143        } {
+      144          ; Unsupported quoted value type
+      145 -        addr code-map code need-enter                         
+      145 +        addr code need-enter                                  
+      146        } ?! } ?!
+      147      } {
+      148        ; Quoted function, generator, or nested quote - store in
+            constant pool
+      149        term ref /idx
+      150 -      addr code-map code [ocPushInt idx ocOp opDeref] concat! 
+          -need-enter                                                    
+      150 +      addr code [ocPushInt idx ocOp opDeref] concat! need-ente
+          +r                                                             
+      151      } ?! } ?! } ?! } ?!
+      152    } {
+      153    term isFunc {
+     ...
+      214  
+      215      ; Process: start-array, generator body, end-array
+      216      ; Use seq-fn to process terms (shares outer's frame)
+      217 -    addr code-map code [ocStartArray] concat! need-enter gen-b
+          -ody-nodes outer-free-vars gen-bound-slots max-slots 0 seq-fn t
+          -erm-fn seq-fn!                                                
+      217 +    addr code [ocStartArray] concat! need-enter gen-body-nodes
+          + outer-free-vars gen-bound-slots max-slots 0 seq-fn term-fn se
+          +q-fn!                                                         
+      218      /gen-code /gen-code-map /gen-addr
+      219  
+      220      gen-addr gen-code-map gen-code [ocEndArray] concat! need-e
+           nter
+     ...
+      223      ; Apply - check node for tail call flag
+      224      node 'is-tail-call in { node 'is-tail-call @ } { 1 } ?! {
+      225        ; Tail call (is-tail-call=0) - emit tail-call
+      226 -      addr code-map code [ocTailCall] concat! need-enter      
+      226 +      addr code [ocTailCall] concat! need-enter               
+      227      } {
+      228        ; Non-tail call - handle register saves/restores
+      229        ; Check if we need to save context or return pointer
+     ...
+      270          code6 [ocLeaveFrame max-slots] concat!
+      271        } { code6 } ?! /code7
+      272  
+      273 -      addr code-map code7 new-need-enter                      
+      273 +      addr code7 new-need-enter                               
+      274      } ?!
+      275    } {
+      276      ; Other term type - skip
+      277 -    addr code-map code need-enter                             
+      277 +    addr code need-enter                                      
+      278    } ?! } ?! } ?! } ?! } ?! } ?! } ?!
+      279  } def-fn! /codegen-term-impl
+      280  
+      281 -; codegen-seq-impl: (addr code-map code need-enter body-nodes 
+          -outer-free-vars outer-bound-slots max-slots idx seq-fn term-fn
+          - -- addr' code-map' code')                                    
+      281 +; codegen-seq-impl: (addr code need-enter body-nodes outer-fre
+          +e-vars outer-bound-slots max-slots idx seq-fn term-fn -- addr'
+          + code-map' code')                                             
+      282  ; Process terms from idx to end of body-nodes.
+      283  ; body-nodes is an array of analysis nodes (each contains 'ter
+           m)
+      284  ; outer-free-vars maps identifiers to context slot numbers
+     ...
+      287  ; need-enter tracks whether enter-frame has been emitted (0=ne
+           ed, 1=done)
+      288  ['codegen-term-impl] { /term-fn /seq-fn /idx /max-slots /outer
+           -bound-slots /outer-free-vars /body-nodes /need-enter /code /c
+           ode-map /addr
+      289    idx body-nodes # = {
+      290 -    ; Done - discard need-enter, return (addr code-map code)  
+      291 -    addr code-map code                                        
+      290 +    ; Done - discard need-enter, return (addr code)           
+      291 +    addr code                                                 
+      292    } {
+      293      ; Get node for current term
+      294      body-nodes idx @ /node
+      295      ; Process current term with term-fn
+      296 -    addr code-map code need-enter node outer-free-vars outer-b
+          -ound-slots max-slots seq-fn term-fn term-fn!                  
+      296 +    addr code need-enter node outer-free-vars outer-bound-slot
+          +s max-slots seq-fn term-fn term-fn!                           
+      297      /new-need-enter /new-code /new-code-map /new-addr
+      298      ; Recurse with seq-fn
+      299      new-addr new-code-map new-code new-need-enter body-nodes o
+           uter-free-vars outer-bound-slots max-slots idx 1 + seq-fn term
+           -fn seq-fn!
+
+● Now update codegen-seq-impl signature:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      278    } ?! } ?! } ?! } ?! } ?! } ?! } ?!
+      279  } def-fn! /codegen-term-impl
+      280  
+      281 -; codegen-seq-impl: (addr code need-enter body-nodes outer-fre
+          -e-vars outer-bound-slots max-slots idx seq-fn term-fn -- addr'
+          - code-map' code')                                             
+      281 +; codegen-seq-impl: (addr code need-enter body-nodes outer-fre
+          +e-vars outer-bound-slots max-slots idx seq-fn term-fn -- addr'
+          + code')                                                       
+      282  ; Process terms from idx to end of body-nodes.
+      283  ; body-nodes is an array of analysis nodes (each contains 'ter
+           m)
+      284  ; outer-free-vars maps identifiers to context slot numbers
+      285  ; outer-bound-slots maps identifiers to frame slot numbers
+      286  ; max-slots is the number of frame slots needed
+      287  ; need-enter tracks whether enter-frame has been emitted (0=ne
+           ed, 1=done)
+      288 -['codegen-term-impl] { /term-fn /seq-fn /idx /max-slots /outer
+          --bound-slots /outer-free-vars /body-nodes /need-enter /code /c
+          -ode-map /addr                                                 
+      288 +['codegen-term-impl] { /term-fn /seq-fn /idx /max-slots /outer
+          +-bound-slots /outer-free-vars /body-nodes /need-enter /code /a
+          +ddr                                                           
+      289    idx body-nodes # = {
+      290      ; Done - discard need-enter, return (addr code)
+      291      addr code
+
+● Now update the recursive logic in codegen-seq-impl to remove code-map bindings:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 20 lines
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      294      body-nodes idx @ /node
+      295      ; Process current term with term-fn
+      296      addr code need-enter node outer-free-vars outer-bound-slot
+           s max-slots seq-fn term-fn term-fn!
+      297 -    /new-need-enter /new-code /new-code-map /new-addr         
+      297 +    /new-need-enter /new-code /new-addr                       
+      298      ; Recurse with seq-fn
+      299 -    new-addr new-code-map new-code new-need-enter body-nodes o
+          -uter-free-vars outer-bound-slots max-slots idx 1 + seq-fn term
+          --fn seq-fn!                                                   
+      299 +    new-addr new-code new-need-enter body-nodes outer-free-var
+          +s outer-bound-slots max-slots idx 1 + seq-fn term-fn seq-fn!  
+      300    } ?!
+      301  } def-fn! /codegen-seq-impl
+      302  
+
+● Now update codegen to not thread code-map through the impl functions:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 25 lines
+
+● Update(lib/codegen.froth)
+  ⎿  Added 6 lines, removed 6 lines                                      
+      347    /bound-slots
+      348  
+      349    ; Collect bytecode for each term in function body
+      350 -  ; codegen-seq-impl returns (addr' code-map' code')          
+      350 +  ; codegen-seq-impl returns (addr' code')                    
+      351    ; Pass impl functions for generator body processing
+      352 -  addr code-map [] need-enter body-nodes free-vars bound-slots
+          - max-slots 0 codegen-seq-impl codegen-term-impl codegen-seq-im
+          -pl!                                                           
+      353 -  /body-code /new-code-map /next-emit-addr                    
+      352 +  addr [] need-enter body-nodes free-vars bound-slots max-slot
+          +s 0 codegen-seq-impl codegen-term-impl codegen-seq-impl!      
+      353 +  /body-code /next-emit-addr                                  
+      354  
+      355    ; Check if last term is a tail call by looking at its node
+      356    ; If so, don't emit return (tail-call handles the return)
+     ...
+      364    ; Emit at addr
+      365    final-code addr emit-all-at! /next-addr
+      366  
+      367 -  ; Return (next-addr new-code-map func-addr)                 
+      368 -  ; func-addr is where we emitted this function's code        
+      369 -  next-addr new-code-map addr                                 
+      367 +  ; Return (next-addr code-map func-addr)                     
+      368 +  ; code-map passed through unchanged, func-addr is where we e
+          +mitted this function's code                                   
+      369 +  next-addr code-map addr                                     
+      370  } def-fn! /codegen
+      371  
+      372  ; Clean up impl and instruction/operator code bindings
+
+● Now check the isGen case - it still needs to be updated:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 12 lines
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      215      ; Process: start-array, generator body, end-array
+      216      ; Use seq-fn to process terms (shares outer's frame)
+      217      addr code [ocStartArray] concat! need-enter gen-body-nodes
+            outer-free-vars gen-bound-slots max-slots 0 seq-fn term-fn se
+           q-fn!
+      218 -    /gen-code /gen-code-map /gen-addr                         
+      218 +    /gen-code /gen-addr                                       
+      219  
+      220 -    gen-addr gen-code-map gen-code [ocEndArray] concat! need-e
+          -nter                                                          
+      220 +    gen-addr gen-code [ocEndArray] concat! need-enter         
+      221    } {
+      222    term isApply {
+      223      ; Apply - check node for tail call flag
+
+● Let me verify there are no remaining code-map references in the impl functions:
+
+● Bash(grep -n "code-map" /home/mark/Documents/projects/froth/lib/codegen.froth)
+  ⎿  76:        addr code-map new-code 1  ; now in frame (need-enter=1)
+     106:          addr code-map new-code need-enter
+     191:    ; addr and code-map unchanged (no recursive compilation)
+     … +9 lines (ctrl+o to expand)
+
+● There are still some code-map references in return statements that need fixing:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      73          } ?!
+      74          node 'slot @ /slot
+      75          [ocPopLocal slot] concat! /new-code
+      76 -        addr code-map new-code 1  ; now in frame (need-enter=1)
+      76 +        addr new-code 1  ; now in frame (need-enter=1)         
+      77        } {
+      78          ; Dead binder (is-used=1) - just discard
+      79          addr code [ocPopUnused] concat! need-enter
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      103              } { } ?!
+      104            } { } ?!
+      105            /new-code
+      106 -          addr code-map new-code need-enter                   
+      106 +          addr new-code need-enter                            
+      107          } {
+      108            ; Free variable (is-bound=1) - look up context slot
+      109            outer-free-vars term @ /slot
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      188        ctx-code2 [ocEndArray ocPushInt nested-addr ocOp opClose
+           ] concat!
+      189      } ?! /new-code
+      190  
+      191 -    ; addr and code-map unchanged (no recursive compilation)  
+      192 -    addr code-map new-code need-enter                         
+      191 +    ; addr unchanged (no recursive compilation)               
+      192 +    addr new-code need-enter                                  
+      193    } {
+      194    term isGen {
+      195      ; Generator - wrap body in start-array/end-array, share ou
+           ter frame
+
+● Let me verify all code-map references are now only in codegen:
+
+● Bash(grep -n "code-map" /home/mark/Documents/projects/froth/lib/codegen.froth)
+  ⎿ 303:; codegen: (addr code-map func-node -- next-addr new-code-map func-
+    addr)
+    307:['codegen-seq-impl 'codegen-term-impl 'concat 'emit-all-at 'ocRetur
+    … +5 lines (ctrl+o to expand)
+
+
+
+● Step 4 is complete. All code-map references are now only in the public codegen function - it's received as a parameter and passed through unchanged in the return value.
+
+  The impl functions no longer thread code-map:
+  - codegen-term-impl: (addr code need-enter node ... seq-fn term-fn -- addr' code' need-enter')
+  - codegen-seq-impl: (addr code need-enter body-nodes ... idx seq-fn term-fn -- addr' code')
+
+  The public signature remains unchanged for now:
+  - codegen: (addr code-map func-node -- next-addr new-code-map func-addr) where new-code-map equals code-map (passed through)
+
+  Summary of remaining steps:
+  - Step 5: Update signature to (addr func-node -- next-addr func-node) - remove code-map from public API, store 'func-addr in node
+  - Step 6: Use list accumulation instead of concat!
+
+> proceed with step 5 
+
+● Step 5: Update the public signature to (addr func-node -- next-addr func-node), removing code-map and storing 'func-addr in the node.
+
+● Update(lib/codegen.froth)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      300    } ?!
+      301  } def-fn! /codegen-seq-impl
+      302  
+      303 -; codegen: (addr code-map func-node -- next-addr new-code-map 
+          -func-addr)                                                    
+      303 +; codegen: (addr func-node -- next-addr func-node)            
+      304  ; Generate bytecode for a function.
+      305  ; Walks body left-to-right, collects bytecode, emits at addr.
+      306  ; func-node contains 'term (the function) and analysis data.
+      307 -['codegen-seq-impl 'codegen-term-impl 'concat 'emit-all-at 'oc
+          -Return 'foldl 'drop 'make-node] { /func-node /code-map /addr  
+      307 +; Stores 'func-addr in node before returning.                 
+      308 +['codegen-seq-impl 'codegen-term-impl 'concat 'emit-all-at 'oc
+          +Return 'foldl 'drop 'make-node] { /func-node /addr            
+      309    ; Extract the function term from the node
+      310    func-node 'term @ /func
+      311  
+
+● Now update the return value to store 'func-addr in the node:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 3 lines                                      
+      365    ; Emit at addr
+      366    final-code addr emit-all-at! /next-addr
+      367  
+      368 -  ; Return (next-addr code-map func-addr)                     
+      369 -  ; code-map passed through unchanged, func-addr is where we e
+          -mitted this function's code                                   
+      370 -  next-addr code-map addr                                     
+      368 +  ; Store func-addr in node and return (next-addr func-node)  
+      369 +  next-addr func-node addr 'func-addr :                       
+      370  } def-fn! /codegen
+      371  
+      372  ; Clean up impl and instruction/operator code bindings
+
+● Let me verify the complete codegen function looks correct:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 70 lines
+
+● Step 5 is complete. The signature is now:
+
+  codegen: (addr func-node -- next-addr func-node)
+
+  - Takes addr (next bytecode address) and func-node (analyzed function node)
+  - Returns next-addr (after emitting bytecode) and updated func-node with 'func-addr stored
+
+  This matches the target signature from FROTH_BYTECODE.md.
+
+  Summary of remaining step:
+  - Step 6: Use list accumulation instead of concat!
+
+  Should I also update the documentation (FROTH_BYTECODE.md and FROTH_COMPILER.md) to reflect the completed signature change?
+
+> proceed with step 6 
+
+● Step 6: Replace array concat! with list cons (,) for O(1) accumulation, then convert to array at the end.
+
+  The pattern change is:
+  - Start with . (nil) instead of []
+  - Replace code [a b c] concat! with code a , b , c ,
+  - At the end, reverse and convert: [ code lreverse! { } lfoldl! ]
+
+  Let me start with codegen - change the initial value and final conversion:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 5 lines, removed 5 lines                                      
+      348    /bound-slots
+      349  
+      350    ; Collect bytecode for each term in function body
+      351 -  ; codegen-seq-impl returns (addr' code')                    
+      351 +  ; codegen-seq-impl returns (addr' code') where code' is a co
+          +ns list (reversed)                                            
+      352    ; Pass impl functions for generator body processing
+      353 -  addr [] need-enter body-nodes free-vars bound-slots max-slot
+          -s 0 codegen-seq-impl codegen-term-impl codegen-seq-impl!      
+      353 +  addr . need-enter body-nodes free-vars bound-slots max-slots
+          + 0 codegen-seq-impl codegen-term-impl codegen-seq-impl!       
+      354    /body-code /next-emit-addr
+      355  
+      356    ; Check if last term is a tail call by looking at its node
+     ...
+      360      body-nodes body-nodes # 1 - @ /last-node
+      361      last-node 'is-tail-call in { last-node 'is-tail-call @ } {
+            1 } ?!
+      362    } { 1 } ?! /last-is-tail
+      363 -  last-is-tail { body-code } { body-code [ocReturn] concat! } 
+          -?! /final-code                                                
+      363 +  last-is-tail { body-code } { body-code ocReturn , } ?! /fina
+          +l-code                                                        
+      364  
+      365 -  ; Emit at addr                                              
+      366 -  final-code addr emit-all-at! /next-addr                     
+      365 +  ; Convert list to array (reverse since we built by consing) 
+      366 +  [ final-code lreverse! { } lfoldl! ] addr emit-all-at! /next
+          +-addr                                                         
+      367  
+      368    ; Store func-addr in node and return (next-addr func-node)
+      369    next-addr func-node addr 'func-addr :
+
+● Now add lreverse to the dependencies:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      305  ; Walks body left-to-right, collects bytecode, emits at addr.
+      306  ; func-node contains 'term (the function) and analysis data.
+      307  ; Stores 'func-addr in node before returning.
+      308 -['codegen-seq-impl 'codegen-term-impl 'concat 'emit-all-at 'oc
+          -Return 'foldl 'drop 'make-node] { /func-node /addr            
+      308 +['codegen-seq-impl 'codegen-term-impl 'lreverse 'emit-all-at '
+          +ocReturn 'foldl 'drop 'make-node] { /func-node /addr          
+      309    ; Extract the function term from the node
+      310    func-node 'term @ /func
+      311  
+
+● Now update codegen-term-impl - replace all concat! with list cons. Let me do this systematically by finding each pattern:
+
+● Bash(grep -n "concat!" /home/mark/Documents/projects/froth/lib/codegen.froth |
+       head -40)
+  ⎿  53:      addr code [ocPushInt val] concat! need-enter          
+     56:      addr code [ocPushString val intern] concat! need-enter
+     69:          code [ocEnterFrame max-slots] concat!
+     … +32 lines (ctrl+o to expand)
+
+● First, update the dependency list for codegen-term-impl - remove concat:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      37  ; max-slots is the number of frame slots needed (for enter-fram
+          e/leave-frame)
+      38  ; need-enter is 0 if we still need to emit enter-frame, 1 if al
+          ready emitted
+      39  ; Returns updated addr, code, and need-enter flag
+      40 -['concat 'ocPushInt 'ocPushString 'ocOp 'operator-table        
+      40 +['ocPushInt 'ocPushString 'ocOp 'operator-table                
+      41   'ocPushQuotedApply 'opIdToIdent 'opIdToBinder 'opWrap
+      42   'ocPushContext 'ocPushLocal 'ocPopLocal 'ocPopUnused
+      43   'ocEnterFrame 'ocLeaveFrame
+
+● Now update the isValue case:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      50      ; Quoted literal value - unwrap and check type
+      51      term unwrap /val
+      52      val isInt {
+      53 -      addr code [ocPushInt val] concat! need-enter             
+      53 +      addr code ocPushInt , val , need-enter                   
+      54      } {
+      55      val isString {
+      56 -      addr code [ocPushString val intern] concat! need-enter   
+      56 +      addr code ocPushString , val intern , need-enter         
+      57      } {
+      58        ; Unsupported value type
+      59        addr code need-enter
+
+● Update the binder case:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      66          ; Used binder (is-used=0) - maybe emit enter-frame, the
+          n pop-local
+      67          need-enter {
+      68            ; First binder (need-enter=0) - enter frame first
+      69 -          code [ocEnterFrame max-slots] concat!                
+      69 +          code ocEnterFrame , max-slots ,                      
+      70          } {
+      71            ; Already in frame
+      72            code
+      73          } ?!
+      74          node 'slot @ /slot
+      75 -        [ocPopLocal slot] concat! /new-code                    
+      75 +        ocPopLocal , slot , /new-code                          
+      76          addr new-code 1  ; now in frame (need-enter=1)
+      77        } {
+      78          ; Dead binder (is-used=1) - just discard
+      79 -        addr code [ocPopUnused] concat! need-enter             
+      79 +        addr code ocPopUnused , need-enter                     
+      80        } ?!
+      81      } {
+      82        ; No 'is-used key - assume dead
+      83 -      addr code [ocPopUnused] concat! need-enter               
+      83 +      addr code ocPopUnused , need-enter                       
+      84      } ?!
+      85    } {
+      86    term isIdent {
+
+● Update the identifier case:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 4 lines, removed 4 lines                                      
+       87      term isOperator {
+       88        ; Operator - emit op instruction with opcode
+       89        operator-table term @ /opcode
+       90 -      addr code [ocOp opcode] concat! need-enter              
+       90 +      addr code ocOp , opcode , need-enter                    
+       91      } {
+       92        ; Regular identifier - check if bound or free
+       93        node 'is-bound in {
+       94          node 'is-bound @ {
+       95            ; Bound variable (is-bound=0) - emit push-local
+       96            node 'slot @ /slot
+       97 -          code [ocPushLocal slot] concat!                     
+       97 +          code ocPushLocal , slot ,                           
+       98            ; Check if this is the last frame access
+       99            node 'leave-frame in {
+      100              node 'leave-frame @ {
+      101                ; Last frame access (leave-frame=0) - exit frame
+      102 -              [ocLeaveFrame max-slots] concat!                
+      102 +              ocLeaveFrame , max-slots ,                      
+      103              } { } ?!
+      104            } { } ?!
+      105            /new-code
+     ...
+      107          } {
+      108            ; Free variable (is-bound=1) - look up context slot
+      109            outer-free-vars term @ /slot
+      110 -          addr code [ocPushContext slot] concat! need-enter   
+      110 +          addr code ocPushContext , slot , need-enter         
+      111          } ?!
+      112        } {
+      113          ; No analysis data - skip
+
+● Update the quote case:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 6 lines, removed 6 lines                                      
+      121      inner isIdent {
+      122        ; 'identifier -> push-int id, op idToIdent
+      123        inner intern /id
+      124 -      addr code [ocPushInt id ocOp opIdToIdent] concat! need-e
+          -nter                                                          
+      124 +      addr code ocPushInt , id , ocOp , opIdToIdent , need-ent
+          +er                                                            
+      125      } {
+      126      inner isBinder {
+      127        ; '/binder -> push-int id, op idToBinder
+      128        inner intern /id
+      129 -      addr code [ocPushInt id ocOp opIdToBinder] concat! need-
+          -enter                                                         
+      129 +      addr code ocPushInt , id , ocOp , opIdToBinder , need-en
+          +ter                                                           
+      130      } {
+      131      inner isApply {
+      132        ; '! -> push-quoted-apply
+      133 -      addr code [ocPushQuotedApply] concat! need-enter        
+      133 +      addr code ocPushQuotedApply , need-enter                
+      134      } {
+      135      inner isValue {
+      136        ; 'value -> push value, op wrap
+      137        inner unwrap /val
+      138        val isInt {
+      139 -        addr code [ocPushInt val ocOp opWrap] concat! need-ent
+          -er                                                            
+      139 +        addr code ocPushInt , val , ocOp , opWrap , need-enter
+      140        } {
+      141        val isString {
+      142 -        addr code [ocPushString val intern ocOp opWrap] concat
+          -! need-enter                                                  
+      142 +        addr code ocPushString , val intern , ocOp , opWrap , 
+          +need-enter                                                    
+      143        } {
+      144          ; Unsupported quoted value type
+      145          addr code need-enter
+     ...
+      147      } {
+      148        ; Quoted function, generator, or nested quote - store in
+            constant pool
+      149        term ref /idx
+      150 -      addr code [ocPushInt idx ocOp opDeref] concat! need-ente
+          -r                                                             
+      150 +      addr code ocPushInt , idx , ocOp , opDeref , need-enter 
+      151      } ?! } ?! } ?! } ?!
+      152    } {
+      153    term isFunc {
+
+● Update the isFunc case:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 5 lines, removed 5 lines                                      
+      164  
+      165      nested-free-array # 0 = {
+      166        ; No captures - just push empty array and address
+      167 -      code [ocStartArray ocEndArray ocPushInt nested-addr ocOp
+          - opClose] concat!                                             
+      167 +      code ocStartArray , ocEndArray , ocPushInt , nested-addr
+          + , ocOp , opClose ,                                           
+      168      } {
+      169        ; Start building the context array
+      170 -      code [ocStartArray] concat! /ctx-code                   
+      170 +      code ocStartArray , /ctx-code                           
+      171  
+      172        ; For each captured variable (in slot order), emit push 
+           instruction
+      173        nested-free-array ctx-code {
+     ...
+      176          outer-bound-slots ident in {
+      177            ; Bound in outer - push from frame
+      178            outer-bound-slots ident @ /outer-slot
+      179 -          acc [ocPushLocal outer-slot] concat!                
+      179 +          acc ocPushLocal , outer-slot ,                      
+      180          } {
+      181            ; Free in outer - push from context
+      182            outer-free-vars ident @ /outer-slot
+      183 -          acc [ocPushContext outer-slot] concat!              
+      183 +          acc ocPushContext , outer-slot ,                    
+      184          } ?!
+      185        } reduce! /ctx-code2
+      186  
+      187        ; End array, push address, close
+      188 -      ctx-code2 [ocEndArray ocPushInt nested-addr ocOp opClose
+          -] concat!                                                     
+      188 +      ctx-code2 ocEndArray , ocPushInt , nested-addr , ocOp , 
+          +opClose ,                                                     
+      189      } ?! /new-code
+      190  
+      191      ; addr unchanged (no recursive compilation)
+
+● Update the isGen case:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      214  
+      215      ; Process: start-array, generator body, end-array
+      216      ; Use seq-fn to process terms (shares outer's frame)
+      217 -    addr code [ocStartArray] concat! need-enter gen-body-nodes
+          - outer-free-vars gen-bound-slots max-slots 0 seq-fn term-fn se
+          -q-fn!                                                         
+      217 +    addr code ocStartArray , need-enter gen-body-nodes outer-f
+          +ree-vars gen-bound-slots max-slots 0 seq-fn term-fn seq-fn!   
+      218      /gen-code /gen-addr
+      219  
+      220 -    gen-addr gen-code [ocEndArray] concat! need-enter         
+      220 +    gen-addr gen-code ocEndArray , need-enter                 
+      221    } {
+      222    term isApply {
+      223      ; Apply - check node for tail call flag
+
+● Update the isApply case:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 8 lines, removed 8 lines                                      
+      223      ; Apply - check node for tail call flag
+      224      node 'is-tail-call in { node 'is-tail-call @ } { 1 } ?! {
+      225        ; Tail call (is-tail-call=0) - emit tail-call
+      226 -      addr code [ocTailCall] concat! need-enter               
+      226 +      addr code ocTailCall , need-enter                       
+      227      } {
+      228        ; Non-tail call - handle register saves/restores
+      229        ; Check if we need to save context or return pointer
+     ...
+      233        ; Step 1: Enter frame if needed (haven't entered yet AND
+            need to save registers)
+      234        need-enter needs-save-ctx needs-save-rp 0 = or! 0 = and!
+            {
+      235          ; need-enter=0 AND (needs-save-ctx OR needs-save-rp) -
+            enter frame first
+      236 -        code [ocEnterFrame max-slots] concat! 1               
+      236 +        code ocEnterFrame , max-slots , 1                     
+      237        } {
+      238          code need-enter
+      239        } ?! /new-need-enter /code1
+     ...
+      241        ; Step 2: Save context if this is the first call needing
+            it
+      242        needs-save-ctx {
+      243          node 'ctx-save-slot @ /ctx-slot
+      244 -        code1 [ocSaveContextPtr ocPopLocal ctx-slot] concat!  
+      244 +        code1 ocSaveContextPtr , ocPopLocal , ctx-slot ,      
+      245        } { code1 } ?! /code2
+      246  
+      247        ; Step 3: Save return pointer if this is the first non-t
+           ail call
+      248        needs-save-rp {
+      249          node 'rp-save-slot @ /rp-slot
+      250 -        code2 [ocSaveReturnPtr ocPopLocal rp-slot] concat!    
+      250 +        code2 ocSaveReturnPtr , ocPopLocal , rp-slot ,        
+      251        } { code2 } ?! /code3
+      252  
+      253        ; Step 4: Emit call
+      254 -      code3 [ocCall] concat! /code4                           
+      254 +      code3 ocCall , /code4                                   
+      255  
+      256        ; Step 5: Restore context if needed
+      257        node 'restore-context in { node 'restore-context @ 0 = }
+            { 1 } ?! {
+      258          node 'ctx-save-slot @ /ctx-slot
+      259 -        code4 [ocPushLocal ctx-slot ocRestoreContextPtr] conca
+          -t!                                                            
+      259 +        code4 ocPushLocal , ctx-slot , ocRestoreContextPtr ,  
+      260        } { code4 } ?! /code5
+      261  
+      262        ; Step 6: Restore return pointer if this is the last non
+           -tail call
+      263        node 'restore-return in { node 'restore-return @ 0 = } {
+            1 } ?! {
+      264          node 'rp-save-slot @ /rp-slot
+      265 -        code5 [ocPushLocal rp-slot ocRestoreReturnPtr] concat!
+      265 +        code5 ocPushLocal , rp-slot , ocRestoreReturnPtr ,    
+      266        } { code5 } ?! /code6
+      267  
+      268        ; Step 7: Leave frame if this is the last term using the
+            frame
+      269        node 'leave-frame in { node 'leave-frame @ 0 = } { 1 } ?
+           ! {
+      270 -        code6 [ocLeaveFrame max-slots] concat!                
+      270 +        code6 ocLeaveFrame , max-slots ,                      
+      271        } { code6 } ?! /code7
+      272  
+      273        addr code7 new-need-enter
+
+● Let me verify all concat patterns have been replaced:
+
+● Bash(grep -n "concat!" /home/mark/Documents/projects/froth/lib/codegen.froth)
+  ⎿  No matches found
+
+● All concat! patterns have been replaced. Let me verify the final code looks correct:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 382 lines
+
+● Step 6 is complete. All planned codegen changes from FROTH_BYTECODE.md are now implemented.
+
+  Summary of completed refactoring
+
+  Step 1: Changed isFunc to read 'func-addr from pre-compiled nested function nodes
+
+  Step 2: Removed codegen-fn parameter (no longer needed for recursive compilation)
+
+  Step 3: Restructured to match other passes:
+  - codegen-term-impl / codegen-seq-impl naming
+  - seq-fn term-fn parameters at end
+  - Entry point wires up impl functions
+
+  Step 4: Removed code-map threading from internal functions
+
+  Step 5: Updated public signature to (addr func-node -- next-addr func-node)
+  - Stores 'func-addr in returned node
+
+  Step 6: Changed to list accumulation:
+  - Start with . (nil) instead of []
+  - Use code elem , instead of code [elem] concat!
+  - Reverse and convert at end: [ final-code lreverse! { } lfoldl! ]
+
+  The codegen now matches the structure of boundness, liveness, and slots passes, and uses O(1) list cons instead of O(n) array concat for bytecode accumulation.
+
+> Is it better to use lfoldr rather than reversing the list? 
+
+● Yes, that's a good catch. lfoldr processes tail-to-head, which effectively gives us the elements in reverse order without explicitly reversing the list first.
+
+  Current:
+  [ final-code lreverse! { } lfoldl! ]
+
+  Better:
+  [ final-code { } lfoldr! ]
+
+  Let me make that change:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      305  ; Walks body left-to-right, collects bytecode, emits at addr.
+      306  ; func-node contains 'term (the function) and analysis data.
+      307  ; Stores 'func-addr in node before returning.
+      308 -['codegen-seq-impl 'codegen-term-impl 'lreverse 'emit-all-at '
+          -ocReturn 'foldl 'drop 'make-node] { /func-node /addr          
+      308 +['codegen-seq-impl 'codegen-term-impl 'lfoldr 'emit-all-at 'oc
+          +Return 'foldl 'drop 'make-node] { /func-node /addr            
+      309    ; Extract the function term from the node
+      310    func-node 'term @ /func
+      311  
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      362    } { 1 } ?! /last-is-tail
+      363    last-is-tail { body-code } { body-code ocReturn , } ?! /fina
+           l-code
+      364  
+      365 -  ; Convert list to array (reverse since we built by consing) 
+      366 -  [ final-code lreverse! { } lfoldl! ] addr emit-all-at! /next
+          --addr                                                         
+      365 +  ; Convert list to array (lfoldr processes tail-to-head, givi
+          +ng correct order)                                             
+      366 +  [ final-code { } lfoldr! ] addr emit-all-at! /next-addr     
+      367  
+      368    ; Store func-addr in node and return (next-addr func-node)
+      369    next-addr func-node addr 'func-addr :
+
+● Done. Using lfoldr is cleaner - it processes tail-to-head via recursion, avoiding the need to build an intermediate reversed list. Both are O(n), but lfoldr does it in a single pass.
+
+> update FROTH_BYTECODE to reflect the completed changes 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 125 lines
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 1 line, removed 2 lines                                       
+      47  - `boundness: (func-node -- func-node)` — classifies variables
+      48  - `liveness: (func-node -- func-node)` — marks last references,
+           tail calls
+      49  - `slots: (func-node -- func-node)` — allocates frame slots
+      50 -- `codegen: (addr code-map func-node -- next-addr new-code-map 
+         -func-addr)` — emits bytecode (current)                         
+      51 -- `codegen: (addr func-node -- next-addr func-node)` — emits by
+         -tecode (planned)                                               
+      50 +- `codegen: (addr func-node -- next-addr func-node)` — emits by
+         +tecode, stores `'func-addr` in node                            
+      51  
+      52  ## Key Behaviors
+      53  
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 6 lines, removed 42 lines                                     
+       59  
+       60  **`'func-addr` stored in node**: After emitting bytecode, code
+           gen updates the func-node with `addr 'func-addr :`. This allow
+           s outer functions to reference the nested function's bytecode 
+           address.
+       61  
+       62 -## Planned: Codegen Changes                                   
+       62 +## Codegen Structure                                          
+       63  
+       64 -The current codegen signature is:                             
+       65 -```                                                           
+       66 -codegen: (addr code-map func-node -- next-addr new-code-map fu
+          -nc-addr)                                                      
+       67 -```                                                           
+       64 +Codegen follows the same structure as the analysis passes:    
+       65  
+       69 -The planned signature is:                                     
+       66  ```
+       67 +codegen-term-impl: (addr code need-enter node ... seq-fn term-
+          +fn -- addr' code' need-enter')                                
+       68 +codegen-seq-impl: (addr code need-enter body-nodes ... idx seq
+          +-fn term-fn -- addr' code')                                   
+       69  codegen: (addr func-node -- next-addr func-node)
+       70  ```
+       71  
+       74 -**Target structure** (matching boundness, liveness, slots):   
+       75 -```                                                           
+       76 -codegen-term-impl: (node ... seq-fn term-fn -- node' ...)     
+       77 -codegen-seq-impl: (body idx ... seq-fn term-fn -- ...)        
+       78 -codegen: (addr func-node -- next-addr func-node)              
+       79 -```                                                           
+       80 -                                                              
+       72  The `seq-fn`/`term-fn` pattern enables recursion into generato
+           rs (which share the outer frame). Nested functions don't need 
+           recursion—their `'func-addr` is already set by `compile-func`.
+       73  
+       83 -**Implementation steps:**                                     
+       74 +**Bytecode accumulation**: Code is accumulated as a cons list 
+          +using `,` for O(1) append. The list is converted to an array u
+          +sing `lfoldr` before emitting with `emit-all-at!`.            
+       75  
+       85 -1. **Change isFunc to read `'func-addr`**                     
+       86 -   - Read `node 'func-addr @` instead of recursive `codegen-fn
+          -` call                                                        
+       87 -   - Keep context array building code (emit push instructions 
+          -for captured vars)                                            
+       88 -   - This makes `codegen-fn` unused, enabling step 2          
+       89 -                                                              
+       90 -2. **Remove `codegen-fn` parameter**                          
+       91 -   - Remove from `codegen-term`, `codegen-seq`, `codegen-impl`
+       92 -   - Now safe since nothing uses it                           
+       93 -                                                              
+       94 -3. **Restructure to match other passes**                      
+       95 -   - Rename to `codegen-term-impl` and `codegen-seq-impl`     
+       96 -   - Move `seq-fn term-fn` to end of parameter lists          
+       97 -   - Update `codegen` entry point to wire up impl functions   
+       98 -                                                              
+       99 -4. **Remove code-map threading**                              
+      100 -   - No longer modified (was only for nested function compilat
+          -ion)                                                          
+      101 -   - Remove from internal function signatures                 
+      102 -                                                              
+      103 -5. **Update signature and return value**                      
+      104 -   - Change to `(addr func-node -- next-addr func-node)`      
+      105 -   - Store `'func-addr` in node before returning              
+      106 -                                                              
+      107 -6. **Use list accumulation**                                  
+      108 -   - Replace `concat!` with list cons (`,`)                   
+      109 -   - Convert to array when emitting with `emit-all-at!`       
+      110 -                                                              
+      111 -**Nested function codegen** (after changes):                  
+       76 +**Nested function codegen**: For nested function terms, codege
+          +n emits code to build the closure at runtime:                 
+       77  ```
+      113 -; For a nested function term, emit:                           
+       78  ; 1. start-array
+       79  ; 2. For each captured var in free-vars-array:
+       80  ;    - push-local (if bound in outer) or push-context (if free
+            in outer)
+
+● Now let me also update FROTH_COMPILER.md with the new codegen signature:
+
+● Search(pattern: "codegen.*addr code-map", path: "FROTH_COMPILER.md",
+        output_mode: "content")
+  ⎿  Found 1 line (ctrl+o to expand)
+
+● Read(FROTH_COMPILER.md)
+  ⎿  Read 45 lines
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 8 lines, removed 7 lines                                      
+      291  
+      292  | Name | Stack Effect | Description |
+      293  |------|--------------|-------------|
+      294 -| `codegen` | `(addr code-map func-node -- next-addr new-code-
+          -map func-addr)` | Generate bytecode for a function |          
+      294 +| `codegen` | `(addr func-node -- next-addr func-node)` | Gene
+          +rate bytecode for a function |                                
+      295  
+      296 -Takes a function node containing the term and analysis data, g
+          -enerates bytecode at `addr`, and returns the next available ad
+          -dress, updated code-map, and the function's entry point.      
+      296 +Takes a function node containing the term and analysis data, g
+          +enerates bytecode at `addr`, and returns the next available ad
+          +dress and the updated func-node with `'func-addr` stored.     
+      297  
+      298  - `addr`: Next available bytecode address
+      299 -- `code-map`: Tree23 from function ref IDs to bytecode address
+          -es (for deduplication)                                        
+      299  - `func-node`: Node containing `'term` (quoted function) and a
+           nalysis results from boundness/liveness/slots
+      300  - `next-addr`: Next available address after code is emitted
+      302 -- `new-code-map`: Updated with this function (and nested funct
+          -ions when supported)                                          
+      303 -- `func-addr`: This function's bytecode entry point           
+      301 +- `func-node` (returned): Updated with `'func-addr` set to thi
+          +s function's bytecode entry point                             
+      302  
+      303  Supports:
+      304  - Integer and string literals (`push-int`, `push-string`)
+     ...
+      309  - Quoted identifiers, binders, apply, and values
+      310  - Tail calls (`tail-call` instead of `return`)
+      311  - Non-tail calls (`call` with register save/restore)
+      312 +- Nested functions (reads `'func-addr` from pre-compiled nodes
+          +)                                                             
+      313 +- Generators (recurses into body, shares outer frame)         
+      314  
+      315  ```
+      316  ; Compile a simple function
+      317  tree-empty! 0 '{ 1 2 3 } compile-func! /node /addr /code-map
+      318 -addr code-map node codegen! /func-addr /new-code-map /next-add
+          -r                                                             
+      318 +addr node codegen! /node /next-addr                           
+      319 +node 'func-addr @              ; bytecode entry point         
+      320  ; Emits: push-int 1 push-int 2 push-int 3 return
+      321  
+      322  ; Compile with bound variables
+      323  tree-empty! 0 '{ /x x } compile-func! /node /addr /code-map
+      323 -addr code-map node codegen! /func-addr /new-code-map /next-add
+          -r                                                             
+      324 +addr node codegen! /node /next-addr                           
+      325  ; Emits: enter-frame 1 pop-local 0 push-local 0 leave-frame 1 
+           return
+      326  ```
+      327  
+
+● Let me also check the Quick Reference table at the top:
+
+● Search(pattern: "codegen.*Generate", path: "FROTH_COMPILER.md", output_mode:
+        "content")
+  ⎿  Found 2 lines (ctrl+o to expand)
+
+● Both FROTH_BYTECODE.md and FROTH_COMPILER.md are now updated to reflect the completed codegen changes:
+
+  FROTH_BYTECODE.md:
+  - Updated Pass Signatures with new codegen signature
+  - Replaced "Planned: Codegen Changes" section with "Codegen Structure" documenting the current implementation
+  - Documents the seq-fn/term-fn pattern and list accumulation with lfoldr
+
+  FROTH_COMPILER.md:
+  - Updated codegen signature to (addr func-node -- next-addr func-node)
+  - Updated parameter/return documentation
+  - Added nested functions and generators to supported features
+  - Fixed examples to use new signature
+
+> delete the codegen structure section, as we no longer need it 
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Removed 24 lines                                                    
+      59  
+      60  **`'func-addr` stored in node**: After emitting bytecode, codeg
+          en updates the func-node with `addr 'func-addr :`. This allows 
+          outer functions to reference the nested function's bytecode add
+          ress.
+      61  
+      62 -## Codegen Structure                                           
+      63 -                                                               
+      64 -Codegen follows the same structure as the analysis passes:     
+      65 -                                                               
+      66 -```                                                            
+      67 -codegen-term-impl: (addr code need-enter node ... seq-fn term-f
+         -n -- addr' code' need-enter')                                  
+      68 -codegen-seq-impl: (addr code need-enter body-nodes ... idx seq-
+         -fn term-fn -- addr' code')                                     
+      69 -codegen: (addr func-node -- next-addr func-node)               
+      70 -```                                                            
+      71 -                                                               
+      72 -The `seq-fn`/`term-fn` pattern enables recursion into generator
+         -s (which share the outer frame). Nested functions don't need re
+         -cursion—their `'func-addr` is already set by `compile-func`.   
+      73 -                                                               
+      74 -**Bytecode accumulation**: Code is accumulated as a cons list u
+         -sing `,` for O(1) append. The list is converted to an array usi
+         -ng `lfoldr` before emitting with `emit-all-at!`.               
+      75 -                                                               
+      76 -**Nested function codegen**: For nested function terms, codegen
+         - emits code to build the closure at runtime:                   
+      77 -```                                                            
+      78 -; 1. start-array                                               
+      79 -; 2. For each captured var in free-vars-array:                 
+      80 -;    - push-local (if bound in outer) or push-context (if free 
+         -in outer)                                                      
+      81 -; 3. end-array                                                 
+      82 -; 4. push-int (node 'func-addr @)                              
+      83 -; 5. op close                                                  
+      84 -```                                                            
+      85 -                                                               
+      62  ## Limitations
+      63  
+      64  Compilation can fail for functions using dynamic constructs (`e
+          nv`, `import`, `applyOperator`) that prevent static analysis.
+      65   No newline at end of file
+
+● Done. The "Codegen Structure" section has been removed from FROTH_BYTECODE.md.
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 182k/200k tokens (91%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 18.3k tokens (9.2%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 101.3k tokens (50.7%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛶   ⛶ Free space: 18k (8.8%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 127 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.6k tokens
+     └ FROTH_COMPILER.md: 4.9k tokens
+     └ FROTH_BYTECODE.md: 1.5k tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+

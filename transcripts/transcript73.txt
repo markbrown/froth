@@ -1,0 +1,1272 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+  ⎿  Read FROTH_COMPILER.md (361 lines)
+  ⎿  Read lib/compile.froth (70 lines)
+  ⎿  Read lib/slots.froth (188 lines)
+  ⎿  Read lib/liveness.froth (150 lines)
+  ⎿  Read lib/boundness.froth (127 lines)
+
+● Let me read the current state of FROTH_COMPILER.md to see what still needs updating:
+
+● Read(FROTH_COMPILER.md)
+  ⎿  Read 361 lines
+
+● The document looks mostly up-to-date. The Boundness, Liveness, and Slots sections already have the correct (func-node -- func-node) signatures. However, the code examples in the Slots section and Codegen section still show the old direct calling convention. Let me update them to reflect that compile-func is now the primary entry point:
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 16 lines, removed 14 lines                                    
+      263  Slots are allocated on-demand and reused when freed. Binder sl
+           ots are freed at the variable's last use. Register save slots 
+           are allocated once at the first call that needs them and reuse
+           d by subsequent calls. Closures get their own frame (slots sta
+           rt at 0), while generators share the outer frame.
+      264  
+      265  ```
+      266 -'{/x x} boundness! liveness! slots! /map                      
+      267 -map 'max-slots @               ; 1 - one slot needed          
+      268 -map 'body @ 0 @ 'slot @        ; 0 - binder gets slot 0       
+      269 -map 'body @ 1 @ 'slot @        ; 0 - reference uses slot 0    
+      266 +tree-empty! 0 '{/x x} compile-func! /node /addr /code-map     
+      267 +node 'max-slots @               ; 1 - one slot needed         
+      268 +node 'body @ 0 @ 'slot @        ; 0 - binder gets slot 0      
+      269 +node 'body @ 1 @ 'slot @        ; 0 - reference uses slot 0   
+      270  
+      271 -'{/x x /y y} boundness! liveness! slots! /map                 
+      272 -map 'max-slots @               ; 1 - slot 0 reused for y      
+      271 +tree-empty! 0 '{/x x /y y} compile-func! /node /addr /code-map
+      272 +node 'max-slots @               ; 1 - slot 0 reused for y     
+      273  
+      274 -'{/x {/y y} x} boundness! liveness! slots! /map               
+      275 -map 'max-slots @               ; 1 - outer needs 1 slot       
+      276 -map 'body @ 1 @ 'max-slots @   ; 1 - closure needs 1 slot     
+      274 +tree-empty! 0 '{/x {/y y} x} compile-func! /node /addr /code-m
+          +ap                                                            
+      275 +node 'max-slots @               ; 1 - outer needs 1 slot      
+      276 +node 'body @ 1 @ 'max-slots @   ; 1 - closure needs 1 slot    
+      277  
+      278 -'{/x /y [/z z] y x} boundness! liveness! slots! /map          
+      279 -map 'max-slots @               ; 3 - generator uses slot 2 for
+          - z                                                            
+      278 +tree-empty! 0 '{/x /y [/z z] y x} compile-func! /node /addr /c
+          +ode-map                                                       
+      279 +node 'max-slots @               ; 3 - generator uses slot 2 fo
+          +r z                                                           
+      280  
+      281 -'{/x x x * f! 1 +} boundness! liveness! slots! /map           
+      282 -map 'max-slots @               ; 1 - slot 0 reused for RP save
+      283 -map 'body @ 5 @ 'rp-save-slot @ ; 0 - apply saves RP to slot 0
+      281 +tree-empty! 0 '{/x x x * f! 1 +} compile-func! /node /addr /co
+          +de-map                                                        
+      282 +node 'max-slots @               ; 1 - slot 0 reused for RP sav
+          +e                                                             
+      283 +node 'body @ 5 @ 'rp-save-slot @ ; 0 - apply saves RP to slot 
+          +0                                                             
+      284  ```
+      285  
+      286 +When called via `compile-func`, the passes compose automatical
+          +ly.                                                           
+      287 +                                                              
+      288  ## Compile (compile.froth)
+      289  
+      290  Compiler orchestration. Builds the node tree and runs all anal
+           ysis passes.
+
+● Now let me update the Codegen section to show the correct calling convention:
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 6 lines, removed 9 lines                                      
+      347  - Non-tail calls (`call` with register save/restore)
+      348  
+      349  ```
+      350 -; Simple literals (no analysis needed)                        
+      351 -0 tree-empty! '{ 1 2 3 } make-node! codegen!                  
+      352 -/func-addr /code-map /next-addr                               
+      350 +; Compile a simple function                                   
+      351 +tree-empty! 0 '{ 1 2 3 } compile-func! /node /addr /code-map  
+      352 +addr code-map node codegen! /func-addr /new-code-map /next-add
+          +r                                                             
+      353  ; Emits: push-int 1 push-int 2 push-int 3 return
+      354  
+      355 -; With bound variables (needs full analysis)                  
+      356 -'{ /x x } boundness! liveness! slots! /node                   
+      357 -next-addr tree-empty! node codegen!                           
+      358 -/func-addr2 /code-map2 /next-addr2                            
+      355 +; Compile with bound variables                                
+      356 +tree-empty! 0 '{ /x x } compile-func! /node /addr /code-map   
+      357 +addr code-map node codegen! /func-addr /new-code-map /next-add
+          +r                                                             
+      358  ; Emits: enter-frame 1 pop-local 0 push-local 0 leave-frame 1 
+           return
+      359  ```
+      361 -                                                              
+      362 -The full pipeline: `0 tree-empty! func boundness! liveness! sl
+          -ots! codegen!`                                                
+
+● The documentation update is now complete. I've:
+
+  1. Updated the Slots section examples to use compile-func instead of the old direct calling convention ('{/x x} boundness! liveness! slots!)
+  2. Updated the Codegen section examples to show the correct two-step flow:
+    - First: tree-empty! 0 func compile-func! to build nodes and run analysis passes
+    - Then: addr code-map node codegen! to generate bytecode
+
+  The documentation now accurately reflects the current implementation where:
+  - compile-func is the primary entry point that builds the node tree and runs all analysis passes (boundness, liveness, slots)
+  - Analysis passes take func-node and return updated func-node
+  - Nested functions are compiled bottom-up before the outer function
+  - codegen takes the fully analyzed node and generates bytecode
+
+> Put compile after codegen rather than in the middle of the other passes. 
+
+● Read(FROTH_COMPILER.md)
+  ⎿  Read 360 lines
+
+● I'll move the Compile section to after Codegen:
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Removed 34 lines                                                    
+      285  
+      286  When called via `compile-func`, the passes compose automatical
+           ly.
+      287  
+      288 -## Compile (compile.froth)                                    
+      289 -                                                              
+      290 -Compiler orchestration. Builds the node tree and runs all anal
+          -ysis passes.                                                  
+      291 -                                                              
+      292 -| Name | Stack Effect | Description |                         
+      293 -|------|--------------|-------------|                         
+      294 -| `compile-func` | `( code-map addr func -- code-map addr func
+          --node )` | Compile a function |                               
+      295 -                                                              
+      296 -Takes a quoted function and returns a fully analyzed function-
+          -node. Recursively compiles nested functions before the outer f
+          -unction, so each function's analysis can assume nested functio
+          -ns are already complete.                                      
+      297 -                                                              
+      298 -- `code-map`: Tree23 for deduplication (maps function ref IDs 
+          -to analyzed nodes)                                            
+      299 -- `addr`: Next available bytecode address (threaded through fo
+          -r future codegen)                                             
+      300 -- `func`: Quoted function to compile                          
+      301 -- `func-node`: Fully analyzed node with boundness, liveness, a
+          -nd slots info                                                 
+      302 -                                                              
+      303 -The compilation pipeline for each function:                   
+      304 -1. Build node tree (creates nodes for each term, recurses into
+          - nested functions)                                            
+      305 -2. Run `boundness` (classify variables as bound/free, assign c
+          -ontext slots)                                                 
+      306 -3. Run `liveness` (mark last references, tail calls, register 
+          -save/restore points)                                          
+      307 -4. Run `slots` (allocate frame slots with reuse)              
+      308 -                                                              
+      309 -Nested functions are compiled bottom-up: when processing a nes
+          -ted function term, `compile-func` recursively compiles it befo
+          -re continuing with the outer function. This means the analysis
+          - passes don't need to recurse into nested functions - they jus
+          -t read the already-computed results.                          
+      310 -                                                              
+      311 -```                                                           
+      312 -tree-empty! 0 '{ /x x } compile-func! /node /addr /code-map   
+      313 -node 'max-slots @              ; 1                            
+      314 -node 'body @ 0 @ 'slot @       ; 0 (binder slot)              
+      315 -node 'body @ 1 @ 'slot @       ; 0 (reference slot)           
+      316 -                                                              
+      317 -; Nested functions are compiled first                         
+      318 -tree-empty! 0 '{ /x { x } } compile-func! /node /addr /code-ma
+          -p                                                             
+      319 -node 'body @ 1 @ 'free-vars-map @  ; $ 0 'x : (nested func cap
+          -tured x)                                                      
+      320 -```                                                           
+      321 -                                                              
+      288  ## Codegen (codegen.froth)
+      289  
+      290  Bytecode generation for the compiler.
+
+● Now I'll add the Compile section at the end:
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 34 lines                                                      
+      323  addr code-map node codegen! /func-addr /new-code-map /next-add
+           r
+      324  ; Emits: enter-frame 1 pop-local 0 push-local 0 leave-frame 1 
+           return
+      325  ```
+      326 +                                                              
+      327 +## Compile (compile.froth)                                    
+      328 +                                                              
+      329 +Compiler orchestration. Builds the node tree and runs all anal
+          +ysis passes.                                                  
+      330 +                                                              
+      331 +| Name | Stack Effect | Description |                         
+      332 +|------|--------------|-------------|                         
+      333 +| `compile-func` | `( code-map addr func -- code-map addr func
+          +-node )` | Compile a function |                               
+      334 +                                                              
+      335 +Takes a quoted function and returns a fully analyzed function-
+          +node. Recursively compiles nested functions before the outer f
+          +unction, so each function's analysis can assume nested functio
+          +ns are already complete.                                      
+      336 +                                                              
+      337 +- `code-map`: Tree23 for deduplication (maps function ref IDs 
+          +to analyzed nodes)                                            
+      338 +- `addr`: Next available bytecode address (threaded through fo
+          +r future codegen)                                             
+      339 +- `func`: Quoted function to compile                          
+      340 +- `func-node`: Fully analyzed node with boundness, liveness, a
+          +nd slots info                                                 
+      341 +                                                              
+      342 +The compilation pipeline for each function:                   
+      343 +1. Build node tree (creates nodes for each term, recurses into
+          + nested functions)                                            
+      344 +2. Run `boundness` (classify variables as bound/free, assign c
+          +ontext slots)                                                 
+      345 +3. Run `liveness` (mark last references, tail calls, register 
+          +save/restore points)                                          
+      346 +4. Run `slots` (allocate frame slots with reuse)              
+      347 +                                                              
+      348 +Nested functions are compiled bottom-up: when processing a nes
+          +ted function term, `compile-func` recursively compiles it befo
+          +re continuing with the outer function. This means the analysis
+          + passes don't need to recurse into nested functions - they jus
+          +t read the already-computed results.                          
+      349 +                                                              
+      350 +```                                                           
+      351 +tree-empty! 0 '{ /x x } compile-func! /node /addr /code-map   
+      352 +node 'max-slots @              ; 1                            
+      353 +node 'body @ 0 @ 'slot @       ; 0 (binder slot)              
+      354 +node 'body @ 1 @ 'slot @       ; 0 (reference slot)           
+      355 +                                                              
+      356 +; Nested functions are compiled first                         
+      357 +tree-empty! 0 '{ /x { x } } compile-func! /node /addr /code-ma
+          +p                                                             
+      358 +node 'body @ 1 @ 'free-vars-map @  ; $ 0 'x : (nested func cap
+          +tured x)                                                      
+      359 +```                                                           
+
+● Done. The document now has the Compile section at the end, after Codegen. The order is now:
+
+  1. Bytecode
+  2. Ops
+  3. Preflight
+  4. Node
+  5. Boundness
+  6. Liveness
+  7. Slots
+  8. Codegen
+  9. Compile
+
+  This keeps all the individual passes together and puts the orchestration layer at the end.
+
+> Let's look at codegen. This is a much more significant change than the 
+other passes, so we will need to plan carefully. 
+
+● Read(lib/codegen.froth)
+  ⎿  Read 398 lines
+
+● Looking at codegen, here are the key observations:
+
+  Current Structure:
+  - codegen-term: Generates bytecode for a single term (lines 31-279)
+  - codegen-seq: Iterates through body nodes, calling codegen-term (lines 281-308)
+  - codegen-impl/codegen: Entry point, extracts analysis info and calls codegen-seq (lines 310-386)
+
+  Key Issues:
+
+  1. Signature: Current is (addr code-map func-node -- next-addr new-code-map func-addr). The func-addr is returned separately rather than stored in the node.
+  2. Nested function handling (lines 154-192): Currently recursively calls codegen-fn to compile nested functions. With bottom-up compilation, nested func-nodes should already have their func-addr set.
+  3. Uses concat! everywhere: O(n²) array building. Should switch to list accumulation.
+  4. Threading code-map: Currently threads code-map through all functions for nested compilation. If nested functions are already compiled, we might not need to modify code-map at all.
+
+  Proposed Changes:
+
+  1. Store func-addr in node: After generating bytecode, update the func-node with addr 'func-addr : before returning
+  2. Don't recurse into nested functions: For isFunc terms, just read node 'func-addr @ from the already-compiled nested func-node
+  3. New signature: (code-map addr func-node -- code-map addr func-node) to match the threading pattern
+  4. Switch to list accumulation: Build code as a list, convert to array when emitting
+  5. Simplify code-map: May just pass it through unchanged since nested functions are pre-compiled
+
+  The nested function case (lines 154-192) becomes much simpler: instead of recursively compiling, just emit code that builds the context array and uses the pre-computed node 'func-addr @.
+
+  Does this match your thinking? Which aspect would you like to tackle first?
+
+> Let's update FROTH_BYTECODE. We can remove the planned functions now as 
+that information is out of date. Instead, document the behaviour we have 
+decided on for codegen 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 93 lines
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 18 lines, removed 45 lines                                    
+       6  
+       7  ## Compiler Pipeline
+       8  
+       9 -1. **Preflight**: Checks for unsupported constructs (`env`, `im
+         -port`, `applyOperator`)                                        
+       9 +The `compile-func` function orchestrates bottom-up compilation:
+      10 +                                                               
+      11 +1. Build node tree (recurses into nested functions first)      
+      12  2. **Boundness**: Classifies identifiers as bound or free, assi
+          gns context slots
+      13  3. **Liveness**: Marks last references, dead binders, register 
+          save/restore points
+      14  4. **Slots**: Allocates frame slots with reuse
+      13 -5. **Codegen**: Emits bytecode                                 
+      15 +5. **Codegen**: Emits bytecode, stores `'func-addr` in node    
+      16  
+      15 -See FROTH_COMPILER.md for analysis pass documentation and bytec
+         -ode helpers.                                                   
+      17 +Nested functions are compiled before their containing function.
+         + This means each pass operates on a function where nested func-
+         +nodes are already complete.                                    
+      18  
+      19 +See FROTH_COMPILER.md for detailed pass documentation.         
+      20 +                                                               
+      21  ## Node Structure
+      22  
+      23  Nodes are the single source of truth for a function and its met
+          adata. Each node contains:
+     ...
+      41  
+      42  **Other nodes** (literal, identifier, binder, quote, apply) con
+          tain type-specific analysis keys as documented in FROTH_COMPILE
+          R.md.
+      43  
+      40 -A `make-node` function creates the appropriate node type based 
+         -on the term.                                                   
+      44 +## Pass Signatures                                             
+      45  
+      42 -## Current Implementation                                      
+      46 +All passes use consistent threading: `(code-map addr node -- co
+         +de-map addr node)`                                             
+      47  
+      44 -The compiler pipeline chains the individual passes:            
+      45 -                                                               
+      46 -```                                                            
+      47 -func boundness! liveness! slots! /func-node                    
+      48 -0 tree-empty! func-node codegen! /func-addr /code-map /next-add
+         -r                                                              
+      49 -```                                                            
+      50 -                                                               
+      51 -**Pass signatures:**                                           
+      52 -- `boundness: (func -- func-node)` — builds node tree, classifi
+         -es variables                                                   
+      48 +- `compile-func: (code-map addr func -- code-map addr func-node
+         +)` — orchestrates compilation                                  
+      49 +- `boundness: (func-node -- func-node)` — classifies variables 
+      50  - `liveness: (func-node -- func-node)` — marks last references,
+           tail calls
+      51  - `slots: (func-node -- func-node)` — allocates frame slots
+      55 -- `codegen: (addr code-map func-node -- next-addr new-code-map 
+         -func-addr)` — emits bytecode                                   
+      52 +- `codegen: (code-map addr func-node -- code-map addr func-node
+         +)` — emits bytecode                                            
+      53  
+      57 -**Key behaviors:**                                             
+      58 -- Passes recurse into generators (which share the outer frame) 
+      59 -- Passes do NOT recurse into nested functions—they read `'free-
+         -vars-map` from the already-analyzed nested func-node           
+      60 -- Codegen handles nested functions by recursively compiling the
+         -m and building context arrays                                  
+      54 +## Key Behaviors                                               
+      55  
+      62 -## Planned: Higher-Level Compilation API                       
+      56 +**Bottom-up compilation**: When `compile-func` encounters a nes
+         +ted function term, it recursively compiles the nested function 
+         +first. The resulting func-node (with `'func-addr` already set) 
+         +replaces the original term in the outer function's body.       
+      57  
+      64 -The following functions are planned but not yet implemented:   
+      58 +**Passes don't recurse into nested functions**: The analysis pa
+         +sses (boundness, liveness, slots) and codegen read data from al
+         +ready-complete nested func-nodes rather than recursing into the
+         +m. They do recurse into generators, which share the outer frame
+         +.                                                              
+      59  
+      66 -### compile-func (planned)                                     
+      60 +**Codegen reads `'func-addr` from nested nodes**: For nested fu
+         +nction terms, codegen emits code to build the context array and
+         + create a closure using the pre-computed `node 'func-addr @`. I
+         +t does not recursively compile.                                
+      61  
+      68 -```                                                            
+      69 -compile-func (addr code-map func -- next-addr new-code-map func
+         --node)                                                         
+      70 -```                                                            
+      62 +**`'func-addr` stored in node**: After emitting bytecode, codeg
+         +en updates the func-node with `addr 'func-addr :`. This allows 
+         +outer functions to reference the nested function's bytecode add
+         +ress.                                                          
+      63  
+      72 -Would combine preflight checking, pass chaining, and caching in
+         -to a single function that:                                     
+      73 -1. Checks `code-map` for existing entry (deduplication)        
+      74 -2. Runs `preflight` to check for dynamic constructs            
+      75 -3. Chains the passes: `func boundness! liveness! slots!`       
+      76 -4. Runs codegen: `addr code-map func-node codegen!`            
+      77 -5. Caches the result in `code-map`                             
+      78 -                                                               
+      79 -### compile (planned)                                          
+      80 -                                                               
+      81 -```                                                            
+      82 -compile (addr code-map closureval -- next-addr new-code-map byt
+         -ecodeval)                                                      
+      83 -```                                                            
+      84 -                                                               
+      85 -Would compile a closureval to a bytecodeval by:                
+      86 -1. Opening the closureval to get environment and function body 
+      87 -2. Calling `compile-func` on the function body                 
+      88 -3. Building a context array from the environment using `'free-v
+         -ars-map`                                                       
+      89 -4. Creating a bytecodeval with `close`                         
+      90 -                                                               
+      64  ## Limitations
+      65  
+      93 -Compilation runs `preflight` and can fail for closurevals using
+         - dynamic constructs (`env`, `import`, `applyOperator`). Failed 
+         -compilations leave the environment unchanged.                  
+      66   No newline at end of file
+      67 +Compilation can fail for functions using dynamic constructs (`e
+         +nv`, `import`, `applyOperator`) that prevent static analysis.  
+      68   No newline at end of file
+
+● Done. Updated FROTH_BYTECODE.md to:
+
+  1. Removed the "Planned" sections - compile-func is now implemented, and the outdated planned API is gone
+  2. Updated pipeline description - Shows compile-func as the orchestrator with bottom-up compilation
+  3. Updated pass signatures - Documents the consistent threading pattern:
+    - codegen: (code-map addr func-node -- code-map addr func-node) — stores 'func-addr in node
+  4. Added "Key Behaviors" section documenting:
+    - Bottom-up compilation (nested functions compiled first)
+    - Passes don't recurse into nested functions
+    - Codegen reads 'func-addr from already-compiled nested nodes
+    - 'func-addr stored in the node after bytecode emission
+
+> Let's add a section for the planned version of codegen. I think the 
+signature we want is `(addr func-node -- next-addr updated-func-node)`, is 
+that correct? 
+
+● Yes, that's cleaner. Since nested functions are already compiled by compile-func (their nodes already have 'func-addr), codegen doesn't need to thread code-map for deduplication. It just needs:
+  - addr: Where to emit bytecode
+  - func-node: Analyzed node (nested func-nodes already have 'func-addr)
+  - Returns next-addr and the updated node with 'func-addr set
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 35 lines                                                      
+       61  
+       62  **`'func-addr` stored in node**: After emitting bytecode, code
+           gen updates the func-node with `addr 'func-addr :`. This allow
+           s outer functions to reference the nested function's bytecode 
+           address.
+       63  
+       64 +## Planned: Codegen Changes                                   
+       65 +                                                              
+       66 +The current codegen signature is:                             
+       67 +```                                                           
+       68 +codegen: (addr code-map func-node -- next-addr new-code-map fu
+          +nc-addr)                                                      
+       69 +```                                                           
+       70 +                                                              
+       71 +The planned signature is:                                     
+       72 +```                                                           
+       73 +codegen: (addr func-node -- next-addr func-node)              
+       74 +```                                                           
+       75 +                                                              
+       76 +**Changes required:**                                         
+       77 +                                                              
+       78 +1. **Remove code-map parameter**: Since nested functions are a
+          +lready compiled by `compile-func`, codegen doesn't need to tra
+          +ck or update the code-map. It just reads `'func-addr` from nes
+          +ted func-nodes.                                               
+       79 +                                                              
+       80 +2. **Store `'func-addr` in node**: Instead of returning `func-
+          +addr` separately, update the node with `addr 'func-addr :` at 
+          +the start and return the updated node.                        
+       81 +                                                              
+       82 +3. **Don't recurse into nested functions**: For `isFunc` terms
+          +, read `node 'func-addr @` and emit code to build the context 
+          +array and closure. No recursive compilation.                  
+       83 +                                                              
+       84 +4. **Use list accumulation**: Replace `concat!` with list cons
+          + (`,`) for O(n) instead of O(n²) code building. Convert to arr
+          +ay when emitting.                                             
+       85 +                                                              
+       86 +5. **Still recurse into generators**: Generators share the out
+          +er frame and must be processed inline.                        
+       87 +                                                              
+       88 +**Nested function codegen** (simplified):                     
+       89 +```                                                           
+       90 +; For a nested function term, emit:                           
+       91 +; 1. start-array                                              
+       92 +; 2. For each captured var in free-vars-array:                
+       93 +;    - push-local (if bound in outer) or push-context (if free
+          + in outer)                                                    
+       94 +; 3. end-array                                                
+       95 +; 4. push-int (node 'func-addr @)                             
+       96 +; 5. op close                                                 
+       97 +```                                                           
+       98 +                                                              
+       99  ## Limitations
+      100  
+      101  Compilation can fail for functions using dynamic constructs (`
+           env`, `import`, `applyOperator`) that prevent static analysis.
+      102   No newline at end of file
+
+● I should also fix the Pass Signatures section to show the current signature accurately:
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 2 lines, removed 3 lines                                      
+      43  
+      44  ## Pass Signatures
+      45  
+      46 -All passes use consistent threading: `(code-map addr node -- co
+         -de-map addr node)`                                             
+      47 -                                                               
+      46  - `compile-func: (code-map addr func -- code-map addr func-node
+          )` — orchestrates compilation
+      47  - `boundness: (func-node -- func-node)` — classifies variables
+      48  - `liveness: (func-node -- func-node)` — marks last references,
+           tail calls
+      49  - `slots: (func-node -- func-node)` — allocates frame slots
+      52 -- `codegen: (code-map addr func-node -- code-map addr func-node
+         -)` — emits bytecode                                            
+      50 +- `codegen: (addr code-map func-node -- next-addr new-code-map 
+         +func-addr)` — emits bytecode (current)                         
+      51 +- `codegen: (addr func-node -- next-addr func-node)` — emits by
+         +tecode (planned)                                               
+      52  
+      53  ## Key Behaviors
+      54  
+
+● Done. The Pass Signatures section now shows both the current and planned codegen signatures, and the "Planned: Codegen Changes" section documents the required changes:
+
+  1. Remove code-map parameter
+  2. Store 'func-addr in node
+  3. Don't recurse into nested functions (read 'func-addr instead)
+  4. Use list accumulation instead of concat!
+  5. Still recurse into generators
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 138k/200k tokens (69%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛶ ⛶ ⛶   ⛁ Memory files: 17.5k tokens (8.8%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Messages: 57.3k tokens (28.6%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 62k (31.2%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 127 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.6k tokens
+     └ FROTH_COMPILER.md: 4.6k tokens
+     └ FROTH_BYTECODE.md: 992 tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> The changes to codegen will be complex. Think hard about the best way to 
+make the changes step-by-step, and tell me your plan. 
+
+● Let me think through this carefully. The current codegen has several interrelated pieces:
+
+  Current structure:
+  - codegen-term: Takes 10 parameters including codegen-fn for recursive compilation
+  - codegen-seq: Iterates body nodes, passes codegen-fn through
+  - codegen-impl: Uses Y-combinator pattern, passes self as codegen-fn
+  - codegen: Public wrapper
+
+  Key insight: The codegen-fn parameter is only used for the isFunc case (line 159) to recursively compile nested functions. Once we stop recursing, we don't need it at all.
+
+  Proposed step-by-step plan:
+
+  Step 1: Change isFunc to read func-addr instead of recursing
+  - Modify lines 154-192 in codegen-term
+  - Replace codegen-fn addr code-map node codegen-fn! with just reading node 'func-addr @
+  - Keep the context array building code (lines 164-190) mostly unchanged
+  - Pass code-map through unchanged for now
+
+  Step 2: Remove codegen-fn parameter
+  - Remove codegen-fn from codegen-term's parameter list
+  - Update codegen-seq to not pass it
+  - Simplify codegen-impl (no longer needs the Y-combinator self pattern)
+
+  Step 3: Remove code-map threading
+  - Remove code-map from codegen-term signature
+  - Remove from codegen-seq signature
+  - Change codegen signature from (addr code-map func-node ...) to (addr func-node ...)
+
+  Step 4: Return func-node with func-addr
+  - At start of codegen, store address: func-node addr 'func-addr :
+  - Return (next-addr func-node) instead of (next-addr new-code-map func-addr)
+
+  Step 5: Update compile-func
+  - Adjust how it calls codegen with new signature
+  - Thread the updated func-node through
+
+  Step 6 (optional, later): List accumulation
+  - Replace concat! with list cons
+  - Convert to array when emitting
+
+  Each step is relatively contained. Steps 1-2 can likely be done together. Steps 3-4 form a natural unit. Does this approach make sense?
+
+> Let's clarify the recursion, since we still need to recurse into nested 
+generators. It should follow a pattern very similar to the other left-right 
+passes (boundness, slots). Does that make sense? 
+
+● Yes, that makes sense. The recursion pattern should be:
+
+  - Nested functions: Don't recurse - read 'func-addr from the already-compiled node
+  - Generators: Do recurse - process body inline since they share outer frame
+
+  This is the same pattern as boundness, liveness, and slots. They all use:
+  - *-term-impl: Process one term, takes seq-fn and term-fn for generator recursion
+  - *-seq-impl: Iterate left-to-right, call term-fn for each term
+  - Entry point: Wire up the two impl functions
+
+  Revised plan:
+
+  Step 1: Restructure to match other passes
+  - Rename/refactor to codegen-term-impl and codegen-seq-impl pattern
+  - Keep seq-fn/term-fn parameters (needed for generator recursion)
+  - Remove codegen-fn parameter (was for nested function recursion)
+
+  Step 2: Change isFunc to not recurse
+  - Read node 'func-addr @ instead of recursive compilation
+  - Keep context array building code
+
+  Step 3: Remove code-map threading
+  - Not needed since nested functions are pre-compiled
+  - Simplifies all signatures
+
+  Step 4: Update signature and return value
+  - codegen: (addr func-node -- next-addr func-node)
+  - Store 'func-addr in node before returning
+
+  Step 5: Use list accumulation
+  - Replace concat! with list cons
+  - Convert to array when emitting
+
+  The key insight is that seq-fn/term-fn stay (for generators) but codegen-fn goes (was only for nested functions). Does this match your thinking?
+
+> Let's document these steps in FROTH_BYTECODE 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 100 lines
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 27 lines, removed 7 lines                                     
+       72  codegen: (addr func-node -- next-addr func-node)
+       73  ```
+       74  
+       75 -**Changes required:**                                         
+       75 +**Target structure** (matching boundness, liveness, slots):   
+       76 +```                                                           
+       77 +codegen-term-impl: (node ... seq-fn term-fn -- node' ...)     
+       78 +codegen-seq-impl: (body idx ... seq-fn term-fn -- ...)        
+       79 +codegen: (addr func-node -- next-addr func-node)              
+       80 +```                                                           
+       81  
+       77 -1. **Remove code-map parameter**: Since nested functions are a
+          -lready compiled by `compile-func`, codegen doesn't need to tra
+          -ck or update the code-map. It just reads `'func-addr` from nes
+          -ted func-nodes.                                               
+       82 +The `seq-fn`/`term-fn` pattern enables recursion into generato
+          +rs (which share the outer frame). Nested functions don't need 
+          +recursion—their `'func-addr` is already set by `compile-func`.
+       83  
+       79 -2. **Store `'func-addr` in node**: Instead of returning `func-
+          -addr` separately, update the node with `addr 'func-addr :` at 
+          -the start and return the updated node.                        
+       84 +**Implementation steps:**                                     
+       85  
+       81 -3. **Don't recurse into nested functions**: For `isFunc` terms
+          -, read `node 'func-addr @` and emit code to build the context 
+          -array and closure. No recursive compilation.                  
+       86 +1. **Restructure to match other passes**                      
+       87 +   - Rename/refactor to `codegen-term-impl` and `codegen-seq-i
+          +mpl`                                                          
+       88 +   - Use `seq-fn`/`term-fn` parameters for generator recursion
+       89 +   - Remove `codegen-fn` parameter (was for nested function re
+          +cursion)                                                      
+       90  
+       83 -4. **Use list accumulation**: Replace `concat!` with list cons
+          - (`,`) for O(n) instead of O(n²) code building. Convert to arr
+          -ay when emitting.                                             
+       91 +2. **Change isFunc to not recurse**                           
+       92 +   - Read `node 'func-addr @` instead of recursive compilation
+       93 +   - Keep context array building code (emit push instructions 
+          +for captured vars)                                            
+       94  
+       85 -5. **Still recurse into generators**: Generators share the out
+          -er frame and must be processed inline.                        
+       95 +3. **Remove code-map threading**                              
+       96 +   - Not needed since nested functions are pre-compiled       
+       97 +   - Simplifies all internal signatures                       
+       98  
+       87 -**Nested function codegen** (simplified):                     
+       99 +4. **Update signature and return value**                      
+      100 +   - Change to `(addr func-node -- next-addr func-node)`      
+      101 +   - Store `'func-addr` in node before returning              
+      102 +                                                              
+      103 +5. **Use list accumulation**                                  
+      104 +   - Replace `concat!` with list cons (`,`)                   
+      105 +   - Convert to array when emitting with `emit-all-at!`       
+      106 +                                                              
+      107 +**Nested function codegen** (after changes):                  
+      108  ```
+      109  ; For a nested function term, emit:
+      110  ; 1. start-array
+
+● Done. The "Planned: Codegen Changes" section now documents:
+
+  1. Target structure - Shows the codegen-term-impl/codegen-seq-impl pattern matching other passes
+  2. Why seq-fn/term-fn stays - Needed for generator recursion
+  3. Why codegen-fn goes - Nested functions are pre-compiled, no recursion needed
+  4. 5 implementation steps - Clear sequence for making the changes
+
+> let's start with step 1 
+
+● Let me look at the current codegen structure and plan the specific changes:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 398 lines
+
+● Looking at the current structure, here's my plan for step 1:
+
+  Current parameters being threaded:
+  - codegen-fn: for nested function recursion → REMOVE (nested funcs pre-compiled)
+  - seq-fn: for generator recursion → KEEP (generators share outer frame)
+  - addr, code-map: modified by nested func recursion → become constant, but KEEP for now (step 3 removes)
+  - code, need-enter: accumulate bytecode → KEEP
+
+  New signatures:
+
+  codegen-term-impl: (addr code-map code need-enter node outer-free-vars outer-bound-slots max-slots seq-fn term-fn -- addr code-map code' need-enter')
+
+  codegen-seq-impl: (body idx addr code-map code need-enter outer-free-vars outer-bound-slots max-slots seq-fn term-fn -- addr code-map code')
+
+  codegen: (addr code-map func-node -- next-addr new-code-map func-addr)  ; unchanged for now
+
+  Key changes:
+  1. Remove codegen-fn parameter from all functions
+  2. Move seq-fn term-fn to end of parameter lists
+  3. Change isFunc case (lines 154-192) to read node 'func-addr @ instead of recursing
+  4. Update isGen case (line 217) to not pass codegen-fn
+  5. Use def-fn! pattern instead of Y-combinator for codegen-seq-impl
+
+  The addr and code-map will just pass through unchanged now (since isFunc doesn't modify them), which sets up for step 3 to remove them.
+
+  Shall I proceed with these changes?
+
+> `def-fn` isn't really connected to the style of recursion. Y-combinator 
+style is always required. What did your comment about the def-fn pattern 
+mean? 
+
+● You're right, I was confused. Both patterns use Y-combinator style recursion (function receives itself as a parameter). The difference is just where in the parameter list:
+
+  Current codegen-seq-impl:
+  { /self /idx ...
+    ... idx 1 + self self!
+  } /codegen-seq-impl
+  - self at the beginning
+
+  Boundness-seq-impl style:
+  ['...] { /term-fn /seq-fn ...
+    ... seq-fn term-fn seq-fn!
+  } def-fn! /boundness-seq-impl
+  - seq-fn at the end, receives itself when called from entry point
+
+  Both are Y-combinator - the function is passed to itself to enable recursion. The def-fn! is just about environment capture, not the recursion pattern.
+
+  So for step 1, the actual change is:
+  1. Remove codegen-fn parameter
+  2. Move seq-fn term-fn to end of parameter list (matching boundness/liveness/slots convention)
+  3. Change isFunc to read node 'func-addr @
+  4. Update isGen to call seq-fn! without codegen-fn
+
+  The Y-combinator recursion pattern stays the same - codegen-seq-impl still receives itself via seq-fn.
+
+  Shall I proceed?
+
+> I'm referring to step 1 in the planned codegen changes in FROTH_BYTECODE. 
+Can you make a plan to implement just that part, and leave the other steps 
+for later? 
+
+● Looking at step 1 from FROTH_BYTECODE:
+
+  1. Restructure to match other passes
+    - Rename/refactor to codegen-term-impl and codegen-seq-impl
+    - Use seq-fn/term-fn parameters for generator recursion
+    - Remove codegen-fn parameter (was for nested function recursion)
+
+  Plan for step 1:
+
+  1. Rename codegen-term to codegen-term-impl
+  2. Change parameter order (matching boundness/liveness/slots):
+    - From: (codegen-fn seq-fn addr code-map code need-enter node outer-free-vars outer-bound-slots max-slots -- ...)
+    - To: (addr code-map code need-enter node outer-free-vars outer-bound-slots max-slots seq-fn term-fn -- ...)
+  3. Update codegen-seq-impl with matching parameter order:
+    - From: (codegen-fn seq-fn addr code-map code need-enter body-nodes ... idx -- ...)
+    - To: (body-nodes addr code-map code need-enter outer-free-vars outer-bound-slots max-slots idx seq-fn term-fn -- ...)
+  4. Update isGen case to call seq-fn! with new parameter order
+  5. Update codegen entry point to wire up codegen-seq-impl as seq-fn and codegen-term-impl as term-fn
+
+  Note: Removing codegen-fn means the isFunc case (line 159) will break - it currently calls codegen-fn for recursion. We can either:
+  - (a) Stub it to read node 'func-addr @ now (pulling in part of step 2)
+  - (b) Leave it broken temporarily
+
+  Which approach do you prefer?
+
+> Please review the implementation steps you have given in FROTH_BYTECODE. 
+You need to divide the implementation of this planned change so as to 
+minimize breakage between steps. Is restructuring to match other passes 
+something that we can do as an individual step, or is there some other small
+ change that we should do first? 
+
+● You're right. Looking at the steps again:
+
+  1. Restructure to match other passes - includes "Remove codegen-fn parameter"
+  2. Change isFunc to not recurse - read 'func-addr instead
+
+  These are in the wrong order. We can't remove codegen-fn until isFunc stops using it. The dependency is:
+
+  isFunc uses codegen-fn → must change isFunc first → then codegen-fn becomes unused → then we can remove it
+
+  Revised steps (minimizing breakage):
+
+  1. Change isFunc to read 'func-addr - one focused logic change, makes codegen-fn unused
+  2. Remove codegen-fn parameter - now safe since nothing uses it
+  3. Restructure to match other passes - rename functions, move seq-fn term-fn to end
+  4. Remove code-map threading - no longer modified
+  5. Update signature and return value - (addr func-node -- next-addr func-node)
+  6. Use list accumulation - replace concat! with list cons
+
+  Each step leaves working code. Step 1 is the key change that enables the rest.
+
+  Shall I update FROTH_BYTECODE.md with these revised steps?
+
+> yes 
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 17 lines, removed 12 lines                                    
+       83  
+       84  **Implementation steps:**
+       85  
+       86 -1. **Restructure to match other passes**                      
+       87 -   - Rename/refactor to `codegen-term-impl` and `codegen-seq-i
+          -mpl`                                                          
+       88 -   - Use `seq-fn`/`term-fn` parameters for generator recursion
+       89 -   - Remove `codegen-fn` parameter (was for nested function re
+          -cursion)                                                      
+       90 -                                                              
+       91 -2. **Change isFunc to not recurse**                           
+       92 -   - Read `node 'func-addr @` instead of recursive compilation
+       86 +1. **Change isFunc to read `'func-addr`**                     
+       87 +   - Read `node 'func-addr @` instead of recursive `codegen-fn
+          +` call                                                        
+       88     - Keep context array building code (emit push instructions 
+           for captured vars)
+       89 +   - This makes `codegen-fn` unused, enabling step 2          
+       90  
+       95 -3. **Remove code-map threading**                              
+       96 -   - Not needed since nested functions are pre-compiled       
+       97 -   - Simplifies all internal signatures                       
+       91 +2. **Remove `codegen-fn` parameter**                          
+       92 +   - Remove from `codegen-term`, `codegen-seq`, `codegen-impl`
+       93 +   - Now safe since nothing uses it                           
+       94  
+       99 -4. **Update signature and return value**                      
+       95 +3. **Restructure to match other passes**                      
+       96 +   - Rename to `codegen-term-impl` and `codegen-seq-impl`     
+       97 +   - Move `seq-fn term-fn` to end of parameter lists          
+       98 +   - Update `codegen` entry point to wire up impl functions   
+       99 +                                                              
+      100 +4. **Remove code-map threading**                              
+      101 +   - No longer modified (was only for nested function compilat
+          +ion)                                                          
+      102 +   - Remove from internal function signatures                 
+      103 +                                                              
+      104 +5. **Update signature and return value**                      
+      105     - Change to `(addr func-node -- next-addr func-node)`
+      106     - Store `'func-addr` in node before returning
+      107  
+      103 -5. **Use list accumulation**                                  
+      108 +6. **Use list accumulation**                                  
+      109     - Replace `concat!` with list cons (`,`)
+      110     - Convert to array when emitting with `emit-all-at!`
+      111  
+
+● Done. The steps are now ordered to minimize breakage:
+
+  1. Change isFunc to read 'func-addr - makes codegen-fn unused
+  2. Remove codegen-fn parameter - now safe
+  3. Restructure to match other passes - rename, reorder params
+  4. Remove code-map threading - no longer modified
+  5. Update signature and return value - final public API
+  6. Use list accumulation - performance optimization
+
+  Each step leaves working code. Shall I proceed with step 1 - changing the isFunc case to read node 'func-addr @?
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 166k/200k tokens (83%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 17.5k tokens (8.8%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 85.2k tokens (42.6%)
+     ⛀ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 34k (17.2%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 127 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.6k tokens
+     └ FROTH_COMPILER.md: 4.6k tokens
+     └ FROTH_BYTECODE.md: 992 tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> Let's try step 1 of this plan, then review the resulting code 
+
+● Update(lib/codegen.froth)
+  ⎿  Added 6 lines, removed 5 lines                                      
+      152      } ?! } ?! } ?! } ?!
+      153    } {
+      154    term isFunc {
+      155 -    ; Nested function - compile it and emit code to build clos
+          -ure at runtime                                                
+      156 -    ; node is the function-node for this nested function (cont
+          -ains 'term)                                                   
+      155 +    ; Nested function - already compiled by compile-func, emit
+          + code to build closure                                        
+      156 +    ; node is the function-node with 'func-addr already set   
+      157  
+      158 -    ; First, recursively compile the nested function using cod
+          -egen-fn                                                       
+      159 -    codegen-fn addr code-map node codegen-fn! /nested-addr /ne
+          -w-code-map /new-addr                                          
+      158 +    ; Read the pre-computed bytecode address                  
+      159 +    node 'func-addr @ /nested-addr                            
+      160  
+      161      ; Build context array at runtime: [start-array, push each 
+           captured var, end-array]
+      162      ; The nested function's free-vars-array tells us what to c
+           apture (already in slot order)
+     ...
+      189        ctx-code2 [ocEndArray ocPushInt nested-addr ocOp opClose
+           ] concat!
+      190      } ?! /new-code
+      191  
+      192 -    new-addr new-code-map new-code need-enter                 
+      192 +    ; addr and code-map unchanged (no recursive compilation)  
+      193 +    addr code-map new-code need-enter                         
+      194    } {
+      195    term isGen {
+      196      ; Generator - wrap body in start-array/end-array, share ou
+           ter frame
+
+● Done. Here's what changed in the isFunc case:
+
+  Before:
+  ; First, recursively compile the nested function using codegen-fn
+  codegen-fn addr code-map node codegen-fn! /nested-addr /new-code-map /new-addr
+  ...
+  new-addr new-code-map new-code need-enter
+
+  After:
+  ; Read the pre-computed bytecode address
+  node 'func-addr @ /nested-addr
+  ...
+  ; addr and code-map unchanged (no recursive compilation)
+  addr code-map new-code need-enter
+
+  The context array building code (lines 164-190) is unchanged - it still emits push instructions for each captured variable.
+
+  Now codegen-fn is no longer used in the isFunc branch. It's still passed through in isGen (line 217), but that's just threading - codegen-term no longer calls it. This enables step 2 (removing the parameter).
+
+  Shall I proceed with step 2, or would you like to review/test first?
+
+> proceed with step 2 
+
+● Read(lib/codegen.froth)
+  ⎿  Read 399 lines
+
+● I'll remove codegen-fn from all functions. Let me do this in several edits:
+
+  1. Update codegen-term signature and remove the parameter:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 2 lines, removed 3 lines                                      
+      28  operator-table 'close @ /opClose
+      29  operator-table 'deref @ /opDeref
+      30  
+      31 -; codegen-term: (codegen-fn seq-fn addr code-map code need-ente
+         -r node outer-free-vars outer-bound-slots max-slots -- addr' cod
+         -e-map' code' need-enter')                                      
+      31 +; codegen-term: (seq-fn addr code-map code need-enter node oute
+         +r-free-vars outer-bound-slots max-slots -- addr' code-map' code
+         +' need-enter')                                                 
+      32  ; Generate bytecode for a single term, append to code array.
+      33 -; codegen-fn is passed for recursive compilation of nested func
+         -tions                                                          
+      33  ; seq-fn is passed for processing generator bodies (calls codeg
+          en-term for each term)
+      34  ; node is the analysis node for this term (from boundness/liven
+          ess/slots), contains 'term
+      35  ; outer-free-vars maps identifiers to context slot numbers in t
+          he current function
+     ...
+      44   'ocStartArray 'ocEndArray 'opClose 'opDeref 'ocTailCall 'ocCal
+          l
+      45   'ocSaveContextPtr 'ocRestoreContextPtr 'ocSaveReturnPtr 'ocRes
+          toreReturnPtr
+      46   'foldl 'reduce 'drop 'or 'and] {
+      48 -  /max-slots /outer-bound-slots /outer-free-vars /node /need-en
+         -ter /code /code-map /addr /seq-fn /codegen-fn                  
+      47 +  /max-slots /outer-bound-slots /outer-free-vars /node /need-en
+         +ter /code /code-map /addr /seq-fn                              
+      48    node 'term @ /term
+      49    term isValue {
+      50      ; Quoted literal value - unwrap and check type
+
+● 2. Update isGen case to not pass codegen-fn:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      214  
+      215      ; Process: start-array, generator body, end-array
+      216      ; Use seq-fn to process terms (shares outer's frame)
+      217 -    codegen-fn seq-fn addr code-map code [ocStartArray] concat
+          -! need-enter gen-body-nodes outer-free-vars gen-bound-slots ma
+          -x-slots 0 seq-fn!                                             
+      217 +    seq-fn addr code-map code [ocStartArray] concat! need-ente
+          +r gen-body-nodes outer-free-vars gen-bound-slots max-slots 0 s
+          +eq-fn!                                                        
+      218      /gen-code /gen-code-map /gen-addr
+      219  
+      220      gen-addr gen-code-map gen-code [ocEndArray] concat! need-e
+           nter
+
+● 3. Update codegen-seq-impl:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 6 lines, removed 7 lines                                      
+      278    } ?! } ?! } ?! } ?! } ?! } ?! } ?!
+      279  } def-fn! /codegen-term
+      280  
+      281 -; codegen-seq: (codegen-fn seq-fn addr code-map code need-ente
+          -r body-nodes outer-free-vars outer-bound-slots max-slots idx -
+          -- addr' code-map' code')                                      
+      281 +; codegen-seq: (seq-fn addr code-map code need-enter body-node
+          +s outer-free-vars outer-bound-slots max-slots idx -- addr' cod
+          +e-map' code')                                                 
+      282  ; Process terms from idx to end of body-nodes.
+      283 -; codegen-fn is passed for recursive compilation of nested fun
+          -ctions                                                        
+      283  ; seq-fn is this function, passed for generator body processin
+           g
+      284  ; body-nodes is an array of analysis nodes (each contains 'ter
+           m)
+      285  ; outer-free-vars maps identifiers to context slot numbers
+      286  ; outer-bound-slots maps identifiers to frame slot numbers
+      287  ; max-slots is the number of frame slots needed
+      288  ; need-enter tracks whether enter-frame has been emitted (0=ne
+           ed, 1=done)
+      290 -{ /self /idx /max-slots /outer-bound-slots /outer-free-vars /b
+          -ody-nodes /need-enter /code /code-map /addr /seq-fn /codegen-f
+          -n                                                             
+      289 +{ /self /idx /max-slots /outer-bound-slots /outer-free-vars /b
+          +ody-nodes /need-enter /code /code-map /addr /seq-fn           
+      290    idx body-nodes # = {
+      291      ; Done - discard need-enter, return (addr code-map code)
+      292      addr code-map code
+     ...
+      295      body-nodes idx @ /node
+      296      ; Process current term, get back (addr' code-map' code' ne
+           ed-enter')
+      297      ; Pass seq-fn (wrapped self) for generator body processing
+      299 -    codegen-fn seq-fn addr code-map code need-enter node outer
+          --free-vars outer-bound-slots max-slots codegen-term!          
+      298 +    seq-fn addr code-map code need-enter node outer-free-vars 
+          +outer-bound-slots max-slots codegen-term!                     
+      299      /new-need-enter /new-code /new-code-map /new-addr
+      300      ; Recurse with updated state
+      302 -    codegen-fn seq-fn new-addr new-code-map new-code new-need-
+          -enter body-nodes outer-free-vars outer-bound-slots max-slots i
+          -dx 1 + self self!                                             
+      301 +    seq-fn new-addr new-code-map new-code new-need-enter body-
+          +nodes outer-free-vars outer-bound-slots max-slots idx 1 + self
+          + self!                                                        
+      302    } ?!
+      303  } /codegen-seq-impl
+      304  
+      306 -['codegen-seq-impl 'codegen-term] { /idx /max-slots /outer-bou
+          -nd-slots /outer-free-vars /body-nodes /need-enter /code /code-
+          -map /addr /seq-fn /codegen-fn                                 
+      307 -  codegen-fn seq-fn addr code-map code need-enter body-nodes o
+          -uter-free-vars outer-bound-slots max-slots idx codegen-seq-imp
+          -l codegen-seq-impl!                                           
+      305 +['codegen-seq-impl 'codegen-term] { /idx /max-slots /outer-bou
+          +nd-slots /outer-free-vars /body-nodes /need-enter /code /code-
+          +map /addr /seq-fn                                             
+      306 +  seq-fn addr code-map code need-enter body-nodes outer-free-v
+          +ars outer-bound-slots max-slots idx codegen-seq-impl codegen-s
+          +eq-impl!                                                      
+      307  } def-fn! /codegen-seq
+      308  
+      309  ; codegen-impl: (self addr code-map func-node -- next-addr new
+           -code-map func-addr)
+
+● 4. Update codegen-impl to not use self for nested function recursion:
+
+● Update(lib/codegen.froth)
+  ⎿  Added 8 lines, removed 17 lines                                     
+      306    seq-fn addr code-map code need-enter body-nodes outer-free-v
+           ars outer-bound-slots max-slots idx codegen-seq-impl codegen-s
+           eq-impl!
+      307  } def-fn! /codegen-seq
+      308  
+      309 -; codegen-impl: (self addr code-map func-node -- next-addr new
+          --code-map func-addr)                                          
+      310 -; Implementation of codegen with Y-combinator pattern for recu
+          -rsion.                                                        
+      311 -; self is this function, passed for recursive calls to nested 
+          -functions.                                                    
+      309 +; codegen: (addr code-map func-node -- next-addr new-code-map 
+          +func-addr)                                                    
+      310 +; Generate bytecode for a function.                           
+      311 +; Walks body left-to-right, collects bytecode, emits at addr. 
+      312  ; func-node contains 'term (the function) and analysis data.
+      313 -['codegen-seq 'concat 'emit-all-at 'ocReturn 'foldl 'drop 'mak
+          -e-node] { /func-node /code-map /addr /self                    
+      313 +['codegen-seq 'concat 'emit-all-at 'ocReturn 'foldl 'drop 'mak
+          +e-node] { /func-node /code-map /addr                          
+      314    ; Extract the function term from the node
+      315    func-node 'term @ /func
+      316  
+     ...
+      354  
+      355    ; Collect bytecode for each term in function body
+      356    ; codegen-seq returns (addr' code-map' code')
+      357 -  ; Pass self as codegen-fn for recursive compilation of neste
+          -d functions                                                   
+      357    ; Pass codegen-seq as seq-fn for generator body processing
+      359 -  self codegen-seq addr code-map [] need-enter body-nodes free
+          --vars bound-slots max-slots 0 codegen-seq!                    
+      358 +  codegen-seq addr code-map [] need-enter body-nodes free-vars
+          + bound-slots max-slots 0 codegen-seq!                         
+      359    /body-code /new-code-map /next-emit-addr
+      360  
+      361    ; Check if last term is a tail call by looking at its node
+     ...
+      367    } { 1 } ?! /last-is-tail
+      368    last-is-tail { body-code } { body-code [ocReturn] concat! } 
+           ?! /final-code
+      369  
+      371 -  ; Emit at next-emit-addr (nested functions may have already 
+          -used addr..next-emit-addr-1)                                  
+      372 -  final-code next-emit-addr emit-all-at! /next-addr           
+      370 +  ; Emit at addr                                              
+      371 +  final-code addr emit-all-at! /next-addr                     
+      372  
+      373    ; Return (next-addr new-code-map func-addr)
+      374    ; func-addr is where we emitted this function's code
+      376 -  next-addr new-code-map next-emit-addr                       
+      377 -} def-fn! /codegen-impl                                       
+      378 -                                                              
+      379 -; codegen: (addr code-map func-node -- next-addr new-code-map 
+          -func-addr)                                                    
+      380 -; Generate bytecode for a function.                           
+      381 -; Walks body left-to-right, collects bytecode, emits at addr. 
+      382 -; func-node contains 'term (the function) and analysis data.  
+      383 -['codegen-impl] { /func-node /code-map /addr                  
+      384 -  codegen-impl addr code-map func-node codegen-impl!          
+      375 +  next-addr new-code-map addr                                 
+      376  } def-fn! /codegen
+      377  
+      378  ; Clean up impl and instruction/operator code bindings
+
+● 5. Fix the cleanup line (remove codegen-impl which no longer exists):
+
+● Update(lib/codegen.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      376  } def-fn! /codegen
+      377  
+      378  ; Clean up impl and instruction/operator code bindings
+      379 -env 'codegen-seq-impl delete 'codegen-impl delete             
+      379 +env 'codegen-seq-impl delete                                  
+      380      'ocPushInt delete 'ocPushString delete 'ocOp delete 'ocRet
+           urn delete
+      381      'ocPushQuotedApply delete 'ocPushContext delete 'ocPushLoc
+           al delete
+      382      'ocPopLocal delete 'ocPopUnused delete 'ocEnterFrame delet
+           e 'ocLeaveFrame delete
+
+● Done. Step 2 complete. Here's a summary of the changes:
+
+  Removed codegen-fn from:
+  1. codegen-term signature (line 31) and binders (line 47)
+  2. isGen case - now calls seq-fn ... seq-fn! instead of codegen-fn seq-fn ... seq-fn! (line 217)
+  3. codegen-seq-impl signature and binders (line 289)
+  4. codegen-seq signature and binders (line 305)
+
+  Merged codegen-impl into codegen:
+  - Since we no longer need the Y-combinator pattern for nested function recursion
+  - Removed the separate wrapper function
+  - Simplified emit: now always emits at addr (not next-emit-addr)
+
+  Fixed cleanup:
+  - Removed 'codegen-impl delete since that function no longer exists
+
+  The code is now simpler - no more passing self/codegen-fn through the call chain for nested function compilation. The seq-fn parameter remains for generator recursion (codegen-seq calls itself via seq-fn).
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 187k/200k tokens (93%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 17.5k tokens (8.8%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 106.3k tokens (53.2%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 13k (6.7%)
+     ⛁ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 127 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.6k tokens
+     └ FROTH_COMPILER.md: 4.6k tokens
+     └ FROTH_BYTECODE.md: 992 tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
