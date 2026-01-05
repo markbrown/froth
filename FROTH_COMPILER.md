@@ -8,6 +8,7 @@ This document describes the compiler infrastructure for Froth, including bytecod
 |------|--------|-------------|
 | `boundness` | boundness | Analyze variable binding in a node |
 | `compile-func` | compile | Build node tree and run all analysis passes |
+| `compile-named-closure` | compile | Compile a closure to bytecode with caching |
 | `emit-all-at` | bytecode | Write array to bytecode store |
 | `emit-at` | bytecode | Write value to bytecode store |
 | `liveness` | liveness | Analyze last references in a node |
@@ -337,6 +338,7 @@ Compiler orchestration. Builds the node tree and runs all analysis passes.
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
 | `compile-func` | `( code-map addr func -- code-map addr func-node )` | Compile a function |
+| `compile-named-closure` | `( cache code-map addr closureval name -- cache code-map addr bytecodeval )` | Compile a closure to bytecode |
 
 Takes a quoted function and returns a fully analyzed function-node. Recursively compiles nested functions before the outer function, so each function's analysis can assume nested functions are already complete.
 
@@ -362,4 +364,42 @@ node 'body @ 1 @ 'slot @       ; 0 (reference slot)
 ; Nested functions are compiled first
 tree-empty! 0 '{ /x { x } } compile-func! /node /addr /code-map
 node 'body @ 1 @ 'free-vars-map @  ; $ 0 'x : (nested func captured x)
+```
+
+### compile-named-closure
+
+Compiles a closureval to a bytecodeval, recursively compiling any captured closures.
+
+- `cache`: Cache for compiled closures (from `cache-empty!`)
+- `code-map`: Tree23 for function deduplication
+- `addr`: Next available bytecode address
+- `closureval`: The closure to compile
+- `name`: Quoted identifier for cache lookup
+- `bytecodeval`: The compiled closure (array + bytecode address)
+
+The function:
+1. Checks the cache for an already-compiled version
+2. Opens the closure to get its body (quoted function) and environment
+3. Compiles the function body using `compile-func`
+4. For each free variable binding from the closure's environment:
+   - If the value is an uncompiled closureval, recursively compiles it
+   - If it's already a bytecodeval or non-closure, uses it as-is
+5. Creates the bytecodeval with the context array and bytecode address
+6. Caches the result for future lookups
+
+```
+; Simple closure
+{ 1 2 + } /f
+cache-empty! tree-empty! 0 f 'f compile-named-closure! /bv /addr /code-map /cache
+bv!                            ; 3
+
+; Closure capturing another closure (recursive compilation)
+{ 10 } /g
+{ g! 1 + } /f
+cache-empty! tree-empty! 0 f 'f compile-named-closure! /bv /addr /code-map /cache
+bv!                            ; 11 (g is compiled automatically)
+
+; Cache reuse
+cache code-map addr f 'f compile-named-closure! /bv2 /addr2 /code-map /cache
+addr addr2 =                   ; 0 (same address, cache hit)
 ```

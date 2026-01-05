@@ -70,5 +70,62 @@
   compile-seq-impl compile-term-impl compile-func-impl compile-func-impl!
 } def-fn! /compile-func
 
+; compile-closure-impl: (cache code-map addr closureval name self -- cache code-map addr bytecodeval)
+; Compile a closure to bytecode. Recursively compiles captured closures.
+; Uses cache to avoid recompiling the same closure.
+{ /self /name /closureval /addr /code-map /cache
+  cache name closureval cache-get! {
+    ; Found in cache (cache-get returned 0)
+    /bytecodeval
+    cache code-map addr bytecodeval
+  } {
+    ; Not found (cache-get returned 1)
+    closureval open /body /env
+
+    ; Compile the function body
+    ; cache stays on stack, compile-func doesn't touch it
+    cache code-map addr body compile-func! /func-node /addr /code-map /cache
+
+    ; Get free vars array (with default if not present)
+    func-node 'free-vars-array in { func-node 'free-vars-array @ } { [] } ?! /free-vars
+
+    ; Process free vars, building context
+    ; Thread (cache code-map addr ctx-list) through foldl
+    cache code-map addr .
+    free-vars { /var-name /ctx-list /addr /code-map /cache
+      env var-name @ /value
+      value isClosure {
+        value open /vbody /venv
+        vbody isFunc {
+          ; Uncompiled closureval - recursively compile
+          cache code-map addr value var-name self self!
+          /compiled /addr /code-map /cache
+          cache code-map addr ctx-list compiled ,
+        } {
+          ; Already compiled (bytecodeval) - use as-is
+          cache code-map addr ctx-list value ,
+        } ?!
+      } {
+        ; Not a closure - use as-is
+        cache code-map addr ctx-list value ,
+      } ?!
+    } foldl! /ctx-list /addr /code-map /cache
+
+    ; Convert context list to array
+    [ ctx-list { } lfoldl! ] /context
+
+    ; Create bytecodeval: context array + func-addr
+    context func-node 'func-addr @ close /bytecodeval
+
+    ; Update cache and return
+    cache name closureval bytecodeval cache-set! code-map addr bytecodeval
+  } ?!
+} /compile-closure-impl
+
+; compile-named-closure: (cache code-map addr closureval name -- cache code-map addr bytecodeval)
+; Compile a closure to bytecode with caching.
+{ compile-closure-impl compile-closure-impl! } /compile-named-closure
+
 ; Remove impl functions
-env 'compile-term-impl delete 'compile-seq-impl delete 'compile-func-impl delete restore
+env 'compile-term-impl delete 'compile-seq-impl delete 'compile-func-impl delete
+    'compile-closure-impl delete restore
