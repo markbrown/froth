@@ -28,6 +28,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `drop` | stack | Drop top of stack |
 | `dup` | stack | Duplicate top of stack |
 | `eval` | eval | Evaluate closure with stack and op-table |
+| `fact` | math | Compute factorial |
 | `fib` | math | Generate Fibonacci sequence |
 | `filter` | array | Keep elements matching predicate |
 | `flatten` | array | Flatten nested arrays |
@@ -435,7 +436,16 @@ Mathematical utilities.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
+| `fact` | `( n -- n! )` | Compute factorial of n |
 | `fib` | `( a b n -- vals... )` | Generate Fibonacci sequence of length n |
+
+The `fact` function computes the factorial of n. Returns 1 for n <= 1.
+
+```
+0 fact!            ; 1
+5 fact!            ; 120
+10 fact!           ; 3628800
+```
 
 The `fib` function generates a Fibonacci sequence starting with the two given values, leaving n values on the stack.
 
