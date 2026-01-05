@@ -23,9 +23,9 @@ for test_file in "$TESTS_DIR"/*.froth; do
     opts_file="$TESTS_DIR/$test_name.opts"
     if [ -f "$opts_file" ]; then
         opts=$(cat "$opts_file" | tr -d '\n')
-        actual=$("$FROTH" $opts "$test_file" 2>&1) || true
+        actual=$("$FROTH" $opts "$test_file" 2>&1 | grep -v '^FROTH: ') || true
     else
-        actual=$("$FROTH" "$test_file" 2>&1) || true
+        actual=$("$FROTH" "$test_file" 2>&1 | grep -v '^FROTH: ') || true
     fi
     expected=$(cat "$expected_file")
 
