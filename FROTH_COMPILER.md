@@ -7,6 +7,7 @@ This document describes the compiler infrastructure for Froth, including bytecod
 | Name | Module | Description |
 |------|--------|-------------|
 | `boundness` | boundness | Analyze variable binding in a node |
+| `compile` | compile | Compile a binding in an env-map |
 | `compile-func` | compile | Build node tree and run all analysis passes |
 | `compile-named-closure` | compile | Compile a closure to bytecode with caching |
 | `emit-all-at` | bytecode | Write array to bytecode store |
@@ -337,6 +338,7 @@ Compiler orchestration. Builds the node tree and runs all analysis passes.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
+| `compile` | `( cache code-map addr env-map name -- cache code-map addr env-map )` | Compile a binding in env-map |
 | `compile-func` | `( code-map addr func -- code-map addr func-node )` | Compile a function |
 | `compile-named-closure` | `( cache code-map addr closureval name -- cache code-map addr bytecodeval )` | Compile a closure to bytecode |
 
@@ -402,4 +404,26 @@ bv!                            ; 11 (g is compiled automatically)
 ; Cache reuse
 cache code-map addr f 'f compile-named-closure! /bv2 /addr2 /code-map /cache
 addr addr2 =                   ; 0 (same address, cache hit)
+```
+
+### compile
+
+Convenience wrapper that looks up a binding in an env-map, compiles it, and updates the map.
+
+- `cache`: Cache for compiled closures
+- `code-map`: Tree23 for function deduplication
+- `addr`: Next available bytecode address
+- `env-map`: Map from identifiers to closures
+- `name`: Quoted identifier to compile
+
+```
+{ 1 2 + } /f
+{ 10 } /g
+$ f 'f : g 'g : /env-map
+
+cache-empty! tree-empty! 0 env-map 'f compile! /env-map /addr /code-map /cache
+env-map 'f @ !                 ; 3 (compiled and executed)
+
+cache code-map addr env-map 'g compile! /env-map /addr /code-map /cache
+env-map 'g @ !                 ; 10
 ```
