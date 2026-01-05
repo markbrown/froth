@@ -1,0 +1,1515 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read tests/math.expected (11 lines)
+  ⎿  Read tests/math.froth (26 lines)
+  ⎿  Read tests/codegen.expected (47 lines)
+  ⎿  Referenced file FROTH_LIBRARY.md
+  ⎿  Read lib/math.froth (29 lines)
+
+> Let's think about how to implement the `compile-named-closure` function. 
+Does this make sense to you? What further information would you need to 
+have?
+1. The signature is `( cache code-map addr closureval name -- cache code-map
+ addr bytecodeval )`, where:
+ - cache is the cache of compiled closures (see lib/cache.froth)
+ - code-map is the map from function ids to analyzed nodes
+ - closureval is the closure to compile
+ - name is a quoted identifier
+ - bytecodeval is the resulting compiled closure
+2. It should perform these steps:
+ - check cache, return the compiled closure if found
+ - use `compile-func` to compile the closure body
+ - extract free variable bindings from the closure environment
+ - recursively compile any of the bindings that are themselves uncompiled 
+closures (only do the top-level, don't traverse into data structures)
+ - create the bytecodeval
+ - update the cache 
+
+● The design makes sense. Let me think through the details and identify what I'd need to clarify:
+
+  What I understand:
+
+  1. Cache lookup: Use cache-get with name as the identifier and closureval as the key (closures compared by identity)
+  2. Compilation flow:
+    - closureval open → (env body) where env is a map, body is a quoted function
+    - compile-func on body → func-node with analysis info
+    - codegen on func-node → bytecode emitted, 'func-addr stored in node
+  3. Context array construction:
+    - func-node 'free-vars-array @ gives identifiers in slot order
+    - For each, look up in env to get the binding value
+    - If binding is an uncompiled closure, recursively compile it
+    - Assemble into array for the context
+  4. Creating bytecodeval: context func-node 'func-addr @ close !
+
+  Questions I have:
+
+  1. Detecting uncompiled closures: Both closurevals and bytecodevals return 0 for isClosure. To distinguish, I'd use open and check if the body isFunc (closureval) vs isInt (bytecodeval). Is that the right approach?
+  2. Handling non-compilable closures: If a free variable binding is a closure that fails preflight (uses env/import/applyOperator), should we leave it as a closureval in the context array? Or error?
+  3. State threading for recursive compilation: Each recursive call updates (cache code-map addr). Should I use a foldl with composite state, or explicit bindings in a loop?
+  4. Name for recursive calls: Use the free variable's identifier as the name argument?
+  5. Is codegen part of this function? The signature suggests yes (addr advances), but wanted to confirm.
+
+  Would you like me to read the cache module or any other files to clarify these points?
+
+> Yes, you can test the types inside the closure to see if it is already 
+compiled. Assume that all input has already passed preflight. Look at the 
+`compile-func` function that we already have, as this is the function you 
+will need to use to compile the closure body (it calls the compiler passes).
+ `compile-func` updates the code-map, so `compile-closure` needs to update 
+the cache for itself and also pass the code-map to compile-func. Is it clear
+ how compile-func works? 
+
+● Let me read the compile-func implementation to make sure I understand it correctly.
+
+● Read(lib/compile.froth)
+  ⎿  Read 75 lines
+
+● Yes, I understand how compile-func works now:
+
+  1. Signature: (code-map addr func -- code-map addr func-node)
+  2. Deduplication: Uses func ref as key in code-map (a tree23) to avoid recompiling the same function
+  3. Pipeline: Builds node tree → boundness → liveness → slots → codegen (all in one call)
+  4. codegen is included: The returned func-node already has 'func-addr set
+
+  For compile-named-closure, the flow would be:
+
+  1. Check cache for (name, closureval) → if found, return cached bytecodeval
+  2. closureval open → (env body)
+  3. code-map addr body compile-func! → (code-map addr func-node)
+  4. Build context array from func-node 'free-vars-array @:
+     - For each identifier, get value from env
+     - If value is uncompiled closure (isClosure=0 and body isFunc=0),
+       recursively compile it (threading cache/code-map/addr)
+  5. context func-node 'func-addr @ close ! → bytecodeval
+  6. Update cache with (name, closureval) → bytecodeval
+  7. Return (cache code-map addr bytecodeval)
+
+  The tricky part is step 4 - threading (cache code-map addr) through the recursive compilation of free variable bindings. I'm thinking either:
+  - Use foldl with a composite state [cache code-map addr]
+  - Or use a recursive helper with explicit bindings
+
+  Is this understanding correct?
+
+> You can leave `cache` on the stack while calling `compile-func`, since 
+compile-func will not touch it. Then it will still be in place for the 
+recursive calls. See codegen for an example of this technique. 
+
+● Good point - that simplifies things. Let me look at codegen to see how it handles similar state threading.
+
+● Read(lib/codegen.froth)
+  ⎿  Read 377 lines
+
+● I see the pattern now. In codegen, values like free-vars, bound-slots, max-slots are left on the stack and passed through to helper functions that don't modify them.
+
+  For compile-named-closure:
+  - Leave cache on the stack when calling compile-func (which only touches code-map addr func)
+  - After compile-func returns, cache is still there untouched
+  - For recursive compilation of free vars, I need to thread (cache code-map addr) through foldl since each recursive call might update all three
+
+  The structure would be:
+
+  { /self /name /closureval /addr /code-map /cache
+    cache name closureval cache-get! {
+      ; Not found
+      closureval open /body /env
+
+      ; cache stays on stack untouched by compile-func
+      cache code-map addr body compile-func! /func-node /addr /code-map /cache
+
+      ; Thread (cache code-map addr ctx-list) through foldl
+      func-node 'free-vars-array @ /free-vars
+      cache code-map addr .
+      free-vars { /var-name /ctx-list /addr /code-map /cache
+        env var-name @ /value
+        ; check if uncompiled closure, recurse if so
+        ; ...
+        cache code-map addr ctx-list value-or-compiled ,
+      } foldl! /ctx-list /addr /code-map /cache
+
+      ; Build bytecodeval and update cache
+      [ ctx-list { } lfoldl! ] func-node 'func-addr @ close ! /bytecodeval
+      cache name closureval bytecodeval cache-set! code-map addr bytecodeval
+    } {
+      /bytecodeval
+      cache code-map addr bytecodeval
+    } ?!
+  } def-fn! /compile-named-closure-impl
+
+  Does this look right? The main question I have: should compile-named-closure-impl be in the dependencies list for the wrapper, or does it need to be added to the env cleanup at the end?
+
+> See FROTH_GUIDE for examples. The library modules use `def-fn` to help 
+with some aspects of efficiency, but this is not crucial. You can either do 
+things the same way as is already in the compile module, or just define 
+functions directly and we will deal with `def-fn` later. 
+
+● Good point. Let me just define the functions directly without def-fn for now.
+
+  Here's the implementation I'm thinking:
+
+  { /self /name /closureval /addr /code-map /cache
+    cache name closureval cache-get! {
+      ; Not found
+      closureval open /body /env
+
+      ; cache untouched by compile-func
+      cache code-map addr body compile-func! /func-node /addr /code-map /cache
+
+      func-node 'free-vars-array in { func-node 'free-vars-array @ } { [] } ?! /free-vars
+
+      ; Thread (cache code-map addr ctx-list) through foldl
+      cache code-map addr .
+      free-vars { /var-name /ctx-list /addr /code-map /cache
+        env var-name @ /value
+        value isClosure {
+          value open /vbody /venv
+          vbody isFunc {
+            ; Uncompiled - recurse
+            cache code-map addr value var-name self self!
+            /compiled /addr /code-map /cache
+            cache code-map addr ctx-list compiled ,
+          } {
+            cache code-map addr ctx-list value ,
+          } ?!
+        } {
+          cache code-map addr ctx-list value ,
+        } ?!
+      } foldl! /ctx-list /addr /code-map /cache
+
+      [ ctx-list { } lfoldl! ] /context
+      context func-node 'func-addr @ close ! /bytecodeval
+      cache name closureval bytecodeval cache-set! code-map addr bytecodeval
+    } {
+      /bytecodeval
+      cache code-map addr bytecodeval
+    } ?!
+  } /compile-closure-impl
+
+  { compile-closure-impl compile-closure-impl! } /compile-named-closure
+
+  The wrapper pushes compile-closure-impl as self, then calls it. The binders pop in order: self, name, closureval, addr, code-map, cache.
+
+  Should I implement this now, or is there anything I'm missing?
+
+> go ahead and implement it 
+
+● Read(lib/compile.froth)
+  ⎿  Read 75 lines
+
+● Update(lib/compile.froth)
+  ⎿  Added 58 lines, removed 1 line                                      
+       70    compile-seq-impl compile-term-impl compile-func-impl compile
+           -func-impl!
+       71  } def-fn! /compile-func
+       72  
+       73 +; compile-closure-impl: (cache code-map addr closureval name s
+          +elf -- cache code-map addr bytecodeval)                       
+       74 +; Compile a closure to bytecode. Recursively compiles captured
+          + closures.                                                    
+       75 +; Uses cache to avoid recompiling the same closure.           
+       76 +{ /self /name /closureval /addr /code-map /cache              
+       77 +  cache name closureval cache-get! {                          
+       78 +    ; Not found (cache-get returned 1)                        
+       79 +    closureval open /body /env                                
+       80 +                                                              
+       81 +    ; Compile the function body                               
+       82 +    ; cache stays on stack, compile-func doesn't touch it     
+       83 +    cache code-map addr body compile-func! /func-node /addr /c
+          +ode-map /cache                                                
+       84 +                                                              
+       85 +    ; Get free vars array (with default if not present)       
+       86 +    func-node 'free-vars-array in { func-node 'free-vars-array
+          + @ } { [] } ?! /free-vars                                     
+       87 +                                                              
+       88 +    ; Process free vars, building context                     
+       89 +    ; Thread (cache code-map addr ctx-list) through foldl     
+       90 +    cache code-map addr .                                     
+       91 +    free-vars { /var-name /ctx-list /addr /code-map /cache    
+       92 +      env var-name @ /value                                   
+       93 +      value isClosure {                                       
+       94 +        value open /vbody /venv                               
+       95 +        vbody isFunc {                                        
+       96 +          ; Uncompiled closureval - recursively compile       
+       97 +          cache code-map addr value var-name self self!       
+       98 +          /compiled /addr /code-map /cache                    
+       99 +          cache code-map addr ctx-list compiled ,             
+      100 +        } {                                                   
+      101 +          ; Already compiled (bytecodeval) - use as-is        
+      102 +          cache code-map addr ctx-list value ,                
+      103 +        } ?!                                                  
+      104 +      } {                                                     
+      105 +        ; Not a closure - use as-is                           
+      106 +        cache code-map addr ctx-list value ,                  
+      107 +      } ?!                                                    
+      108 +    } foldl! /ctx-list /addr /code-map /cache                 
+      109 +                                                              
+      110 +    ; Convert context list to array                           
+      111 +    [ ctx-list { } lfoldl! ] /context                         
+      112 +                                                              
+      113 +    ; Create bytecodeval: context array + func-addr           
+      114 +    context func-node 'func-addr @ close ! /bytecodeval       
+      115 +                                                              
+      116 +    ; Update cache and return                                 
+      117 +    cache name closureval bytecodeval cache-set! code-map addr
+          + bytecodeval                                                  
+      118 +  } {                                                         
+      119 +    ; Found in cache (cache-get returned 0)                   
+      120 +    /bytecodeval                                              
+      121 +    cache code-map addr bytecodeval                           
+      122 +  } ?!                                                        
+      123 +} /compile-closure-impl                                       
+      124 +                                                              
+      125 +; compile-named-closure: (cache code-map addr closureval name 
+          +-- cache code-map addr bytecodeval)                           
+      126 +; Compile a closure to bytecode with caching.                 
+      127 +{ compile-closure-impl compile-closure-impl! } /compile-named-
+          +closure                                                       
+      128 +                                                              
+      129  ; Remove impl functions
+       74 -env 'compile-term-impl delete 'compile-seq-impl delete 'compil
+          -e-func-impl delete restore                                    
+      130 +env 'compile-term-impl delete 'compile-seq-impl delete 'compil
+          +e-func-impl delete                                            
+      131 +    'compile-closure-impl delete restore                      
+
+● Now let me test it with a simple closure:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test compile-named-closure with a simple closure…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                   
+     > > > > > Runtime error: stack underflow in 'binder'
+     > Runtime error: stack underflow in 'binder'
+     … +3 lines (ctrl+o to expand)
+
+● There's a stack underflow. Let me debug:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Debug test…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > > > > cache: <map:0>
+     > code-map:
+     … +6 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Check tree-empty…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                     
+     > > > tree: .Runtime error: stack underflow in 'print'
+     > 0
+     >
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Simpler test…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.               
+     > > > Runtime error: stack underflow in 'binder'
+     > done
+     >
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test cache-get…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > > result: 1
+     >
+
+● Read(lib/cache.froth)
+  ⎿  Read 38 lines
+
+● I see the issue - I have the branches backwards! When cache-get returns 1 (not found), ? takes the else-branch (second one). Let me fix:
+
+● Update(lib/compile.froth)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      75  ; Uses cache to avoid recompiling the same closure.
+      76  { /self /name /closureval /addr /code-map /cache
+      77    cache name closureval cache-get! {
+      78 +    ; Found in cache (cache-get returned 0)                    
+      79 +    /bytecodeval                                               
+      80 +    cache code-map addr bytecodeval                            
+      81 +  } {                                                          
+      82      ; Not found (cache-get returned 1)
+      83      closureval open /body /env
+      84  
+     ...
+      119  
+      120      ; Update cache and return
+      121      cache name closureval bytecodeval cache-set! code-map addr
+            bytecodeval
+      118 -  } {                                                         
+      119 -    ; Found in cache (cache-get returned 0)                   
+      120 -    /bytecodeval                                              
+      121 -    cache code-map addr bytecodeval                           
+      122    } ?!
+      123  } /compile-closure-impl
+      124  
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test compile-named-closure with a simple closure…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                        
+     > > > > > > compiled to addr: 7
+     > bytecodeval: 3Runtime error: stack underflow in 'print'
+     … +2 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Debug: check what compile-func returns…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                                
+     > > > > body: '{ 1 2 + }Runtime error: stack underflow in 'print'
+     > > > > > addr after compile: 7
+     … +3 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Debug close operation…)
+  ⎿  Error: Exit code 1
+     Uncaught Mercury exception:
+     index_out_of_bounds("array.lookup: index 1024 not in range [0, 1023]")
+     Stack dump not available in this grade.
+
+     Froth REPL. Press Ctrl-D to exit.
+     > >
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Debug close operation…)
+  ⎿ Froth REPL. Press Ctrl-D to exit.                                      
+    > > > bytecodeval: <bytecode:0>Runtime error: stack underflow in 'print
+    '
+    … +2 lines (ctrl+o to expand)
+
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test that close returns the right thing…)
+  ⎿  Error: Exit code 1
+     Uncaught Mercury exception:
+     index_out_of_bounds("array.lookup: index 1024 not in range [0, 1023]")
+     Stack dump not available in this grade.
+
+     Froth REPL. Press Ctrl-D to exit.
+     > > > x: <bytecode:5>Runtime error: stack underflow in 'print'
+     >
+
+● I see the issue - close is an operator, so it directly returns the bytecodeval. But I have close ! which tries to execute it. Let me fix:
+
+● Update(lib/compile.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      115      [ ctx-list { } lfoldl! ] /context
+      116  
+      117      ; Create bytecodeval: context array + func-addr
+      118 -    context func-node 'func-addr @ close ! /bytecodeval       
+      118 +    context func-node 'func-addr @ close /bytecodeval         
+      119  
+      120      ; Update cache and return
+      121      cache name closureval bytecodeval cache-set! code-map addr
+            bytecodeval
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test compile-named-closure with a simple closure…)
+  ⎿  Error: Exit code 1
+     Uncaught Mercury exception:
+     index_out_of_bounds("array.lookup: index 1024 not in range [0, 1023]")
+     Stack dump not available in this grade.
+
+     Froth REPL. Press Ctrl-D to exit.
+     > > > > > > compiled to addr: 7
+     > bytecodeval: <bytecode:0>Runtime error: stack underflow in 'print'
+     > > >
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Check bytecode store after compile-func…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.          
+     > > > > > > > > addr after compile: 7
+     > > > bytecode: > 0 > 1 > 0 > 2 > 1 > 2 > 2
+     >
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Emit bytecode manually and test…)
+  ⎿  Error: Exit code 1
+     Uncaught Mercury exception:
+     index_out_of_bounds("array.lookup: index 1024 not in range [0, 1023]")
+     Stack dump not available in this grade.
+
+     Froth REPL. Press Ctrl-D to exit.
+     > > > > > > > > > > > bv: <bytecode:0>Runtime error: stack underflow in 
+     'print'
+     >
+
+● Bash(timeout 10 ./bin/froth
+      /home/mark/Documents/projects/froth/tests/codegen.froth 2>&1 | head -50)
+  ⎿  func-addr=0 next-addr=7       
+     bytecode: 0 1 0 2 0 3 2
+     func-addr2=7 next-addr2=12
+     … +43 lines (ctrl+o to expand)
+
+● Bash(grep -n "close" /home/mark/Documents/projects/froth/tests/codegen.froth |
+       head -20)
+  ⎿  48:[] func-addr4 close ! /r5 /r4 /r3 /r2 /r1
+     69:[10 20] func-addr5 close ! println!
+     82:42 [] func6-addr close ! println!
+     … +20 lines (ctrl+o to expand)
+
+● Read(tests/codegen.froth)
+  ⎿  Read 50 lines
+
+● Read(tests/codegen.froth)
+  ⎿  Read 15 lines
+
+● Read(tests/codegen.froth)
+  ⎿  Read 50 lines
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; All in one line…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > 3
+     >
+
+● That works! The REPL was resetting between lines. Let me test compile-named-closure properly:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test compile-named-closure with a simple closure…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > compiled to addr: 7
+     > 3
+     >
+
+● Excellent! It works! Let me update the todos and test the recursive compilation of captured closures:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test recursive compilation of captured closures…)
+  ⎿  Froth REPL. Press Ctrl-D to exit. 
+     > > > > > > > compiled to addr: 21
+     > result: 11
+     >
+
+● It recursively compiled g when compiling f. Let me also test cache behavior:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test cache behavior - same closure should return cached version…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.      
+     > > > > > > > > > first compile: addr=7
+     > result1: 3
+     … +4 lines (ctrl+o to expand)
+
+● Cache works correctly. Let me test that already-compiled closures are not recompiled:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test that bytecodeval in context is not recompiled…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.        
+     > > > > > > > > g compiled, addr=3
+     > > > > > > > > > > > f compiled, addr=21
+     … +2 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Simpler test: put a bytecodeval in context and check it's used
+      directly…)
+  ⎿  Froth REPL. Press Ctrl-D to exit. 
+     > > > > > > > > g compiled, addr=3
+     > g-compiled type: closure
+     … +7 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Check bytecodeval structure…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                                    
+     > > > > > > bv: <bytecode:0>Runtime error: stack underflow in 'print'
+     > bv isClosure: 1
+     … +4 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Check closure types…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.  
+     > > > > > > closureval isClosure: 0
+     > bytecodeval isClosure: 1
+     … +3 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Trace what compile-named-closure returns…)
+  ⎿ Froth REPL. Press Ctrl-D to exit.                                      
+    > > > > g-compiled: <bytecode:0>Runtime error: stack underflow in 'prin
+    t'
+    … +5 lines (ctrl+o to expand)
+
+
+● The type checking is correct. Bytecodevals have isClosure=1 so they go to the "use as-is" branch. Let me verify the full recursive compilation flow works:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test recursive compilation: h -> g -> f…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.    
+     > > > > > > > compiled, final addr=39
+     > result: 111
+     > >
+
+● Let me also run all the existing tests to make sure nothing is broken:
+
+● Bash(./run_tests.sh)
+  ⎿  Error: Exit code 1
+     PASS: add
+     PASS: alist
+     PASS: apply_op
+     PASS: arithmetic
+     PASS: arity
+     PASS: array
+     PASS: array_ops
+     PASS: binder
+     PASS: bool
+     … +154 lines (ctrl+o to see all)
+
+● The codegen test has a constant pool ID shift (524 → 533) due to new code in the stdlib. Let me regenerate the expected output:
+
+● Bash(./bin/froth /home/mark/Documents/projects/froth/tests/codegen.froth >
+      /home/mark/Documents/projects/froth/tests/codegen.expected)
+  ⎿  (No content)
+
+● Bash(./run_tests.sh)
+  ⎿  PASS: add                     
+     PASS: alist
+     PASS: apply_op
+     … +64 lines (ctrl+o to expand)
+
+● All 65 tests pass. Let me update the todos:
+
+● The compile-named-closure function is implemented and working. Here's a summary:
+
+  Function signature: ( cache code-map addr closureval name -- cache code-map addr bytecodeval )
+
+  What it does:
+  1. Checks the cache for an already-compiled version of this closure
+  2. If not cached, opens the closure to get its body and environment
+  3. Compiles the function body using compile-func
+  4. For each free variable in the compiled function:
+    - If the captured value is an uncompiled closureval, recursively compiles it
+    - If it's already a bytecodeval or non-closure value, uses it as-is
+  5. Creates the bytecodeval with the context array and bytecode address
+  6. Caches the result for future lookups
+
+  Tests verified:
+  - Simple closure: { 1 2 + } → compiles and returns 3
+  - Captured closure: { g! 1 + } where g = { 10 } → recursively compiles g, returns 11
+  - Deep recursion: f -> g -> h chain → all closures compiled, returns 111
+  - Cache reuse: Same closure returns cached version without re-emitting bytecode
+
+  All 65 tests pass.
+
+> add a test for compile-named-closure 
+
+● Write(tests/compile_closure.froth)
+  ⎿  Wrote 52 lines to tests/compile_closure.froth                       
+      1 ; Test compile-named-closure
+      2 ; Test 1: Simple closure
+      3 { 1 2 + } /f
+      4 cache-empty! tree-empty! 0 f 'f compile-named-closure! /bv /addr 
+        /code-map /cache
+      5 "simple: " print bv! println!
+      6 ; Test 2: Closure with captured closure (recursive compilation)
+      7 { 10 } /g
+      8 { g! 1 + } /f2
+     … +42 lines (ctrl+o to expand)
+
+● Bash(timeout 10 ./bin/froth
+      /home/mark/Documents/projects/froth/tests/compile_closure.froth)
+  ⎿  Error: Exit code 124
+
+● The test timed out. Let me debug by testing parts individually:
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test 1: Simple closure…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > simple: 3
+     > done
+     >
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test 2: Closure with captured closure…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > > captured: 11
+     > done
+     >
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test 5: Closure with non-closure captured value…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > > non-closure capture: 43
+     > done
+     >
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test 7: Nested function in body…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > nested func: 5
+     > done
+     >
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test 8: Generator in body…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > generator: [ 1 2 3 ]
+     > done
+     >
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      ; Test 6: Closure with multiple captures…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > > > multi-capture: 3
+     > done
+     >
+
+● Bash(timeout 30 ./bin/froth
+      /home/mark/Documents/projects/froth/tests/compile_closure.froth)
+  ⎿  simple: 3                    
+     captured: 11
+     deep: 111
+     … +7 lines (ctrl+o to expand)
+
+● The test works, it just needed more time. Let me generate the expected output:
+
+● Bash(./bin/froth
+      /home/mark/Documents/projects/froth/tests/compile_closure.froth >
+      /home/mark/Documents/projects/froth/tests/compile_closure.expected)
+  ⎿  (No content)
+
+● Bash(./run_tests.sh 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● All 66 tests pass. Let me update the todos:
+
+● Read(tests/compile_closure.expected)
+  ⎿  Read 11 lines
+
+● Added test file tests/compile_closure.froth with coverage for:
+
+  1. Simple closure: { 1 2 + } → 3
+  2. Captured closure: { g! 1 + } with g = { 10 } → 11 (recursive compilation)
+  3. Deep recursion: h → g → f chain → 111
+  4. Cache reuse: Same closure compiled twice, addr unchanged
+  5. Non-closure capture: Integer captured → 43
+  6. Multiple captures: Two closures captured → 3
+  7. Nested function: { { 5 } ! } → 5
+  8. Generator: { [ 1 2 3 ] } → [1 2 3]
+
+  All 66 tests pass.
+
+> update FROTH_COMPILER.md 
+
+● Read(FROTH_COMPILER.md)
+  ⎿  Read 366 lines
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 1 line                                                        
+       8  |------|--------|-------------|
+       9  | `boundness` | boundness | Analyze variable binding in a node 
+          |
+      10  | `compile-func` | compile | Build node tree and run all analys
+          is passes |
+      11 +| `compile-named-closure` | compile | Compile a closure to byte
+         +code with caching |                                            
+      12  | `emit-all-at` | bytecode | Write array to bytecode store |
+      13  | `emit-at` | bytecode | Write value to bytecode store |
+      14  | `liveness` | liveness | Analyze last references in a node |
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 1 line                                                        
+      338  | Name | Stack Effect | Description |
+      339  |------|--------------|-------------|
+      340  | `compile-func` | `( code-map addr func -- code-map addr func
+           -node )` | Compile a function |
+      341 +| `compile-named-closure` | `( cache code-map addr closureval 
+          +name -- cache code-map addr bytecodeval )` | Compile a closure
+          + to bytecode |                                                
+      342  
+      343  Takes a quoted function and returns a fully analyzed function-
+           node. Recursively compiles nested functions before the outer f
+           unction, so each function's analysis can assume nested functio
+           ns are already complete.
+      344  
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 38 lines                                                      
+      365  tree-empty! 0 '{ /x { x } } compile-func! /node /addr /code-ma
+           p
+      366  node 'body @ 1 @ 'free-vars-map @  ; $ 0 'x : (nested func cap
+           tured x)
+      367  ```
+      368 +                                                              
+      369 +### compile-named-closure                                     
+      370 +                                                              
+      371 +Compiles a closureval to a bytecodeval, recursively compiling 
+          +any captured closures.                                        
+      372 +                                                              
+      373 +- `cache`: Cache for compiled closures (from `cache-empty!`)  
+      374 +- `code-map`: Tree23 for function deduplication               
+      375 +- `addr`: Next available bytecode address                     
+      376 +- `closureval`: The closure to compile                        
+      377 +- `name`: Quoted identifier for cache lookup                  
+      378 +- `bytecodeval`: The compiled closure (array + bytecode addres
+          +s)                                                            
+      379 +                                                              
+      380 +The function:                                                 
+      381 +1. Checks the cache for an already-compiled version           
+      382 +2. Opens the closure to get its body (quoted function) and env
+          +ironment                                                      
+      383 +3. Compiles the function body using `compile-func`            
+      384 +4. For each free variable binding from the closure's environme
+          +nt:                                                           
+      385 +   - If the value is an uncompiled closureval, recursively com
+          +piles it                                                      
+      386 +   - If it's already a bytecodeval or non-closure, uses it as-
+          +is                                                            
+      387 +5. Creates the bytecodeval with the context array and bytecode
+          + address                                                      
+      388 +6. Caches the result for future lookups                       
+      389 +                                                              
+      390 +```                                                           
+      391 +; Simple closure                                              
+      392 +{ 1 2 + } /f                                                  
+      393 +cache-empty! tree-empty! 0 f 'f compile-named-closure! /bv /ad
+          +dr /code-map /cache                                           
+      394 +bv!                            ; 3                            
+      395 +                                                              
+      396 +; Closure capturing another closure (recursive compilation)   
+      397 +{ 10 } /g                                                     
+      398 +{ g! 1 + } /f                                                 
+      399 +cache-empty! tree-empty! 0 f 'f compile-named-closure! /bv /ad
+          +dr /code-map /cache                                           
+      400 +bv!                            ; 11 (g is compiled automatical
+          +ly)                                                           
+      401 +                                                              
+      402 +; Cache reuse                                                 
+      403 +cache code-map addr f 'f compile-named-closure! /bv2 /addr2 /c
+          +ode-map /cache                                                
+      404 +addr addr2 =                   ; 0 (same address, cache hit)  
+      405 +```                                                           
+
+● Let me verify all tests still pass:
+
+● Bash(./run_tests.sh 2>&1 | tail -3)
+  ⎿  PASS: write                 
+
+     Results: 66 passed, 0 failed
+
+● Updated FROTH_COMPILER.md with:
+
+  1. Added compile-named-closure to the Quick Reference table
+  2. Added it to the Compile section's function table
+  3. Added detailed subsection documenting:
+    - Parameters: cache, code-map, addr, closureval, name
+    - Return values: updated cache, code-map, addr, and bytecodeval
+    - The 6-step algorithm
+    - Examples for simple closure, recursive compilation, and cache reuse
+
+  All 66 tests pass.
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                     
+     Your branch is ahead of 'origin/master' by 5 commits.
+       (use "git push" to publish your local commits)
+     … +13 lines (ctrl+o to expand)
+
+● Bash(git diff --cached)
+  ⎿  diff --git a/FROTH_COMPILER.md b/FROTH_COMPILER.md
+     index c3ca917..5f42d1a 100644
+     --- a/FROTH_COMPILER.md
+     … +246 lines (ctrl+o to expand)
+
+● Bash(git log --oneline -5)
+  ⎿  3779319 add transcripts 78 and 79               
+     7a947fa Add factorial function to math module
+     a1895f6 Add cache module for closure compilation
+     … +2 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Add compile-named-closure function for compiling closures
+      to bytecode…)
+  ⎿ [master ed895b8] Add compile-named-closure function for compiling closu
+    res to bytecode
+     5 files changed, 160 insertions(+), 2 deletions(-)
+    … +2 lines (ctrl+o to expand)
+
+
+● Bash(git status)
+  ⎿  On branch master                                     
+     Your branch is ahead of 'origin/master' by 6 commits.
+       (use "git push" to publish your local commits)
+     … +8 lines (ctrl+o to expand)
+
+● Committed ed895b8:
+
+  - lib/compile.froth: Added compile-named-closure function with recursive compilation of captured closures
+  - FROTH_COMPILER.md: Added documentation in Quick Reference and detailed subsection
+  - tests/compile_closure.froth: New test file with 8 test cases
+  - tests/codegen.expected: Updated for intern ID shift
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 147k/200k tokens (74%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 17.7k tokens (8.9%)
+     ⛁ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Messages: 66.5k tokens (33.3%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 53k (26.5%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 127 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.5k tokens
+     └ FROTH_COMPILER.md: 5.1k tokens
+     └ FROTH_BYTECODE.md: 851 tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> Let's write a `compile` function with signature `( cache code-map addr 
+env-map name -- cache code-map addr env-map )` where:
+ - cache, code-map, and addr are the same as for compile-closure
+ - env-map is a map to be updated
+ - name is the name of the identifier to compile
+ - looks up identifier, calls compile-closure, and updates env-map with the 
+new value 
+
+● Read(lib/compile.froth)
+  ⎿  Read 132 lines
+
+● Update(lib/compile.froth)
+  ⎿  Added 9 lines                                                       
+      126  ; Compile a closure to bytecode with caching.
+      127  { compile-closure-impl compile-closure-impl! } /compile-named-
+           closure
+      128  
+      129 +; compile: (cache code-map addr env-map name -- cache code-map
+          + addr env-map)                                                
+      130 +; Look up identifier in env-map, compile it, and update env-ma
+          +p with the result.                                            
+      131 +{ /name /env-map /addr /code-map /cache                       
+      132 +  env-map name @ /closureval                                  
+      133 +  cache code-map addr closureval name compile-named-closure!  
+      134 +  /bytecodeval /addr /code-map /cache                         
+      135 +  cache code-map addr env-map bytecodeval name :              
+      136 +} /compile                                                    
+      137 +                                                              
+      138  ; Remove impl functions
+      139  env 'compile-term-impl delete 'compile-seq-impl delete 'compil
+           e-func-impl delete
+      140      'compile-closure-impl delete restore
+
+● Bash(timeout 30 ./bin/froth <<'EOF'
+      ; Test compile function…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.  
+     > > > > > > > > > > > f compiled: 3
+     > > > > > g compiled: 10
+     … +2 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | tail -3)
+  ⎿  multiple non-tail calls: 15 
+     non-tail with bound var: 107
+     done
+
+● Bash(./run_tests.sh 2>&1 | grep -E "^(Results|FAIL)")
+  ⎿  FAIL: codegen               
+     Results: 65 passed, 1 failed
+
+● Bash(./bin/froth /home/mark/Documents/projects/froth/tests/codegen.froth >
+      /home/mark/Documents/projects/froth/tests/codegen.expected &&
+      ./run_tests.sh 2>&1 | grep -…)
+  ⎿  Results: 66 passed, 0 failed
+
+● Let me add a test for compile and update the documentation:
+
+● Update(tests/compile_closure.froth)
+  ⎿  Added 6 lines                                                       
+      48  cache code-map addr f8 'f8 compile-named-closure! /bv8 /addr /c
+          ode-map /cache
+      49  "generator: " print bv8! writeln!
+      50  
+      51 +; Test 9: compile function (lookup, compile, update env-map)   
+      52 +{ 100 } /h                                                     
+      53 +$ h 'h : /env-map                                              
+      54 +cache code-map addr env-map 'h compile! /env-map /addr /code-ma
+         +p /cache                                                       
+      55 +"compile: " print env-map 'h @ ! println!                      
+      56 +                                                               
+      57  "done" println!
+
+● Bash(./bin/froth
+      /home/mark/Documents/projects/froth/tests/compile_closure.froth >
+      /home/mark/Documents/projects/froth/tests/compile_closure.expected)
+  ⎿  (No content)
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 1 line                                                        
+       7  | Name | Module | Description |
+       8  |------|--------|-------------|
+       9  | `boundness` | boundness | Analyze variable binding in a node 
+          |
+      10 +| `compile` | compile | Compile a binding in an env-map |      
+      11  | `compile-func` | compile | Build node tree and run all analys
+          is passes |
+      12  | `compile-named-closure` | compile | Compile a closure to byte
+          code with caching |
+      13  | `emit-all-at` | bytecode | Write array to bytecode store |
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 1 line                                                        
+      338  
+      339  | Name | Stack Effect | Description |
+      340  |------|--------------|-------------|
+      341 +| `compile` | `( cache code-map addr env-map name -- cache cod
+          +e-map addr env-map )` | Compile a binding in env-map |        
+      342  | `compile-func` | `( code-map addr func -- code-map addr func
+           -node )` | Compile a function |
+      343  | `compile-named-closure` | `( cache code-map addr closureval 
+           name -- cache code-map addr bytecodeval )` | Compile a closure
+            to bytecode |
+      344  
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 22 lines                                                      
+      405  cache code-map addr f 'f compile-named-closure! /bv2 /addr2 /c
+           ode-map /cache
+      406  addr addr2 =                   ; 0 (same address, cache hit)
+      407  ```
+      408 +                                                              
+      409 +### compile                                                   
+      410 +                                                              
+      411 +Convenience wrapper that looks up a binding in an env-map, com
+          +piles it, and updates the map.                                
+      412 +                                                              
+      413 +- `cache`: Cache for compiled closures                        
+      414 +- `code-map`: Tree23 for function deduplication               
+      415 +- `addr`: Next available bytecode address                     
+      416 +- `env-map`: Map from identifiers to closures                 
+      417 +- `name`: Quoted identifier to compile                        
+      418 +                                                              
+      419 +```                                                           
+      420 +{ 1 2 + } /f                                                  
+      421 +{ 10 } /g                                                     
+      422 +$ f 'f : g 'g : /env-map                                      
+      423 +                                                              
+      424 +cache-empty! tree-empty! 0 env-map 'f compile! /env-map /addr 
+          +/code-map /cache                                              
+      425 +env-map 'f @ !                 ; 3 (compiled and executed)    
+      426 +                                                              
+      427 +cache code-map addr env-map 'g compile! /env-map /addr /code-m
+          +ap /cache                                                     
+      428 +env-map 'g @ !                 ; 10                           
+      429 +```                                                           
+
+● Bash(./run_tests.sh 2>&1 | grep -E "^(Results|FAIL)")
+  ⎿  Results: 66 passed, 0 failed
+
+● Read(tests/compile_closure.expected)
+  ⎿  Read 12 lines
+
+● Added compile function:
+
+  Signature: ( cache code-map addr env-map name -- cache code-map addr env-map )
+
+  Implementation (in lib/compile.froth):
+  { /name /env-map /addr /code-map /cache
+    env-map name @ /closureval
+    cache code-map addr closureval name compile-named-closure!
+    /bytecodeval /addr /code-map /cache
+    cache code-map addr env-map bytecodeval name :
+  } /compile
+
+  - Looks up name in env-map
+  - Calls compile-named-closure on the closure
+  - Updates env-map with the compiled bytecodeval
+
+  Updated:
+  - lib/compile.froth - added function
+  - tests/compile_closure.froth - added test case
+  - tests/compile_closure.expected - updated
+  - tests/codegen.expected - regenerated for ID shift
+  - FROTH_COMPILER.md - documented in Quick Reference and Compile section
+
+  All 66 tests pass.
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                     
+     Your branch is ahead of 'origin/master' by 6 commits.
+       (use "git push" to publish your local commits)
+     … +13 lines (ctrl+o to expand)
+
+● Bash(git diff --cached --stat)
+  ⎿   FROTH_COMPILER.md              | 24 ++++++++++++++++++++++++
+      lib/compile.froth              |  9 +++++++++
+      tests/codegen.expected         |  2 +-
+     … +3 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Add compile function for compiling bindings in an
+      env-map…)
+  ⎿ [master cc78d2a] Add compile function for compiling bindings in an env-
+    map
+     5 files changed, 41 insertions(+), 1 deletion(-)
+
+
+● Bash(git log --oneline -3)
+  ⎿ cc78d2a Add compile function for compiling bindings in an env-map      
+    ed895b8 Add compile-named-closure function for compiling closures to by
+    tecode
+    3779319 add transcripts 78 and 79
+
+
+● Committed cc78d2a: Add compile function for compiling bindings in an env-map
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 158k/200k tokens (79%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 17.7k tokens (8.9%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛶ ⛶ ⛶   ⛁ Messages: 77.1k tokens (38.6%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 42k (21.1%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 127 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.5k tokens
+     └ FROTH_COMPILER.md: 5.1k tokens
+     └ FROTH_BYTECODE.md: 851 tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> Let's add some informative output to the compiler. Have `compile-func` and
+ `compile-closure` output a line of information when compilation occurs 
+(don't print anything for cache hits). 
+
+● Read(lib/compile.froth)
+  ⎿  Read 141 lines
+
+● Update(lib/compile.froth)
+  ⎿  Added 1 line                                                        
+      50      code-map addr cached-node
+      51    } {
+      52      ; Not in cache (tree-get returned 1): build node, run passe
+          s, add to cache
+      53 +    "compile-func: " print func write " at " print addr println
+         +!                                                              
+      54      ; seq-fn returns (code-map addr body) - leave code-map and 
+          addr on stack
+      55      code-map addr func 0 seq-fn term-fn func-fn seq-fn! /body
+      56      ; Stack: new-code-map new-addr
+
+● Update(lib/compile.froth)
+  ⎿  Added 1 line                                                        
+      81      cache code-map addr bytecodeval
+      82    } {
+      83      ; Not found (cache-get returned 1)
+      84 +    "compile-closure: " print name write println!              
+      85      closureval open /body /env
+      86  
+      87      ; Compile the function body
+
+● Bash(timeout 30 ./bin/froth <<'EOF'
+      { 10 } /g…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                                 
+     > > > compile-closure: 'fRuntime error: stack underflow in 'print'
+     > result: Runtime error: undefined name: bv
+     >
+
+● Bash(timeout 30 ./bin/froth <<'EOF'
+      { 1 2 + } /f…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                               
+     > > compile-closure: 'fRuntime error: stack underflow in 'print'
+     > result: Runtime error: undefined name: bv
+     >
+
+● Bash(timeout 10 ./bin/froth <<'EOF'
+      "test: " print 'foo write println!…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                    
+     > test: 'fooRuntime error: stack underflow in 'print'
+     > done
+     >
+
+● I see the issue - println! expects a value to print, but I'm using it after write which already consumed the value. I should use nl! for just a newline:
+
+● Update(lib/compile.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      50      code-map addr cached-node
+      51    } {
+      52      ; Not in cache (tree-get returned 1): build node, run passe
+          s, add to cache
+      53 -    "compile-func: " print func write " at " print addr println
+         -!                                                              
+      53 +    "compile-func: " print func write " at " print addr print n
+         +l!                                                             
+      54      ; seq-fn returns (code-map addr body) - leave code-map and 
+          addr on stack
+      55      code-map addr func 0 seq-fn term-fn func-fn seq-fn! /body
+      56      ; Stack: new-code-map new-addr
+
+● Update(lib/compile.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      81      cache code-map addr bytecodeval
+      82    } {
+      83      ; Not found (cache-get returned 1)
+      84 -    "compile-closure: " print name write println!              
+      84 +    "compile-closure: " print name write nl!                   
+      85      closureval open /body /env
+      86  
+      87      ; Compile the function body
+
+● Bash(timeout 30 ./bin/froth <<'EOF'
+      { 10 } /g…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.                               
+     > > > compile-closure: 'f
+     compile-func: '{ g ! 1 + } at 0Runtime error: undefined name: nl
+     … +2 lines (ctrl+o to expand)
+
+● nl isn't available in the minimal environment. Let me use a newline string:
+
+● Update(lib/compile.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      50      code-map addr cached-node
+      51    } {
+      52      ; Not in cache (tree-get returned 1): build node, run passe
+          s, add to cache
+      53 -    "compile-func: " print func write " at " print addr print n
+         -l!                                                             
+      53 +    "compile-func: " print func write " at " print addr print "
+         +\n" print                                                      
+      54      ; seq-fn returns (code-map addr body) - leave code-map and 
+          addr on stack
+      55      code-map addr func 0 seq-fn term-fn func-fn seq-fn! /body
+      56      ; Stack: new-code-map new-addr
+
+● Update(lib/compile.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      81      cache code-map addr bytecodeval
+      82    } {
+      83      ; Not found (cache-get returned 1)
+      84 -    "compile-closure: " print name write nl!                   
+      84 +    "compile-closure: " print name write "\n" print            
+      85      closureval open /body /env
+      86  
+      87      ; Compile the function body
+
+● Bash(timeout 30 ./bin/froth <<'EOF'
+      { 10 } /g…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > compile-closure: 'f
+     compile-func: '{ g ! 1 + } at 0
+     … +4 lines (ctrl+o to expand)
+
+● Bash(timeout 30 ./bin/froth <<'EOF'
+      { 42 } /f…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > compile-closure: 'f
+     compile-func: '{ 42 } at 0
+     … +3 lines (ctrl+o to expand)
+
+● Now I need to update the test expected outputs since they now include compile messages:
+
+● Bash(./bin/froth
+      /home/mark/Documents/projects/froth/tests/compile_closure.froth 2>&1 |
+      head -30)
+  ⎿  compile-closure: 'f           
+     compile-func: '{ 1 2 + } at 0
+     simple: 3
+     … +27 lines (ctrl+o to expand)
+
+● Bash(./bin/froth
+      /home/mark/Documents/projects/froth/tests/compile_closure.froth >
+      /home/mark/Documents/projects/froth/tests/compile_closure.expected
+      ./bin/froth /ho…)
+  ⎿  (No content)
+
+● Bash(./run_tests.sh 2>&1 | grep -E "^(Results|FAIL)")
+  ⎿  FAIL: boundness              
+     FAIL: liveness
+     FAIL: save_slots
+     … +2 lines (ctrl+o to expand)
+
+● Bash(for test in boundness liveness save_slots slots; do
+        ./bin/froth /home/mark/Documents/projects/froth/tests/${test}.froth >
+      /home/mark/Documents/projects/froth/…)
+  ⎿  Error: Exit code 2
+     /bin/bash: eval: line 2: syntax error: unexpected end of file
+
+● Bash(./bin/froth /home/mark/Documents/projects/froth/tests/boundness.froth >
+      /home/mark/Documents/projects/froth/tests/boundness.expected)
+  ⎿  (No content)
+
+● Bash(./bin/froth /home/mark/Documents/projects/froth/tests/liveness.froth >
+      /home/mark/Documents/projects/froth/tests/liveness.expected
+      ./bin/froth /home/mark/Docume…)
+  ⎿  (No content)
+
+● Bash(./run_tests.sh 2>&1 | grep -E "^(Results|FAIL)")
+  ⎿  Results: 66 passed, 0 failed
+
+● All 66 tests pass. Here's an example of the new output:
+
+● Bash(timeout 30 ./bin/froth <<'EOF'
+      { 1 } /a…)
+  ⎿  Froth REPL. Press Ctrl-D to exit.
+     > > > > compile-closure: 'add-ab
+     compile-func: '{ a ! b ! + } at 0
+     … +6 lines (ctrl+o to expand)
+
+● Added informative output:
+
+  - compile-func: compile-func: '{ body } at <addr> - shows function body and bytecode address
+  - compile-closure: compile-closure: '<name> - shows the closure name being compiled
+
+  Cache hits produce no output. The recursive compilation of captured closures is visible in the output trace.
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                     
+     Your branch is ahead of 'origin/master' by 7 commits.
+       (use "git push" to publish your local commits)
+     … +15 lines (ctrl+o to expand)
+
+● Bash(git diff --cached lib/compile.froth)
+  ⎿  diff --git a/lib/compile.froth b/lib/compile.froth
+     index 009b57a..0b7a426 100644
+     --- a/lib/compile.froth
+     … +20 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Add informative output to compiler…)
+  ⎿  [master 3351e6f] Add informative output to compiler
+      7 files changed, 135 insertions(+), 2 deletions(-)
+
+● Bash(git log --oneline -3)
+  ⎿ 3351e6f Add informative output to compiler                             
+    cc78d2a Add compile function for compiling bindings in an env-map
+    ed895b8 Add compile-named-closure function for compiling closures to by
+    tecode
+
+
+● Committed 3351e6f: Add informative output to compiler
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 171k/200k tokens (85%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 17.7k tokens (8.9%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 90.1k tokens (45.1%)
+     ⛁ ⛁ ⛁ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 29k (14.7%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 127 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.5k tokens
+     └ FROTH_COMPILER.md: 5.1k tokens
+     └ FROTH_BYTECODE.md: 851 tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> Move documentation for the cache module into FROTH_COMPILER 
+
+● Search(pattern: "## Cache", path: "FROTH_LIBRARY.md", output_mode: "content")
+  ⎿  Found 31 lines (ctrl+o to expand)
+
+● Read(FROTH_COMPILER.md)
+  ⎿  Read 430 lines
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 3 lines                                                       
+       7  | Name | Module | Description |
+       8  |------|--------|-------------|
+       9  | `boundness` | boundness | Analyze variable binding in a node 
+          |
+      10 +| `cache-empty` | cache | Create an empty cache |              
+      11 +| `cache-get` | cache | Look up key under identifier |         
+      12 +| `cache-set` | cache | Store key-value pair under identifier |
+      13  | `compile` | compile | Compile a binding in an env-map |
+      14  | `compile-func` | compile | Build node tree and run all analys
+          is passes |
+      15  | `compile-named-closure` | compile | Compile a closure to byte
+          code with caching |
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 23 lines                                                      
+       86  [] 0 close !               ; returns 3
+       87  ```
+       88  
+       89 +## Cache (cache.froth)                                        
+       90 +                                                              
+       91 +Two-level cache mapping identifiers to alists of (key, value) 
+          +pairs. Used by the compiler to cache compiled closures, avoidi
+          +ng recompilation when the same closure is encountered multiple
+          + times.                                                       
+       92 +                                                              
+       93 +| Name | Stack Effect | Description |                         
+       94 +|------|--------------|-------------|                         
+       95 +| `cache-empty` | `( -- cache )` | Create an empty cache |    
+       96 +| `cache-get` | `( cache 'ident key -- value 0 \| 1 )` | Look 
+          +up key under identifier |                                     
+       97 +| `cache-set` | `( cache 'ident key value -- cache' )` | Store
+          + key-value pair under identifier |                            
+       98 +                                                              
+       99 +The cache uses a map for the outer structure (identifier → ali
+          +st) and alists for the inner structure (key → value). This pro
+          +vides O(1) lookup in the common case where each identifier map
+          +s to a single entry.                                          
+      100 +                                                              
+      101 +```                                                           
+      102 +cache-empty! /c                                               
+      103 +{1} /f                                                        
+      104 +                                                              
+      105 +c 'my-func f "compiled" cache-set! /c                         
+      106 +c 'my-func f cache-get!            ; "compiled" 0 (found)     
+      107 +c 'my-func {2} cache-get!          ; 1 (not found - different 
+          +closure)                                                      
+      108 +```                                                           
+      109 +                                                              
+      110 +Note: Closures are compared by identity, not structural equali
+          +ty. Two `{1}` literals are different closures.                
+      111 +                                                              
+      112  ## Ops (ops.froth)
+      113  
+      114  Operator table for bytecode generation.
+
+● Now remove it from FROTH_LIBRARY.md:
+
+● Read(FROTH_LIBRARY.md)
+  ⎿  Read 35 lines
+
+● Update(FROTH_LIBRARY.md)
+  ⎿  Removed 23 lines                                                    
+      268  a 1 alist-delete! /a           ; . [2 "two"] ,
+      269  ```
+      270  
+      271 -## Cache (cache.froth)                                        
+      272 -                                                              
+      273 -Two-level cache mapping identifiers to alists of (key, value) 
+          -pairs. Used by the compiler to cache compiled closures, avoidi
+          -ng recompilation when the same closure is encountered multiple
+          - times.                                                       
+      274 -                                                              
+      275 -| Name | Stack Effect | Description |                         
+      276 -|------|--------------|-------------|                         
+      277 -| `cache-empty` | `( -- cache )` | Create an empty cache |    
+      278 -| `cache-get` | `( cache 'ident key -- value 0 \| 1 )` | Look 
+          -up key under identifier |                                     
+      279 -| `cache-set` | `( cache 'ident key value -- cache' )` | Store
+          - key-value pair under identifier |                            
+      280 -                                                              
+      281 -The cache uses a map for the outer structure (identifier → ali
+          -st) and alists for the inner structure (key → value). This pro
+          -vides O(1) lookup in the common case where each identifier map
+          -s to a single entry.                                          
+      282 -                                                              
+      283 -```                                                           
+      284 -cache-empty! /c                                               
+      285 -{1} /f                                                        
+      286 -                                                              
+      287 -c 'my-func f "compiled" cache-set! /c                         
+      288 -c 'my-func f cache-get!            ; "compiled" 0 (found)     
+      289 -c 'my-func {2} cache-get!          ; 1 (not found - different 
+          -closure)                                                      
+      290 -```                                                           
+      291 -                                                              
+      292 -Note: Closures are compared by identity, not structural equali
+          -ty. Two `{1}` literals are different closures.                
+      293 -                                                              
+      271  ## Tree23 (tree23.froth)
+      272  
+      273  A 2-3 tree for balanced key-value storage with O(log n) operat
+           ions. Keys must be integers; use `ref` to convert other values
+            to integer keys.
+
+● Now remove cache from the Quick Reference table in FROTH_LIBRARY.md:
+
+● Search(pattern: "cache", path: "FROTH_LIBRARY.md", output_mode: "content")
+  ⎿  Found 3 lines (ctrl+o to expand)
+
+● Read(FROTH_LIBRARY.md)
+  ⎿  Read 30 lines
+
+● Update(FROTH_LIBRARY.md)
+  ⎿  Removed 3 lines                                                     
+      18  | `alist-values` | alist | Get all values as array |
+      19  | `and` | bool | Logical and |
+      20  | `bench` | bench | Benchmark closure execution |
+      21 -| `cache-empty` | cache | Create an empty cache |              
+      22 -| `cache-get` | cache | Look up key under identifier |         
+      23 -| `cache-set` | cache | Store key-value pair under identifier |
+      21  | `concat` | array | Concatenate two arrays (copies both) |
+      22  | `contains` | array | Check if array contains element |
+      23  | `def-fn` | defs | Create closure with minimal environment |
+
+● Bash(./run_tests.sh 2>&1 | grep -E "^(Results|FAIL)")
+  ⎿  Results: 66 passed, 0 failed
+
+● All 66 tests pass. Moved cache documentation from FROTH_LIBRARY.md to FROTH_COMPILER.md:
+
+  - Added cache-empty, cache-get, cache-set to Quick Reference table
+  - Added Cache section after Bytecode, before Ops
+  - Removed cache entries and section from FROTH_LIBRARY.md
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                               
+     Your branch is up to date with 'origin/master'.
+     … +10 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Move cache module documentation to FROTH_COMPILER.md…)
+  ⎿  [master cdc7ac1] Move cache module documentation to FROTH_COMPILER.md
+      2 files changed, 26 insertions(+), 26 deletions(-)
+
+● Committed cdc7ac1: Move cache module documentation to FROTH_COMPILER.md
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 186k/200k tokens (93%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 17.7k tokens (8.9%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 105.9k tokens (52.9%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 14k (6.8%)
+     ⛁ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 127 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.5k tokens
+     └ FROTH_COMPILER.md: 5.1k tokens
+     └ FROTH_BYTECODE.md: 851 tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
