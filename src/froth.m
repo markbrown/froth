@@ -157,14 +157,16 @@ get_stdlib_path(StdlibPath, !IO) :-
     --->    init_ok(operator_table, string_table, array(int), env)
     ;       init_error.
 
-:- pred init_with_stdlib(init_result::out, io::di, io::uo) is cc_multi.
+:- pred init_with_stdlib(init_result::out,
+    array(value)::array_uo, hash_table(value, int)::hash_table_uo,
+    io::di, io::uo) is cc_multi.
 
-init_with_stdlib(Result, !IO) :-
+init_with_stdlib(Result, Pool, HT, !IO) :-
     get_stdlib_path(StdlibPath, !IO),
     io.file.check_file_accessibility(StdlibPath, [read], AccessResult, !IO),
     (
         AccessResult = ok,
-        eval_stdlib(StdlibPath, EvalResult, !IO),
+        eval_stdlib(StdlibPath, EvalResult, Pool, HT, !IO),
         (
             EvalResult = stdlib_ok(OpTable, ST, BC, Env),
             Result = init_ok(OpTable, ST, BC, Env)
@@ -177,6 +179,7 @@ init_with_stdlib(Result, !IO) :-
         % Stdlib not found, initialize without it
         init_tables(ST, OpTable),
         bytecode.init(BC),
+        init_pool(Pool, HT),
         Result = init_ok(OpTable, ST, BC, map.init)
     ).
 
@@ -192,9 +195,11 @@ init_without_stdlib(OpTable, ST, BC, Env) :-
     --->    stdlib_ok(operator_table, string_table, array(int), env)
     ;       stdlib_error.
 
-:- pred eval_stdlib(string::in, stdlib_result::out, io::di, io::uo) is cc_multi.
+:- pred eval_stdlib(string::in, stdlib_result::out,
+    array(value)::array_uo, hash_table(value, int)::hash_table_uo,
+    io::di, io::uo) is cc_multi.
 
-eval_stdlib(StdlibPath, Result, !IO) :-
+eval_stdlib(StdlibPath, Result, Pool, HT, !IO) :-
     LibDir = dir.dirname(StdlibPath),
     io.read_named_file_as_string(StdlibPath, ReadResult, !IO),
     (
@@ -213,13 +218,14 @@ eval_stdlib(StdlibPath, Result, !IO) :-
                     Terms, map.init, Array0, Ptr0, Pool0, HT0), EvalResult, !IO),
                 (
                     EvalResult = succeeded({ST, BC, Env, _Array, _Ptr,
-                        _Pool, _HT}),
+                        Pool, HT}),
                     Result = stdlib_ok(OpTable, ST, BC, Env)
                 ;
                     EvalResult = exception(Exn),
                     ( if univ_to_type(Exn, EvalError) then
                         io.format("Runtime error in stdlib: %s\n",
                             [s(types.format_error(ST1, EvalError))], !IO),
+                        init_pool(Pool, HT),
                         Result = stdlib_error
                     else
                         rethrow(EvalResult)
@@ -229,18 +235,21 @@ eval_stdlib(StdlibPath, Result, !IO) :-
                 ParseResult = error(ParseError),
                 io.format("In stdlib: ", [], !IO),
                 report_parse_error(ParseError, !IO),
+                init_pool(Pool, HT),
                 Result = stdlib_error
             )
         ;
             LexResult = error(LexError),
             io.format("In stdlib: ", [], !IO),
             report_lex_error(LexError, !IO),
+            init_pool(Pool, HT),
             Result = stdlib_error
         )
     ;
         ReadResult = error(Error),
         io.format("Error reading stdlib '%s': %s\n",
             [s(StdlibPath), s(io.error_message(Error))], !IO),
+        init_pool(Pool, HT),
         Result = stdlib_error
     ).
 
@@ -274,11 +283,10 @@ run_with_options(Opts, !IO) :-
         init_pool(Pool0, HT0),
         run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, Pool0, HT0, !IO)
     else
-        init_with_stdlib(InitResult, !IO),
+        init_with_stdlib(InitResult, Pool0, HT0, !IO),
         (
             InitResult = init_ok(OpTable, ST0, BC0, Env0),
             datastack.init(Array0, Ptr0),
-            init_pool(Pool0, HT0),
             run_actions(Opts, OpTable, ST0, BC0, Env0, Array0, Ptr0, Pool0, HT0, !IO)
         ;
             InitResult = init_error,
