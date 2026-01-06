@@ -1,6 +1,6 @@
 ; liveness.froth - Liveness analysis for compiler
 
-; liveness-term-impl: (bnd-map seen need-ctx seen-nontail seen-restore-ctx seen-frame is-tail seq-fn term-fn -- result-map new-seen new-need-ctx new-seen-nontail new-seen-restore-ctx new-seen-frame)
+; liveness-term-impl: (bnd-map seen need-ctx seen-nontail seen-restore-ctx seen-frame is-tail bound-set seq-fn term-fn -- result-map new-seen new-need-ctx new-seen-nontail new-seen-restore-ctx new-seen-frame)
 ; Analyze a single term for liveness (last reference) and context/return restore.
 ; Takes node (with 'term key), returns node with liveness info added.
 ; seen: set of variables still live after this point
@@ -9,8 +9,9 @@
 ; seen-restore-ctx: 0 if we've seen a call needing context restore
 ; seen-frame: 0 if we've seen any frame usage (bound var access or register restore)
 ; is-tail: 0 if this term is in tail position
+; bound-set: set of variables bound in the outer function
 ; Traverses right-to-left using boundness info.
-['delete-keys 'add-keys 'restrict 'not 'and 'or 'filter 'lfoldr] { /term-fn /seq-fn /is-tail /seen-frame /seen-restore-ctx /seen-nontail /need-ctx /seen /bnd-map
+['delete-keys 'add-keys 'restrict 'not 'and 'or 'filter 'lfoldr] { /term-fn /seq-fn /bound-set /is-tail /seen-frame /seen-restore-ctx /seen-nontail /need-ctx /seen /bnd-map
   bnd-map 'term @ /term
   ; Check if this is a variable (identifier that's not an operator)
   term isIdent {
@@ -56,9 +57,16 @@
     ; Add all free vars to seen (binders to left need to see them as used)
     seen inner-free-set keys add-keys! /new-seen
     ; Add dead-set to node
-    bnd-map dead-set 'dead-set :
-    ; Return result; outer state unchanged
-    new-seen need-ctx seen-nontail seen-restore-ctx seen-frame
+    bnd-map dead-set 'dead-set : /bnd-map2
+    ; Check if closure captures any bound variables (frame needed for context)
+    ; in returns 0 if found, 1 if not found. Filter keeps items where predicate returns 0.
+    inner-free-set keys { /v bound-set v in } filter! # 0 > /has-bound-captures
+    ; If captures bound vars and this is first frame usage, mark leave-frame
+    has-bound-captures seen-frame 1 = and! /needs-leave-frame
+    needs-leave-frame { bnd-map2 0 'leave-frame : } { bnd-map2 } ?! /bnd-map3
+    has-bound-captures { 0 } { seen-frame } ?! /new-seen-frame
+    ; Return result
+    bnd-map3 new-seen need-ctx seen-nontail seen-restore-ctx new-seen-frame
   } {
   term isGen {
     ; Generator: shares scope for free vars, but binders are local
@@ -71,8 +79,10 @@
     seen bound-vars delete-keys! /gen-seen
     ; Process generator with modified seen; generators don't have tail calls (is-tail=1)
     ; Generators share seen-nontail, seen-restore-ctx, seen-frame with outer scope
+    ; Generator's bound-set is union of outer bound-set and inner bound-set
+    bound-set inner-bound-set keys add-keys! /gen-bound-set
     inner-body # 1 - /inner-last-idx
-    inner-body gen-seen need-ctx seen-nontail seen-restore-ctx seen-frame inner-last-idx 1 seq-fn term-fn seq-fn! /new-seen-frame /new-seen-restore-ctx /new-seen-nontail /new-need-ctx /after-seen /new-body-list
+    inner-body gen-seen need-ctx seen-nontail seen-restore-ctx seen-frame inner-last-idx gen-bound-set 1 seq-fn term-fn seq-fn! /new-seen-frame /new-seen-restore-ctx /new-seen-nontail /new-need-ctx /after-seen /new-body-list
     ; Convert list to array (lfoldr goes tail-to-head, reversing the list order)
     [ new-body-list { } lfoldr! ] /new-body
     ; Restore shadowed vars
@@ -108,19 +118,20 @@
   } ?! } ?! } ?! } ?! } ?! } ?!
 } def-fn! /liveness-term-impl
 
-; liveness-seq-impl: (body-arr seen need-ctx seen-nontail seen-restore-ctx seen-frame idx is-tail seq-fn term-fn -- new-body-list new-seen new-need-ctx new-seen-nontail new-seen-restore-ctx new-seen-frame)
+; liveness-seq-impl: (body-arr seen need-ctx seen-nontail seen-restore-ctx seen-frame idx bound-set is-tail seq-fn term-fn -- new-body-list new-seen new-need-ctx new-seen-nontail new-seen-restore-ctx new-seen-frame)
 ; Process terms from idx down to 0 (right-to-left)
 ; is-tail: 0 for first term (rightmost), 1 for rest
+; bound-set: set of variables bound in the outer function
 ; Returns a list in reverse order (rightmost element at head)
-['liveness-term-impl] { /term-fn /seq-fn /is-tail /idx /seen-frame /seen-restore-ctx /seen-nontail /need-ctx /seen /body-arr
+['liveness-term-impl] { /term-fn /seq-fn /is-tail /bound-set /idx /seen-frame /seen-restore-ctx /seen-nontail /need-ctx /seen /body-arr
   idx 0 < {
     ; Done: return empty list and current state
     . seen need-ctx seen-nontail seen-restore-ctx seen-frame
   } {
     ; Process current term (rightmost remaining)
-    body-arr idx @ seen need-ctx seen-nontail seen-restore-ctx seen-frame is-tail seq-fn term-fn term-fn! /after-seen-frame /after-seen-restore-ctx /after-seen-nontail /after-need-ctx /after-term-seen /term-map
+    body-arr idx @ seen need-ctx seen-nontail seen-restore-ctx seen-frame is-tail bound-set seq-fn term-fn term-fn! /after-seen-frame /after-seen-restore-ctx /after-seen-nontail /after-need-ctx /after-term-seen /term-map
     ; Recurse for rest (to the left); is-tail becomes 1 (not tail)
-    body-arr after-term-seen after-need-ctx after-seen-nontail after-seen-restore-ctx after-seen-frame idx 1 - 1 seq-fn term-fn seq-fn! /rest-seen-frame /rest-seen-restore-ctx /rest-seen-nontail /rest-need-ctx /rest-seen /rest-body
+    body-arr after-term-seen after-need-ctx after-seen-nontail after-seen-restore-ctx after-seen-frame idx 1 - bound-set 1 seq-fn term-fn seq-fn! /rest-seen-frame /rest-seen-restore-ctx /rest-seen-nontail /rest-need-ctx /rest-seen /rest-body
     ; Cons current node onto rest (builds list in reverse order)
     rest-body term-map , rest-seen rest-need-ctx rest-seen-nontail rest-seen-restore-ctx rest-seen-frame
   } ?!
@@ -139,9 +150,10 @@
 ;   'needs-frame: 0 if function needs a frame (function-level)
 ['liveness-seq-impl 'liveness-term-impl 'lfoldr] { /func-node
   func-node 'body @ /body
+  func-node 'bound-set @ /bound-set
   body # 1 - /last-idx
   ; Start with need-ctx=1, seen-nontail=1, seen-restore-ctx=1, seen-frame=1, is-tail=0
-  body $ 1 1 1 1 last-idx 0 liveness-seq-impl liveness-term-impl liveness-seq-impl!
+  body $ 1 1 1 1 last-idx bound-set 0 liveness-seq-impl liveness-term-impl liveness-seq-impl!
   /final-seen-frame /final-seen-restore-ctx /final-seen-nontail /final-need-ctx /final-seen /new-body-list
   ; Convert list to array (lfoldr goes tail-to-head, reversing the list order)
   [ new-body-list { } lfoldr! ] /new-body
