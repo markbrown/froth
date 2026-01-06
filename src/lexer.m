@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % lexer.m
-% Lexical analyzer for the Froth programming language.
+% Lexical analyzer for the Froth! programming language.
 %-----------------------------------------------------------------------%
 
 :- module lexer.

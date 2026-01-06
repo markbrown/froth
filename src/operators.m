@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % operators.m
-% Operator implementations for the Froth programming language.
+% Operator implementations for the Froth! programming language.
 %-----------------------------------------------------------------------%
 
 :- module operators.
@@ -694,7 +694,7 @@ operator_delete(!Array, !Ptr) :-
 
 %-----------------------------------------------------------------------%
 % Type testing predicates
-% Each returns 0 if true, 1 if false (following Froth's boolean convention)
+% Each returns 0 if true, 1 if false (following Froth!'s boolean convention)
 %-----------------------------------------------------------------------%
 
 operator_is_int(!Array, !Ptr) :-

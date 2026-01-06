@@ -1,6 +1,8 @@
-# Froth
+# Froth!
 
-Froth is a stack-based programming language with lexical scoping.
+Froth! is a stack-based programming language with lexical scoping.
+
+This project is an experiment in getting Claude Code to write a self-hosted compiler in a language that did not exist at the time Claude's model was trained.
 
 ## Usage
 
@@ -44,9 +46,9 @@ The REPL maintains state across lines: stack and variable bindings persist. Pres
 
 ## Language Comparison
 
-Froth combines Forth's stack-based execution with Scheme's lexical scoping and first-class closures.
+Froth! combines Forth's stack-based execution with Scheme's lexical scoping and first-class closures.
 
-| | Forth | Scheme | Froth |
+| | Forth | Scheme | Froth! |
 |-|-------|--------|-------|
 | Paradigm | Stack-based, imperative | Functional, expression-based | Stack-based, functional |
 | Syntax | `1 2 +` | `(+ 1 2)` | `1 2 +` |

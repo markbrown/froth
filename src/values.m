@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % values.m
-% Predicates and functions for working with Froth values.
+% Predicates and functions for working with Froth! values.
 %-----------------------------------------------------------------------%
 
 :- module values.

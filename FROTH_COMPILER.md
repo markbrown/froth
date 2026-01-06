@@ -1,6 +1,6 @@
-# Froth Compiler Reference
+# Froth! Compiler Reference
 
-This document describes the compiler infrastructure for Froth, including bytecode generation and static analysis passes.
+This document describes the compiler infrastructure for Froth!, including bytecode generation and static analysis passes.
 
 ## Quick Reference
 
@@ -171,7 +171,7 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 
 **Value conventions:**
 - All nodes have `'term` key storing the original syntax term
-- Keys use 0 for "yes/true" and 1 for "no/false" (Froth convention)
+- Keys use 0 for "yes/true" and 1 for "no/false" (Froth! convention)
 - Defaults are set to the common case; passes only write when different
 - `'body` arrays contain child nodes (one per term)
 

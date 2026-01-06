@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % types.m
-% Core type definitions for the Froth programming language.
+% Core type definitions for the Froth! programming language.
 %-----------------------------------------------------------------------%
 
 :- module types.
@@ -107,7 +107,7 @@
     %
 :- func escape_string(string) = string.
 
-    % Values in the Froth language.
+    % Values in the Froth! language.
     %
     % Closures are represented as closureval(Env, Body) where Env is a map
     % and Body is a list of terms. Evaluating { terms } creates a closure

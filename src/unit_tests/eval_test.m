@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % eval_test.m
-% Test driver for the Froth evaluator.
+% Test driver for the Froth! evaluator.
 %-----------------------------------------------------------------------%
 
 :- module eval_test.
@@ -28,7 +28,7 @@
 %-----------------------------------------------------------------------%
 
 main(!IO) :-
-    io.write_string("=== Froth Evaluator Tests ===\n\n", !IO),
+    io.write_string("=== Froth! Evaluator Tests ===\n\n", !IO),
     run_tests(!IO).
 
 :- pred run_tests(io::di, io::uo) is cc_multi.

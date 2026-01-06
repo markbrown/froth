@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % vm.m
-% Bytecode virtual machine for the Froth programming language.
+% Bytecode virtual machine for the Froth! programming language.
 %-----------------------------------------------------------------------%
 
 :- module vm.

@@ -1,4 +1,4 @@
-# Froth Standard Library Reference
+# Froth! Standard Library Reference
 
 The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is given. It imports the following modules:
 
@@ -168,7 +168,7 @@ Utilities for cons lists. Lists are built with `.` (nil) and `,` (cons):
 
 ## Eval (eval.froth)
 
-A meta-interpreter that evaluates Froth closures.
+A meta-interpreter that evaluates Froth! closures.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
@@ -369,7 +369,7 @@ Boolean operations where 0 represents true and non-zero represents false.
 
 ## Control (control.froth)
 
-Control flow utilities for loops and iteration. State is passed through the stack because Froth closures capture their environment at creation time, and bindings don't escape closure boundaries.
+Control flow utilities for loops and iteration. State is passed through the stack because Froth! closures capture their environment at creation time, and bindings don't escape closure boundaries.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|

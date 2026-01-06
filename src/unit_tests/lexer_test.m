@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % lexer_test.m
-% Test driver for the Froth lexer.
+% Test driver for the Froth! lexer.
 %-----------------------------------------------------------------------%
 
 :- module lexer_test.
@@ -22,7 +22,7 @@
 %-----------------------------------------------------------------------%
 
 main(!IO) :-
-    io.write_string("=== Froth Lexer Tests ===\n\n", !IO),
+    io.write_string("=== Froth! Lexer Tests ===\n\n", !IO),
     run_tests(!IO).
 
 :- pred run_tests(io::di, io::uo) is det.

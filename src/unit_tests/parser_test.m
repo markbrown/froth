@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % parser_test.m
-% Test driver for the Froth parser.
+% Test driver for the Froth! parser.
 %-----------------------------------------------------------------------%
 
 :- module parser_test.
@@ -23,7 +23,7 @@
 %-----------------------------------------------------------------------%
 
 main(!IO) :-
-    io.write_string("=== Froth Parser Tests ===\n\n", !IO),
+    io.write_string("=== Froth! Parser Tests ===\n\n", !IO),
     run_tests(!IO).
 
 :- pred run_tests(io::di, io::uo) is det.

@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % eval.m
-% Evaluator for the Froth programming language.
+% Evaluator for the Froth! programming language.
 %-----------------------------------------------------------------------%
 
 :- module eval.

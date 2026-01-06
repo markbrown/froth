@@ -1,6 +1,6 @@
-# Froth Coding Guide
+# Froth! Coding Guide
 
-Common patterns and pitfalls when writing Froth code.
+Common patterns and pitfalls when writing Froth! code.
 
 ## Function Calls Require `!`
 
@@ -41,7 +41,7 @@ If you want a "prime" variable name, use a suffix like `2` or a prefix like `new
 
 ## Boolean Convention: 0 is True
 
-Froth uses 0 for true and non-zero for false. This matches the Unix convention where 0 indicates success.
+Froth! uses 0 for true and non-zero for false. This matches the Unix convention where 0 indicates success.
 
 ```
 3 3 =              ; 0 (equal, true)
@@ -150,7 +150,7 @@ Closures communicate results by leaving values on the stack:
 
 ## Avoid Arrays as Accumulators
 
-Arrays in Froth are immutable—every modification creates a copy. Never use arrays as accumulators:
+Arrays in Froth! are immutable—every modification creates a copy. Never use arrays as accumulators:
 
 ```
 ; WRONG: O(n²) - each concat copies the entire array

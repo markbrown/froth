@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % bytecode.m
-% Bytecode store for the Froth programming language.
+% Bytecode store for the Froth! programming language.
 %-----------------------------------------------------------------------%
 
 :- module bytecode.

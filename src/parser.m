@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % parser.m
-% Parser for the Froth programming language.
+% Parser for the Froth! programming language.
 % Converts tokens to terms.
 %-----------------------------------------------------------------------%
 

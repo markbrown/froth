@@ -1,8 +1,8 @@
-# Froth Bytecode Compiler Design
+# Froth! Bytecode Compiler Design
 
 ## Overview
 
-A bytecode compiler for Froth to improve execution performance by eliminating tree-walking overhead.
+A bytecode compiler for Froth! to improve execution performance by eliminating tree-walking overhead.
 
 ## Compiler Pipeline
 

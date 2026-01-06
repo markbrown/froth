@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % froth.m
-% Main module for the Froth programming language interpreter.
+% Main module for the Froth! programming language interpreter.
 %-----------------------------------------------------------------------%
 
 :- module froth.
@@ -492,7 +492,7 @@ execute_file(OpTable, Filename, ST0, ST, BC0, BC, Env0, Env,
 
 start_repl(Opts, OpTable, ST, BC, Env, Array, Ptr, Pool, HT, !IO) :-
     ( if Opts ^ opt_quiet = no then
-        io.write_string("Froth REPL. Press Ctrl-D to exit.\n", !IO)
+        io.write_string("Froth! REPL. Press Ctrl-D to exit.\n", !IO)
     else
         true
     ),

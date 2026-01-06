@@ -1,6 +1,6 @@
 %-----------------------------------------------------------------------%
 % datastack.m
-% Array-based stack implementation for the Froth programming language.
+% Array-based stack implementation for the Froth! programming language.
 %-----------------------------------------------------------------------%
 
 :- module datastack.
