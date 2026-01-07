@@ -84,6 +84,22 @@
 
 :- type operator_table == map(string_id, operator_info).
 
+    % Execution context: read-only state for evaluation and VM execution.
+    %
+:- type exec_context
+    --->    exec_context(
+                ec_op_table :: operator_table,
+                ec_base_dir :: string
+            ).
+
+    % Evaluation store: threaded non-unique state for evaluation and VM.
+    %
+:- type eval_store
+    --->    eval_store(
+                es_pool_count   :: int,         % PP: next available pool slot
+                es_string_table :: string_table % ST: string intern table
+            ).
+
     % Intern table: bidirectional mapping between strings and IDs,
     % plus operator lookup table.
     %

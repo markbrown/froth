@@ -14,24 +14,38 @@
 
 %-----------------------------------------------------------------------%
 
-    % eval_terms(OpTable, BaseDir, Terms, !Env, !Stack, !StackPtr,
-    %            !ST, !Bytecode, !Pool, !HT, !IO):
+    % eval_terms(Ctx, Terms, !Env, !Store,
+    %            !SP, !Stack, !Pool, !Bytecode, !HashTable, !IO):
+    %
     % Evaluate a list of terms, updating the environment and stack.
-    % OpTable is read-only (fixed at engine startup).
-    % BaseDir is used to resolve relative paths in imports.
-    % StringTable is threaded through (may grow with dynamic imports).
-    % Bytecode array is threaded through (may grow with poke).
-    % Pool and HT are the constant pool and its deduplication hash table.
-    % Stack is represented as an array and pointer (for efficient operations).
+    %
+    % Read-only context:
+    %   Ctx - execution context (operator table, base directory)
+    %   Terms - list of terms to evaluate
+    %
+    % Threaded state:
+    %   Env - environment map
+    %   Store - bundled PP (pool count) and ST (string table)
+    %
+    % Machine register:
+    %   SP - stack pointer
+    %
+    % Threaded memory:
+    %   Stack - data stack array
+    %   Pool - constant pool
+    %   Bytecode - bytecode array (may grow with poke)
+    %   HashTable - value to pool index mapping
+    %   IO - I/O state
+    %
     % Throws eval_error on failure.
     %
-:- pred eval_terms(operator_table::in, string::in, list(term)::in,
+:- pred eval_terms(exec_context::in, list(term)::in,
     env::in, env::out,
-    array(value)::array_di, array(value)::array_uo,
+    eval_store::in, eval_store::out,
     int::in, int::out,
-    string_table::in, string_table::out,
-    array(int)::array_di, array(int)::array_uo,
     array(value)::array_di, array(value)::array_uo,
+    array(value)::array_di, array(value)::array_uo,
+    array(int)::array_di, array(int)::array_uo,
     hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     io::di, io::uo) is det.
 
@@ -71,87 +85,93 @@ set_env(Name, Value, !Env) :-
 % Main evaluation
 %-----------------------------------------------------------------------%
 
-eval_terms(_, _, [], !Env, !Array, !Ptr, !ST, !BC, !Pool, !HT, !IO).
-eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !Array, !Ptr, !ST, !BC,
-        !Pool, !HT, !IO) :-
-    eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC, !Pool, !HT, !IO),
-    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC, !Pool, !HT, !IO).
+eval_terms(_, [], !Env, !Store, !SP, !Stack, !Pool, !Bytecode, !HashTable, !IO).
+eval_terms(Ctx, [Term | Terms], !Env, !Store, !SP, !Stack, !Pool,
+        !Bytecode, !HashTable, !IO) :-
+    eval_term(Ctx, Term, !Env, !Store, !SP, !Stack, !Pool,
+        !Bytecode, !HashTable, !IO),
+    eval_terms(Ctx, Terms, !Env, !Store, !SP, !Stack, !Pool,
+        !Bytecode, !HashTable, !IO).
 
-:- pred eval_term(operator_table::in, string::in, term::in, env::in, env::out,
+:- pred eval_term(exec_context::in, term::in, env::in, env::out,
+    eval_store::in, eval_store::out,
+    int::in, int::out,
     array(value)::array_di, array(value)::array_uo,
-    int::in, int::out, string_table::in, string_table::out,
+    array(value)::array_di, array(value)::array_uo,
     array(int)::array_di, array(int)::array_uo,
-    array(value)::array_di, array(value)::array_uo,
     hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     io::di, io::uo) is det.
 
-eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC, !Pool, !HT, !IO) :-
+eval_term(Ctx, Term, !Env, !Store, !SP, !Stack, !Pool,
+        !Bytecode, !HashTable, !IO) :-
     (
         Term = identifier(NameId),
-        eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, !ST, !BC,
-            !Pool, !HT, !IO)
+        eval_identifier(Ctx, NameId, !Env, !Store, !SP, !Stack, !Pool,
+            !Bytecode, !HashTable, !IO)
     ;
         Term = binder(NameId),
-        eval_binder(NameId, !Env, !Array, !Ptr)
+        eval_binder(NameId, !Env, !Stack, !SP)
     ;
         Term = function(Terms),
-        eval_function(Terms, !.Env, !Array, !Ptr)
+        eval_function(Terms, !.Env, !Stack, !SP)
     ;
         Term = generator(Terms),
-        eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC,
-            !Pool, !HT, !IO)
+        eval_generator(Ctx, Terms, !Env, !Store, !SP, !Stack, !Pool,
+            !Bytecode, !HashTable, !IO)
     ;
         Term = quoted(T),
-        datastack.push(termval(T), !Array, !Ptr)
+        datastack.push(termval(T), !Stack, !SP)
     ;
         Term = value(V),
-        datastack.push(V, !Array, !Ptr)
+        datastack.push(V, !Stack, !SP)
     ;
         Term = apply_term,
-        eval_apply(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !Pool, !HT, !IO)
+        eval_apply(Ctx, !Env, !Store, !SP, !Stack, !Pool,
+            !Bytecode, !HashTable, !IO)
     ).
 
 %-----------------------------------------------------------------------%
 % Identifier evaluation
 %-----------------------------------------------------------------------%
 
-:- pred eval_identifier(operator_table::in, string::in, string_id::in,
+:- pred eval_identifier(exec_context::in, string_id::in,
     env::in, env::out,
-    array(value)::array_di, array(value)::array_uo,
+    eval_store::in, eval_store::out,
     int::in, int::out,
-    string_table::in, string_table::out,
-    array(int)::array_di, array(int)::array_uo,
     array(value)::array_di, array(value)::array_uo,
+    array(value)::array_di, array(value)::array_uo,
+    array(int)::array_di, array(int)::array_uo,
     hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     io::di, io::uo) is det.
 
-eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, !ST, !BC,
-        !Pool, !HT, !IO) :-
+eval_identifier(Ctx, NameId, !Env, !Store, !SP, !Stack, !Pool,
+        !Bytecode, !HashTable, !IO) :-
+    OpTable = Ctx ^ ec_op_table,
     ( if get_env(NameId, V, !.Env) then
-        datastack.push(V, !Array, !Ptr)
+        datastack.push(V, !Stack, !SP)
     else if map.search(OpTable, NameId, Info) then
         ( if Info ^ oi_operator = op_import then
-            % import is special: it can modify Env and ST
-            eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC,
-                !Pool, !HT, !IO)
+            % import is special: it can modify Env and Store
+            eval_import(Ctx, !Env, !Store, !SP, !Stack, !Pool,
+                !Bytecode, !HashTable, !IO)
         else if Info ^ oi_operator = op_restore then
             % restore is special: it replaces the current Env
-            eval_restore(!Env, !Array, !Ptr)
+            eval_restore(!Env, !Stack, !SP)
         else if Info ^ oi_operator = op_peek then
             % peek is special: it reads the bytecode store
-            eval_peek(!Array, !Ptr, !.BC)
+            eval_peek(!Stack, !SP, !.Bytecode)
         else if Info ^ oi_operator = op_poke then
             % poke is special: it modifies the bytecode store
-            eval_poke(!Array, !Ptr, !BC)
+            eval_poke(!Stack, !SP, !Bytecode)
         else if Info ^ oi_operator = op_ref then
             % ref is special: it modifies the constant pool
-            eval_ref(!Array, !Ptr, !Pool, !HT)
+            eval_ref(!Store, !Stack, !SP, !Pool, !HashTable)
         else if Info ^ oi_operator = op_deref then
             % deref is special: it reads the constant pool
-            eval_deref(!Array, !Ptr, !.Pool)
+            eval_deref(!.Store, !Stack, !SP, !.Pool)
         else
-            operators.eval_operator(OpTable, !.ST, Info ^ oi_operator, !.Env,
-                !Array, !Ptr, !IO)
+            operators.eval_operator(OpTable, !.Store ^ es_string_table,
+                Info ^ oi_operator, !.Env, !Stack, !SP, !IO)
         )
     else
         throw(undefined_name(NameId))
@@ -165,8 +185,8 @@ eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, !ST, !BC,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out) is det.
 
-eval_binder(NameId, !Env, !Array, !Ptr) :-
-    datastack.pop("binder", V, !Array, !Ptr),
+eval_binder(NameId, !Env, !Stack, !SP) :-
+    datastack.pop("binder", V, !Stack, !SP),
     set_env(NameId, V, !Env).
 
 %-----------------------------------------------------------------------%
@@ -178,66 +198,65 @@ eval_binder(NameId, !Env, !Array, !Ptr) :-
     int::in, int::out) is det.
 
 % A closure is represented as: closureval(Env, Terms)
-eval_function(Terms, Env, !Array, !Ptr) :-
+eval_function(Terms, Env, !Stack, !SP) :-
     Closure = closureval(Env, Terms),
-    datastack.push(Closure, !Array, !Ptr).
+    datastack.push(Closure, !Stack, !SP).
 
 %-----------------------------------------------------------------------%
 % Generator evaluation
 %-----------------------------------------------------------------------%
 
-:- pred eval_generator(operator_table::in, string::in, list(term)::in,
+:- pred eval_generator(exec_context::in, list(term)::in,
     env::in, env::out,
-    array(value)::array_di, array(value)::array_uo,
+    eval_store::in, eval_store::out,
     int::in, int::out,
-    string_table::in, string_table::out,
-    array(int)::array_di, array(int)::array_uo,
     array(value)::array_di, array(value)::array_uo,
+    array(value)::array_di, array(value)::array_uo,
+    array(int)::array_di, array(int)::array_uo,
     hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     io::di, io::uo) is det.
 
-eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC,
-        !Pool, !HT, !IO) :-
+eval_generator(Ctx, Terms, !Env, !Store, !SP, !Stack, !Pool,
+        !Bytecode, !HashTable, !IO) :-
     % Save current stack pointer
-    SavedPtr = !.Ptr,
+    SavedSP = !.SP,
     % Evaluate generator terms (they push values onto the stack)
-    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC,
-        !Pool, !HT, !IO),
+    eval_terms(Ctx, Terms, !Env, !Store, !SP, !Stack, !Pool,
+        !Bytecode, !HashTable, !IO),
     % Extract values pushed by the generator as an array
-    datastack.extract_range(!.Array, SavedPtr, !.Ptr, ResultArray),
+    datastack.extract_range(!.Stack, SavedSP, !.SP, ResultArray),
     % Restore stack pointer and push the result array
-    !:Ptr = SavedPtr,
-    datastack.push(arrayval(ResultArray), !Array, !Ptr).
+    !:SP = SavedSP,
+    datastack.push(arrayval(ResultArray), !Stack, !SP).
 
 %-----------------------------------------------------------------------%
 % apply (!)
 %-----------------------------------------------------------------------%
 
-:- pred eval_apply(operator_table::in, string::in, env::in, env::out,
+:- pred eval_apply(exec_context::in, env::in, env::out,
+    eval_store::in, eval_store::out,
+    int::in, int::out,
     array(value)::array_di, array(value)::array_uo,
-    int::in, int::out, string_table::in, string_table::out,
+    array(value)::array_di, array(value)::array_uo,
     array(int)::array_di, array(int)::array_uo,
-    array(value)::array_di, array(value)::array_uo,
     hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     io::di, io::uo) is det.
 
-eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC, !Pool, !HT, !IO) :-
-    datastack.pop("!", V, !Array, !Ptr),
+eval_apply(Ctx, Env, Env, !Store, !SP, !Stack, !Pool,
+        !Bytecode, !HashTable, !IO) :-
+    datastack.pop("!", V, !Stack, !SP),
     ( if V = closureval(ClosureEnv, Terms) then
         % Evaluate with closure's env, then discard env changes (lexical scoping)
-        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Array, !Ptr, !ST, !BC,
-            !Pool, !HT, !IO)
+        eval_terms(Ctx, Terms, ClosureEnv, _, !Store, !SP, !Stack, !Pool,
+            !Bytecode, !HashTable, !IO)
     else if V = bytecodeval(Context, CodeAddr) then
         % Execute bytecode closure via VM
         % RP=-1 means return to eval_apply (sentinel value)
         % FP starts at top of stack array (frame grows downward)
         % GenStack starts empty (no active generators)
-        FP = array.size(!.Array),
-        PP0 = array.size(!.Pool),
-        Store0 = vm.vm_store(PP0, !.ST),
-        vm.run(CodeAddr, -1, FP, Context, [], !Ptr, Store0, Store,
-            OpTable, Env, !BC, !Array, !Pool, !HT, !IO),
-        !:ST = Store ^ vm.vs_string_table
+        FP = array.size(!.Stack),
+        vm.run(Ctx, Env, Context, [], !Store, CodeAddr, -1, FP, !SP,
+            !Stack, !Pool, !Bytecode, !HashTable, !IO)
     else
         throw(type_error("closure", V))
     ).
@@ -246,18 +265,21 @@ eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC, !Pool, !HT, !IO) 
 % import: ( filename -- ) Load and evaluate a file
 %-----------------------------------------------------------------------%
 
-:- pred eval_import(operator_table::in, string::in, env::in, env::out,
-    array(value)::array_di, array(value)::array_uo,
+:- pred eval_import(exec_context::in, env::in, env::out,
+    eval_store::in, eval_store::out,
     int::in, int::out,
-    string_table::in, string_table::out,
-    array(int)::array_di, array(int)::array_uo,
     array(value)::array_di, array(value)::array_uo,
+    array(value)::array_di, array(value)::array_uo,
+    array(int)::array_di, array(int)::array_uo,
     hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     io::di, io::uo) is det.
 
-eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !Pool, !HT, !IO) :-
-    datastack.pop("import", V, !Array, !Ptr),
-    RelFilename = values.value_to_string(!.ST, V),
+eval_import(Ctx, !Env, !Store, !SP, !Stack, !Pool,
+        !Bytecode, !HashTable, !IO) :-
+    BaseDir = Ctx ^ ec_base_dir,
+    OpTable = Ctx ^ ec_op_table,
+    datastack.pop("import", V, !Stack, !SP),
+    RelFilename = values.value_to_string(!.Store ^ es_string_table, V),
     % Resolve relative paths using BaseDir
     ( if dir.path_name_is_absolute(RelFilename) then
         Filename = RelFilename
@@ -265,17 +287,20 @@ eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !Pool, !HT, !IO) :-
         Filename = dir.make_path_name(BaseDir, RelFilename)
     ),
     NewBaseDir = dir.dirname(Filename),
+    NewCtx = exec_context(OpTable, NewBaseDir),
     io.read_named_file_as_string(Filename, ReadResult, !IO),
     (
         ReadResult = ok(Content),
-        lexer.tokenize(Content, !.ST, LexResult),
+        ST0 = !.Store ^ es_string_table,
+        lexer.tokenize(Content, ST0, LexResult),
         (
-            LexResult = ok(Tokens, !:ST),
+            LexResult = ok(Tokens, ST1),
+            !:Store = !.Store ^ es_string_table := ST1,
             parser.parse(Tokens, ParseResult),
             (
                 ParseResult = ok(Terms),
-                eval_terms(OpTable, NewBaseDir, Terms, !Env, !Array, !Ptr, !ST, !BC,
-                    !Pool, !HT, !IO)
+                eval_terms(NewCtx, Terms, !Env, !Store, !SP, !Stack, !Pool,
+                    !Bytecode, !HashTable, !IO)
             ;
                 ParseResult = error(ParseError),
                 throw_parse_error(Filename, ParseError)
@@ -343,8 +368,8 @@ throw_parse_error(Filename, junk_token(Pos, S)) :-
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out) is det.
 
-eval_restore(!Env, !Array, !Ptr) :-
-    datastack.pop("restore", V, !Array, !Ptr),
+eval_restore(!Env, !Stack, !SP) :-
+    datastack.pop("restore", V, !Stack, !SP),
     ( if V = mapval(NewEnv) then
         !:Env = NewEnv
     else
@@ -360,11 +385,11 @@ eval_restore(!Env, !Array, !Ptr) :-
     int::in, int::out,
     array(int)::in) is det.
 
-eval_peek(!Array, !Ptr, BC) :-
-    datastack.pop("peek", V, !Array, !Ptr),
+eval_peek(!Stack, !SP, Bytecode) :-
+    datastack.pop("peek", V, !Stack, !SP),
     ( if V = intval(Addr) then
-        Value = bytecode.peek(Addr, BC),
-        datastack.push(intval(Value), !Array, !Ptr)
+        Value = bytecode.peek(Addr, Bytecode),
+        datastack.push(intval(Value), !Stack, !SP)
     else
         throw(type_error("int", V))
     ).
@@ -378,11 +403,11 @@ eval_peek(!Array, !Ptr, BC) :-
     int::in, int::out,
     array(int)::array_di, array(int)::array_uo) is det.
 
-eval_poke(!Array, !Ptr, !BC) :-
-    datastack.pop("poke", AddrVal, !Array, !Ptr),
-    datastack.pop("poke", ValueVal, !Array, !Ptr),
+eval_poke(!Stack, !SP, !Bytecode) :-
+    datastack.pop("poke", AddrVal, !Stack, !SP),
+    datastack.pop("poke", ValueVal, !Stack, !SP),
     ( if AddrVal = intval(Addr), ValueVal = intval(Value) then
-        bytecode.poke(Addr, Value, !BC)
+        bytecode.poke(Addr, Value, !Bytecode)
     else if AddrVal = intval(_) then
         throw(type_error("int", ValueVal))
     else
@@ -393,44 +418,50 @@ eval_poke(!Array, !Ptr, !BC) :-
 % ref: ( value -- int ) Store value in constant pool, return index
 %-----------------------------------------------------------------------%
 
-:- pred eval_ref(
+:- pred eval_ref(eval_store::in, eval_store::out,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out,
     array(value)::array_di, array(value)::array_uo,
     hash_table(value, int)::hash_table_di,
     hash_table(value, int)::hash_table_uo) is det.
 
-eval_ref(!Array, !Ptr, !Pool, !HT) :-
-    datastack.pop("ref", V, !Array, !Ptr),
+eval_ref(!Store, !Stack, !SP, !Pool, !HashTable) :-
+    datastack.pop("ref", V, !Stack, !SP),
     % Check if value is already in the pool (deduplication)
-    ( if hash_table.search(!.HT, V, ExistingIdx) then
+    ( if hash_table.search(!.HashTable, V, ExistingIdx) then
         % Already exists, return existing index
-        datastack.push(intval(ExistingIdx), !Array, !Ptr)
+        datastack.push(intval(ExistingIdx), !Stack, !SP)
     else
         % New value: add to pool and hash table
-        Idx = array.size(!.Pool),
-        array.resize(Idx + 1, V, !Pool),
-        hash_table.det_insert(V, Idx, !HT),
-        datastack.push(intval(Idx), !Array, !Ptr)
+        PP = !.Store ^ es_pool_count,
+        ( if PP < array.size(!.Pool) then
+            array.set(PP, V, !Pool)
+        else
+            array.resize(PP + 1, V, !Pool)
+        ),
+        !:Store = !.Store ^ es_pool_count := PP + 1,
+        hash_table.det_insert(V, PP, !HashTable),
+        datastack.push(intval(PP), !Stack, !SP)
     ).
 
 %-----------------------------------------------------------------------%
 % deref: ( int -- value ) Retrieve value from constant pool
 %-----------------------------------------------------------------------%
 
-:- pred eval_deref(
+:- pred eval_deref(eval_store::in,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out,
     array(value)::in) is det.
 
-eval_deref(!Array, !Ptr, Pool) :-
-    datastack.pop("deref", V, !Array, !Ptr),
+eval_deref(Store, !Stack, !SP, Pool) :-
+    datastack.pop("deref", V, !Stack, !SP),
+    PP = Store ^ es_pool_count,
     ( if V = intval(Idx) then
-        ( if Idx >= 0, Idx < array.size(Pool) then
+        ( if Idx >= 0, Idx < PP then
             array.lookup(Pool, Idx, Value),
-            datastack.push(Value, !Array, !Ptr)
+            datastack.push(Value, !Stack, !SP)
         else
-            throw(index_out_of_bounds(Idx, array.size(Pool)))
+            throw(index_out_of_bounds(Idx, PP))
         )
     else
         throw(type_error("int", V))
