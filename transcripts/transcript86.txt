@@ -1,0 +1,2063 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read lib/build.froth (27 lines)
+  ⎿  Read lib/defs.froth (44 lines)
+  ⎿  Read lib/boundness.froth (127 lines)
+  ⎿  Read lib/compile.froth (143 lines)
+  ⎿  Read tests/codegen.expected (47 lines)
+
+> Let's refactor vm.run to have a different argument ordering. The argument 
+order should be OpTable, Env, Context, GenStack, !Store, IP, RP, FP, !SP, 
+!Stack, !Pool, !Bytecode, !HashTable, !IO 
+
+● Read(src/vm.m)
+  ⎿  Read 333 lines
+
+● I'll refactor vm.run to use the new argument ordering. Let me make the changes:
+
+● Update(src/vm.m)
+  ⎿  Added 15 lines, removed 16 lines                                    
+      22                  vs_string_table :: string_table % ST: string in
+          tern table
+      23              ).
+      24  
+      25 -    % run(IP, RP, FP, Context, GenStack, !SP,                  
+      26 -    %     !Store, OpTable, Env,                                
+      27 -    %     !Bytecode, !Stack, !Pool, !HashTable, !IO):          
+      25 +    % run(OpTable, Env, Context, GenStack, !Store,             
+      26 +    %     IP, RP, FP, !SP, !Stack, !Pool, !Bytecode, !HashTable
+         +, !IO):                                                        
+      27      %
+      28      % Execute bytecode starting at IP until return.
+      29      %
+      31 -    % Machine registers (input only, except SP):               
+      32 -    %   IP - instruction pointer                               
+      33 -    %   RP - return pointer (-1 means return to caller)        
+      34 -    %   FP - frame pointer (top of frame, grows downward)      
+      30 +    % Execution context (read-only):                           
+      31 +    %   OpTable - operator dispatch table                      
+      32 +    %   Env - environment for 'env' operator                   
+      33      %   Context - closure's captured environment array
+      34      %   GenStack - saved stack pointers for generators
+      37 -    %   SP - stack pointer (threaded, caller needs final value)
+      35      %
+      36      % Non-unique storage (threaded):
+      37      %   Store - bundled PP (pool count) and ST (string table)
+      38      %
+      42 -    % Execution context (read-only):                           
+      43 -    %   OpTable - operator dispatch table                      
+      44 -    %   Env - environment for 'env' operator                   
+      39 +    % Machine registers (input only, except SP):               
+      40 +    %   IP - instruction pointer                               
+      41 +    %   RP - return pointer (-1 means return to caller)        
+      42 +    %   FP - frame pointer (top of frame, grows downward)      
+      43 +    %   SP - stack pointer (threaded, caller needs final value)
+      44      %
+      45      % Memory (unique, threaded):
+      47 -    %   Bytecode - compiled bytecode array                     
+      46      %   Stack - data/frame stack
+      47      %   Pool - constant pool
+      48 +    %   Bytecode - compiled bytecode array                     
+      49      %   HashTable - value to pool index mapping
+      50      %   IO - I/O state
+      51      %
+      52  :- pred run(
+      54 -    int::in, int::in, int::in, array(value)::in, list(int)::in,
+      55 -    int::in, int::out,                                         
+      53 +    operator_table::in, env::in, array(value)::in, list(int)::i
+         +n,                                                             
+      54      vm_store::in, vm_store::out,
+      57 -    operator_table::in, env::in,                               
+      58 -    array(int)::array_di, array(int)::array_uo,                
+      55 +    int::in, int::in, int::in,                                 
+      56 +    int::in, int::out,                                         
+      57      array(value)::array_di, array(value)::array_uo,
+      58      array(value)::array_di, array(value)::array_uo,
+      59 +    array(int)::array_di, array(int)::array_uo,                
+      60      hash_table(value, int)::hash_table_di, hash_table(value, in
+          t)::hash_table_uo,
+      61      io::di, io::uo) is det.
+      62  
+
+● Now let me update the implementation clause:
+
+● Update(src/vm.m)
+  ⎿  Added 44 lines, removed 44 lines                                    
+      123  % VM execution
+      124  %-------------------------------------------------------------
+           ----------%
+      125  
+      126 -run(IP, RP, FP, Context, GenStack, !SP, !Store, OpTable, Env, 
+      127 -        !Bytecode, !Stack, !Pool, !HashTable, !IO) :-         
+      126 +run(OpTable, Env, Context, GenStack, !Store, IP, RP, FP, !SP, 
+      127 +        !Stack, !Pool, !Bytecode, !HashTable, !IO) :-         
+      128      array.lookup(!.Bytecode, IP, Opcode),
+      129      ( if Opcode = oc_pushInt then
+      130          % pushInt n: push integer n onto stack
+      131          array.lookup(!.Bytecode, IP + 1, N),
+      132          datastack.push(intval(N), !Stack, !SP),
+      133 -        run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, Op
+          -Table, Env,                                                   
+      134 -            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      133 +        run(OpTable, Env, Context, GenStack, !Store, IP + 2, R
+          +P, FP, !SP,                                                   
+      134 +            !Stack, !Pool, !Bytecode, !HashTable, !IO)        
+      135      else if Opcode = oc_op then
+      136          % op n: execute operator n
+      137          array.lookup(!.Bytecode, IP + 1, OpNum),
+      138          ( if operator_table.int_to_operator(OpNum, Op) then
+      139              ( if Op = op_ref then
+      140                  vm_ref(!Stack, !SP, !Pool, !HashTable),
+      141 -                run(IP + 2, RP, FP, Context, GenStack, !SP, !S
+          -tore, OpTable, Env,                                           
+      142 -                    !Bytecode, !Stack, !Pool, !HashTable, !IO)
+      141 +                run(OpTable, Env, Context, GenStack, !Store, I
+          +P + 2, RP, FP, !SP,                                           
+      142 +                    !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      143              else if Op = op_deref then
+      144                  vm_deref(!Stack, !SP, !.Pool),
+      145 -                run(IP + 2, RP, FP, Context, GenStack, !SP, !S
+          -tore, OpTable, Env,                                           
+      146 -                    !Bytecode, !Stack, !Pool, !HashTable, !IO)
+      145 +                run(OpTable, Env, Context, GenStack, !Store, I
+          +P + 2, RP, FP, !SP,                                           
+      146 +                    !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      147              else
+      148                  operators.eval_operator(OpTable, !.Store ^ vs_
+           string_table, Op, Env,
+      149                      !Stack, !SP, !IO),
+      150 -                run(IP + 2, RP, FP, Context, GenStack, !SP, !S
+          -tore, OpTable, Env,                                           
+      151 -                    !Bytecode, !Stack, !Pool, !HashTable, !IO)
+      150 +                run(OpTable, Env, Context, GenStack, !Store, I
+          +P + 2, RP, FP, !SP,                                           
+      151 +                    !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      152              )
+      153          else
+      154              throw(vm_error("invalid operator number"))
+     ...
+      159          ( if RP = -1 then
+      160              true
+      161          else
+      162 -            run(RP, RP, FP, Context, GenStack, !SP, !Store, Op
+          -Table, Env,                                                   
+      163 -                !Bytecode, !Stack, !Pool, !HashTable, !IO)    
+      162 +            run(OpTable, Env, Context, GenStack, !Store, RP, R
+          +P, FP, !SP,                                                   
+      163 +                !Stack, !Pool, !Bytecode, !HashTable, !IO)    
+      164          )
+      165      else if Opcode = oc_pushString then
+      166          % pushString n: push string with intern ID n
+      167          array.lookup(!.Bytecode, IP + 1, StrId),
+      168          datastack.push(stringval(StrId), !Stack, !SP),
+      169 -        run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, Op
+          -Table, Env,                                                   
+      170 -            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      169 +        run(OpTable, Env, Context, GenStack, !Store, IP + 2, R
+          +P, FP, !SP,                                                   
+      170 +            !Stack, !Pool, !Bytecode, !HashTable, !IO)        
+      171      else if Opcode = oc_pushContext then
+      172          % pushContext n: push value from context slot n
+      173          array.lookup(!.Bytecode, IP + 1, Slot),
+      174          array.lookup(Context, Slot, Val),
+      175          datastack.push(Val, !Stack, !SP),
+      176 -        run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, Op
+          -Table, Env,                                                   
+      177 -            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      176 +        run(OpTable, Env, Context, GenStack, !Store, IP + 2, R
+          +P, FP, !SP,                                                   
+      177 +            !Stack, !Pool, !Bytecode, !HashTable, !IO)        
+      178      else if Opcode = oc_popUnused then
+      179          % popUnused: pop and discard top of stack
+      180          datastack.pop("popUnused", _, !Stack, !SP),
+      181 -        run(IP + 1, RP, FP, Context, GenStack, !SP, !Store, Op
+          -Table, Env,                                                   
+      182 -            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      181 +        run(OpTable, Env, Context, GenStack, !Store, IP + 1, R
+          +P, FP, !SP,                                                   
+      182 +            !Stack, !Pool, !Bytecode, !HashTable, !IO)        
+      183      else if Opcode = oc_pushLocal then
+      184          % pushLocal n: push value from frame slot n
+      185          array.lookup(!.Bytecode, IP + 1, Slot),
+      186          array.lookup(!.Stack, FP + Slot, Val),
+      187          datastack.push(Val, !Stack, !SP),
+      188 -        run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, Op
+          -Table, Env,                                                   
+      189 -            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      188 +        run(OpTable, Env, Context, GenStack, !Store, IP + 2, R
+          +P, FP, !SP,                                                   
+      189 +            !Stack, !Pool, !Bytecode, !HashTable, !IO)        
+      190      else if Opcode = oc_popLocal then
+      191          % popLocal n: pop value into frame slot n
+      192          array.lookup(!.Bytecode, IP + 1, Slot),
+      193          datastack.pop("popLocal", Val, !Stack, !SP),
+      194          array.set(FP + Slot, Val, !Stack),
+      195 -        run(IP + 2, RP, FP, Context, GenStack, !SP, !Store, Op
+          -Table, Env,                                                   
+      196 -            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      195 +        run(OpTable, Env, Context, GenStack, !Store, IP + 2, R
+          +P, FP, !SP,                                                   
+      196 +            !Stack, !Pool, !Bytecode, !HashTable, !IO)        
+      197      else if Opcode = oc_enterFrame then
+      198          % enterFrame n: allocate n frame slots (FP -= n)
+      199          array.lookup(!.Bytecode, IP + 1, N),
+     ...
+      201          ( if NewFP < !.SP then
+      202              throw(vm_error("stack overflow: frame collision"))
+      203          else
+      204 -            run(IP + 2, RP, NewFP, Context, GenStack, !SP, !St
+          -ore, OpTable, Env,                                            
+      205 -                !Bytecode, !Stack, !Pool, !HashTable, !IO)    
+      204 +            run(OpTable, Env, Context, GenStack, !Store, IP + 
+          +2, RP, NewFP, !SP,                                            
+      205 +                !Stack, !Pool, !Bytecode, !HashTable, !IO)    
+      206          )
+      207      else if Opcode = oc_leaveFrame then
+      208          % leaveFrame n: deallocate n frame slots (FP += n)
+      209          array.lookup(!.Bytecode, IP + 1, N),
+      210          NewFP = FP + N,
+      211 -        run(IP + 2, RP, NewFP, Context, GenStack, !SP, !Store,
+          - OpTable, Env,                                                
+      212 -            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      211 +        run(OpTable, Env, Context, GenStack, !Store, IP + 2, R
+          +P, NewFP, !SP,                                                
+      212 +            !Stack, !Pool, !Bytecode, !HashTable, !IO)        
+      213      else if Opcode = oc_startArray then
+      214          % startArray: save current SP for later array extracti
+           on
+      215 -        run(IP + 1, RP, FP, Context, [!.SP | GenStack], !SP, !
+          -Store, OpTable, Env,                                          
+      216 -            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      215 +        run(OpTable, Env, Context, [!.SP | GenStack], !Store, 
+          +IP + 1, RP, FP, !SP,                                          
+      216 +            !Stack, !Pool, !Bytecode, !HashTable, !IO)        
+      217      else if Opcode = oc_endArray then
+      218          % endArray: extract values since saved SP as array
+      219          (
+     ...
+      221              datastack.extract_range(!.Stack, SavedSP, !.SP, Re
+           sultArray),
+      222              !:SP = SavedSP,
+      223              datastack.push(arrayval(ResultArray), !Stack, !SP)
+           ,
+      224 -            run(IP + 1, RP, FP, Context, RestGenStack, !SP, !S
+          -tore, OpTable, Env,                                           
+      225 -                !Bytecode, !Stack, !Pool, !HashTable, !IO)    
+      224 +            run(OpTable, Env, Context, RestGenStack, !Store, I
+          +P + 1, RP, FP, !SP,                                           
+      225 +                !Stack, !Pool, !Bytecode, !HashTable, !IO)    
+      226          ;
+      227              GenStack = [],
+      228              throw(vm_error("endArray without matching startArr
+           ay"))
+     ...
+      231          % call: pop closure, set RP to return address, switch 
+           context, jump
+      232          datastack.pop("call", V, !Stack, !SP),
+      233          ( if V = bytecodeval(CalleeContext, CodeAddr) then
+      234 -            run(CodeAddr, IP + 1, FP, CalleeContext, GenStack,
+          - !SP, !Store,                                                 
+      235 -                OpTable, Env, !Bytecode, !Stack, !Pool, !HashT
+          -able, !IO)                                                    
+      234 +            run(OpTable, Env, CalleeContext, GenStack, !Store,
+          + CodeAddr, IP + 1, FP, !SP,                                   
+      235 +                !Stack, !Pool, !Bytecode, !HashTable, !IO)    
+      236          else
+      237              throw(type_error("bytecode closure", V))
+      238          )
+     ...
+      240          % tail-call: pop closure, preserve RP, switch context,
+            jump
+      241          datastack.pop("tail-call", V, !Stack, !SP),
+      242          ( if V = bytecodeval(CalleeContext, CodeAddr) then
+      243 -            run(CodeAddr, RP, FP, CalleeContext, GenStack, !SP
+          -, !Store,                                                     
+      244 -                OpTable, Env, !Bytecode, !Stack, !Pool, !HashT
+          -able, !IO)                                                    
+      243 +            run(OpTable, Env, CalleeContext, GenStack, !Store,
+          + CodeAddr, RP, FP, !SP,                                       
+      244 +                !Stack, !Pool, !Bytecode, !HashTable, !IO)    
+      245          else
+      246              throw(type_error("bytecode closure", V))
+      247          )
+      248      else if Opcode = oc_saveReturnPtr then
+      249          % saveReturnPtr: push current RP onto data stack
+      250          datastack.push(intval(RP), !Stack, !SP),
+      251 -        run(IP + 1, RP, FP, Context, GenStack, !SP, !Store, Op
+          -Table, Env,                                                   
+      252 -            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      251 +        run(OpTable, Env, Context, GenStack, !Store, IP + 1, R
+          +P, FP, !SP,                                                   
+      252 +            !Stack, !Pool, !Bytecode, !HashTable, !IO)        
+      253      else if Opcode = oc_restoreReturnPtr then
+      254          % restoreReturnPtr: pop RP from data stack
+      255          datastack.pop("restoreReturnPtr", V, !Stack, !SP),
+      256          ( if V = intval(NewRP) then
+      257 -            run(IP + 1, NewRP, FP, Context, GenStack, !SP, !St
+          -ore, OpTable, Env,                                            
+      258 -                !Bytecode, !Stack, !Pool, !HashTable, !IO)    
+      257 +            run(OpTable, Env, Context, GenStack, !Store, IP + 
+          +1, NewRP, FP, !SP,                                            
+      258 +                !Stack, !Pool, !Bytecode, !HashTable, !IO)    
+      259          else
+      260              throw(type_error("int", V))
+      261          )
+      262      else if Opcode = oc_saveContextPtr then
+      263          % saveContextPtr: push current context array onto data
+            stack
+      264          datastack.push(arrayval(Context), !Stack, !SP),
+      265 -        run(IP + 1, RP, FP, Context, GenStack, !SP, !Store, Op
+          -Table, Env,                                                   
+      266 -            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      265 +        run(OpTable, Env, Context, GenStack, !Store, IP + 1, R
+          +P, FP, !SP,                                                   
+      266 +            !Stack, !Pool, !Bytecode, !HashTable, !IO)        
+      267      else if Opcode = oc_restoreContextPtr then
+      268          % restoreContextPtr: pop context array from data stack
+      269          datastack.pop("restoreContextPtr", V, !Stack, !SP),
+      270          ( if V = arrayval(NewContext) then
+      271 -            run(IP + 1, RP, FP, NewContext, GenStack, !SP, !St
+          -ore, OpTable, Env,                                            
+      272 -                !Bytecode, !Stack, !Pool, !HashTable, !IO)    
+      271 +            run(OpTable, Env, NewContext, GenStack, !Store, IP
+          + + 1, RP, FP, !SP,                                            
+      272 +                !Stack, !Pool, !Bytecode, !HashTable, !IO)    
+      273          else
+      274              throw(type_error("array", V))
+      275          )
+      276      else if Opcode = oc_pushQuotedApply then
+      277          % pushQuotedApply: push quoted apply term ('!)
+      278          datastack.push(termval(apply_term), !Stack, !SP),
+      279 -        run(IP + 1, RP, FP, Context, GenStack, !SP, !Store, Op
+          -Table, Env,                                                   
+      280 -            !Bytecode, !Stack, !Pool, !HashTable, !IO)        
+      279 +        run(OpTable, Env, Context, GenStack, !Store, IP + 1, R
+          +P, FP, !SP,                                                   
+      280 +            !Stack, !Pool, !Bytecode, !HashTable, !IO)        
+      281      else
+      282          throw(vm_error("unknown opcode"))
+      283      ).
+
+● Now I need to update the call sites. Let me find where vm.run is called:
+
+● Search(pattern: "vm\.run\(")
+  ⎿  Found 7 files (ctrl+o to expand)
+
+● Search(pattern: "vm\.run\(", path: "src/eval.m", output_mode: "content")
+  ⎿  Found 11 lines (ctrl+o to expand)
+
+● Let me read more context around the call site:
+
+● Read(src/eval.m)
+  ⎿  Read 30 lines
+
+● Update(src/eval.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      235          FP = array.size(!.Array),
+      236          PP0 = array.size(!.Pool),
+      237          Store0 = vm.vm_store(PP0, !.ST),
+      238 -        vm.run(CodeAddr, -1, FP, Context, [], !Ptr, Store0, St
+          -ore,                                                          
+      239 -            OpTable, Env, !BC, !Array, !Pool, !HT, !IO),      
+      238 +        vm.run(OpTable, Env, Context, [], Store0, Store, CodeA
+          +ddr, -1, FP, !Ptr,                                            
+      239 +            !Array, !Pool, !BC, !HT, !IO),                    
+      240          !:ST = Store ^ vm.vs_string_table
+      241      else
+      242          throw(type_error("closure", V))
+
+● Let me compile and run tests to verify the refactoring:
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth    
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/vm.int3
+     … +8 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | tail -20)
+  ⎿ max-slots=0 save-ctx=1 ctx-slot= save-rp=1 rp-slot= restore-ctx=1 resto
+    re-rp=1
+    Actual:
+    … +75 lines (ctrl+o to expand)
+
+
+● Bash(./run_tests.sh 2>&1 | grep -E "^(PASS|FAIL|Tests:)")
+  ⎿  PASS: add                     
+     PASS: alist
+     PASS: apply_op
+     … +62 lines (ctrl+o to expand)
+
+● The refactoring is complete. The build and tests pass (63 passed, 2 failed - the same array and slots failures from before, which are due to the bootstrap issue with foldl compilation).
+
+  The new argument order for vm.run is:
+  run(OpTable, Env, Context, GenStack, !Store,
+      IP, RP, FP, !SP, !Stack, !Pool, !Bytecode, !HashTable, !IO)
+
+  Grouping:
+  1. Read-only context: OpTable, Env, Context, GenStack
+  2. Threaded store: !Store
+  3. Machine registers: IP, RP, FP, !SP
+  4. Threaded memory: !Stack, !Pool, !Bytecode, !HashTable, !IO
+
+> Now do the same for eval_terms 
+
+● Search(pattern: ":- pred eval_terms", path: "src/eval.m", output_mode:
+        "content")
+  ⎿  Found 11 lines (ctrl+o to expand)
+
+● Read(src/eval.m)
+  ⎿  Read 442 lines
+
+● I'll update eval_terms to use the new argument ordering. The new order will be:
+  eval_terms(OpTable, BaseDir, Terms, !Env, !ST, !SP, !Stack, !Pool, !Bytecode, !HashTable, !IO)
+
+  Let me update the file systematically:
+
+● Update(src/eval.m)
+  ⎿  Added 26 lines, removed 11 lines                                    
+      14  
+      15  %--------------------------------------------------------------
+          ---------%
+      16  
+      17 -    % eval_terms(OpTable, BaseDir, Terms, !Env, !Stack, !StackP
+         -tr,                                                            
+      18 -    %            !ST, !Bytecode, !Pool, !HT, !IO):             
+      17 +    % eval_terms(OpTable, BaseDir, Terms, !Env, !ST,           
+      18 +    %            !SP, !Stack, !Pool, !Bytecode, !HashTable, !IO
+         +):                                                             
+      19 +    %                                                          
+      20      % Evaluate a list of terms, updating the environment and st
+          ack.
+      20 -    % OpTable is read-only (fixed at engine startup).          
+      21 -    % BaseDir is used to resolve relative paths in imports.    
+      22 -    % StringTable is threaded through (may grow with dynamic im
+         -ports).                                                        
+      23 -    % Bytecode array is threaded through (may grow with poke). 
+      24 -    % Pool and HT are the constant pool and its deduplication h
+         -ash table.                                                     
+      25 -    % Stack is represented as an array and pointer (for efficie
+         -nt operations).                                                
+      21 +    %                                                          
+      22 +    % Read-only context:                                       
+      23 +    %   OpTable - operator dispatch table (fixed at engine star
+         +tup)                                                           
+      24 +    %   BaseDir - base directory for resolving relative imports
+      25 +    %   Terms - list of terms to evaluate                      
+      26 +    %                                                          
+      27 +    % Threaded state:                                          
+      28 +    %   Env - environment map                                  
+      29 +    %   ST - string table (may grow with dynamic imports)      
+      30 +    %                                                          
+      31 +    % Machine register:                                        
+      32 +    %   SP - stack pointer                                     
+      33 +    %                                                          
+      34 +    % Threaded memory:                                         
+      35 +    %   Stack - data stack array                               
+      36 +    %   Pool - constant pool                                   
+      37 +    %   Bytecode - bytecode array (may grow with poke)         
+      38 +    %   HashTable - value to pool index mapping                
+      39 +    %   IO - I/O state                                         
+      40 +    %                                                          
+      41      % Throws eval_error on failure.
+      42      %
+      43  :- pred eval_terms(operator_table::in, string::in, list(term)::
+          in,
+      44      env::in, env::out,
+      30 -    array(value)::array_di, array(value)::array_uo,            
+      31 -    int::in, int::out,                                         
+      45      string_table::in, string_table::out,
+      33 -    array(int)::array_di, array(int)::array_uo,                
+      46 +    int::in, int::out,                                         
+      47      array(value)::array_di, array(value)::array_uo,
+      48 +    array(value)::array_di, array(value)::array_uo,            
+      49 +    array(int)::array_di, array(int)::array_uo,                
+      50      hash_table(value, int)::hash_table_di, hash_table(value, in
+          t)::hash_table_uo,
+      51      io::di, io::uo) is det.
+      52  
+
+● Now update the implementation clauses:
+
+● Update(src/eval.m)
+  ⎿  Added 7 lines, removed 5 lines                                      
+      86  % Main evaluation
+      87  %--------------------------------------------------------------
+          ---------%
+      88  
+      89 -eval_terms(_, _, [], !Env, !Array, !Ptr, !ST, !BC, !Pool, !HT, 
+         -!IO).                                                          
+      90 -eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !Array, !Ptr
+         -, !ST, !BC,                                                    
+      91 -        !Pool, !HT, !IO) :-                                    
+      92 -    eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, 
+         -!BC, !Pool, !HT, !IO),                                         
+      93 -    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !ST
+         -, !BC, !Pool, !HT, !IO).                                       
+      89 +eval_terms(_, _, [], !Env, !ST, !SP, !Stack, !Pool, !Bytecode, 
+         +!HashTable, !IO).                                              
+      90 +eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !ST, !SP, !S
+         +tack, !Pool,                                                   
+      91 +        !Bytecode, !HashTable, !IO) :-                         
+      92 +    eval_term(OpTable, BaseDir, Term, !Env, !ST, !SP, !Stack, !
+         +Pool,                                                          
+      93 +        !Bytecode, !HashTable, !IO),                           
+      94 +    eval_terms(OpTable, BaseDir, Terms, !Env, !ST, !SP, !Stack,
+         + !Pool,                                                        
+      95 +        !Bytecode, !HashTable, !IO).                           
+      96  
+      97  :- pred eval_term(operator_table::in, string::in, term::in, env
+          ::in, env::out,
+      98      array(value)::array_di, array(value)::array_uo,
+
+● Update(src/eval.m)
+  ⎿  Added 15 lines, removed 12 lines                                    
+       95          !Bytecode, !HashTable, !IO).
+       96  
+       97  :- pred eval_term(operator_table::in, string::in, term::in, en
+           v::in, env::out,
+       98 +    string_table::in, string_table::out,                      
+       99 +    int::in, int::out,                                        
+      100      array(value)::array_di, array(value)::array_uo,
+       99 -    int::in, int::out, string_table::in, string_table::out,   
+      100 -    array(int)::array_di, array(int)::array_uo,               
+      101      array(value)::array_di, array(value)::array_uo,
+      102 +    array(int)::array_di, array(int)::array_uo,               
+      103      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      104      io::di, io::uo) is det.
+      105  
+      105 -eval_term(OpTable, BaseDir, Term, !Env, !Array, !Ptr, !ST, !BC
+          -, !Pool, !HT, !IO) :-                                         
+      106 +eval_term(OpTable, BaseDir, Term, !Env, !ST, !SP, !Stack, !Poo
+          +l,                                                            
+      107 +        !Bytecode, !HashTable, !IO) :-                        
+      108      (
+      109          Term = identifier(NameId),
+      108 -        eval_identifier(OpTable, BaseDir, NameId, !Env, !Array
+          -, !Ptr, !ST, !BC,                                             
+      109 -            !Pool, !HT, !IO)                                  
+      110 +        eval_identifier(OpTable, BaseDir, NameId, !Env, !ST, !
+          +SP, !Stack, !Pool,                                            
+      111 +            !Bytecode, !HashTable, !IO)                       
+      112      ;
+      113          Term = binder(NameId),
+      112 -        eval_binder(NameId, !Env, !Array, !Ptr)               
+      114 +        eval_binder(NameId, !Env, !Stack, !SP)                
+      115      ;
+      116          Term = function(Terms),
+      115 -        eval_function(Terms, !.Env, !Array, !Ptr)             
+      117 +        eval_function(Terms, !.Env, !Stack, !SP)              
+      118      ;
+      119          Term = generator(Terms),
+      118 -        eval_generator(OpTable, BaseDir, Terms, !Env, !Array, 
+          -!Ptr, !ST, !BC,                                               
+      119 -            !Pool, !HT, !IO)                                  
+      120 +        eval_generator(OpTable, BaseDir, Terms, !Env, !ST, !SP
+          +, !Stack, !Pool,                                              
+      121 +            !Bytecode, !HashTable, !IO)                       
+      122      ;
+      123          Term = quoted(T),
+      122 -        datastack.push(termval(T), !Array, !Ptr)              
+      124 +        datastack.push(termval(T), !Stack, !SP)               
+      125      ;
+      126          Term = value(V),
+      125 -        datastack.push(V, !Array, !Ptr)                       
+      127 +        datastack.push(V, !Stack, !SP)                        
+      128      ;
+      129          Term = apply_term,
+      128 -        eval_apply(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, 
+          -!BC, !Pool, !HT, !IO)                                         
+      130 +        eval_apply(OpTable, BaseDir, !Env, !ST, !SP, !Stack, !
+          +Pool,                                                         
+      131 +            !Bytecode, !HashTable, !IO)                       
+      132      ).
+      133  
+      134  %-------------------------------------------------------------
+           ----------%
+
+● Update(src/eval.m)
+  ⎿  Added 14 lines, removed 14 lines                                    
+      137  
+      138  :- pred eval_identifier(operator_table::in, string::in, string
+           _id::in,
+      139      env::in, env::out,
+      140 -    array(value)::array_di, array(value)::array_uo,           
+      141 -    int::in, int::out,                                        
+      140      string_table::in, string_table::out,
+      143 -    array(int)::array_di, array(int)::array_uo,               
+      141 +    int::in, int::out,                                        
+      142      array(value)::array_di, array(value)::array_uo,
+      143 +    array(value)::array_di, array(value)::array_uo,           
+      144 +    array(int)::array_di, array(int)::array_uo,               
+      145      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      146      io::di, io::uo) is det.
+      147  
+      148 -eval_identifier(OpTable, BaseDir, NameId, !Env, !Array, !Ptr, 
+          -!ST, !BC,                                                     
+      149 -        !Pool, !HT, !IO) :-                                   
+      148 +eval_identifier(OpTable, BaseDir, NameId, !Env, !ST, !SP, !Sta
+          +ck, !Pool,                                                    
+      149 +        !Bytecode, !HashTable, !IO) :-                        
+      150      ( if get_env(NameId, V, !.Env) then
+      151 -        datastack.push(V, !Array, !Ptr)                       
+      151 +        datastack.push(V, !Stack, !SP)                        
+      152      else if map.search(OpTable, NameId, Info) then
+      153          ( if Info ^ oi_operator = op_import then
+      154              % import is special: it can modify Env and ST
+      155 -            eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, 
+          -!ST, !BC,                                                     
+      156 -                !Pool, !HT, !IO)                              
+      155 +            eval_import(OpTable, BaseDir, !Env, !ST, !SP, !Sta
+          +ck, !Pool,                                                    
+      156 +                !Bytecode, !HashTable, !IO)                   
+      157          else if Info ^ oi_operator = op_restore then
+      158              % restore is special: it replaces the current Env
+      159 -            eval_restore(!Env, !Array, !Ptr)                  
+      159 +            eval_restore(!Env, !Stack, !SP)                   
+      160          else if Info ^ oi_operator = op_peek then
+      161              % peek is special: it reads the bytecode store
+      162 -            eval_peek(!Array, !Ptr, !.BC)                     
+      162 +            eval_peek(!Stack, !SP, !.Bytecode)                
+      163          else if Info ^ oi_operator = op_poke then
+      164              % poke is special: it modifies the bytecode store
+      165 -            eval_poke(!Array, !Ptr, !BC)                      
+      165 +            eval_poke(!Stack, !SP, !Bytecode)                 
+      166          else if Info ^ oi_operator = op_ref then
+      167              % ref is special: it modifies the constant pool
+      168 -            eval_ref(!Array, !Ptr, !Pool, !HT)                
+      168 +            eval_ref(!Stack, !SP, !Pool, !HashTable)          
+      169          else if Info ^ oi_operator = op_deref then
+      170              % deref is special: it reads the constant pool
+      171 -            eval_deref(!Array, !Ptr, !.Pool)                  
+      171 +            eval_deref(!Stack, !SP, !.Pool)                   
+      172          else
+      173              operators.eval_operator(OpTable, !.ST, Info ^ oi_o
+           perator, !.Env,
+      174 -                !Array, !Ptr, !IO)                            
+      174 +                !Stack, !SP, !IO)                             
+      175          )
+      176      else
+      177          throw(undefined_name(NameId))
+
+● Update(src/eval.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      185      array(value)::array_di, array(value)::array_uo,
+      186      int::in, int::out) is det.
+      187  
+      188 -eval_binder(NameId, !Env, !Array, !Ptr) :-                    
+      189 -    datastack.pop("binder", V, !Array, !Ptr),                 
+      188 +eval_binder(NameId, !Env, !Stack, !SP) :-                     
+      189 +    datastack.pop("binder", V, !Stack, !SP),                  
+      190      set_env(NameId, V, !Env).
+      191  
+      192  %-------------------------------------------------------------
+           ----------%
+
+● Update(src/eval.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      198      int::in, int::out) is det.
+      199  
+      200  % A closure is represented as: closureval(Env, Terms)
+      201 -eval_function(Terms, Env, !Array, !Ptr) :-                    
+      201 +eval_function(Terms, Env, !Stack, !SP) :-                     
+      202      Closure = closureval(Env, Terms),
+      203 -    datastack.push(Closure, !Array, !Ptr).                    
+      203 +    datastack.push(Closure, !Stack, !SP).                     
+      204  
+      205  %-------------------------------------------------------------
+           ----------%
+      206  % Generator evaluation
+
+● Update(src/eval.m)
+  ⎿  Added 11 lines, removed 11 lines                                    
+      208  
+      209  :- pred eval_generator(operator_table::in, string::in, list(te
+           rm)::in,
+      210      env::in, env::out,
+      211 -    array(value)::array_di, array(value)::array_uo,           
+      212 -    int::in, int::out,                                        
+      211      string_table::in, string_table::out,
+      214 -    array(int)::array_di, array(int)::array_uo,               
+      212 +    int::in, int::out,                                        
+      213      array(value)::array_di, array(value)::array_uo,
+      214 +    array(value)::array_di, array(value)::array_uo,           
+      215 +    array(int)::array_di, array(int)::array_uo,               
+      216      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      217      io::di, io::uo) is det.
+      218  
+      219 -eval_generator(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          -T, !BC,                                                       
+      220 -        !Pool, !HT, !IO) :-                                   
+      219 +eval_generator(OpTable, BaseDir, Terms, !Env, !ST, !SP, !Stack
+          +, !Pool,                                                      
+      220 +        !Bytecode, !HashTable, !IO) :-                        
+      221      % Save current stack pointer
+      222 -    SavedPtr = !.Ptr,                                         
+      222 +    SavedSP = !.SP,                                           
+      223      % Evaluate generator terms (they push values onto the stac
+           k)
+      224 -    eval_terms(OpTable, BaseDir, Terms, !Env, !Array, !Ptr, !S
+          -T, !BC,                                                       
+      225 -        !Pool, !HT, !IO),                                     
+      224 +    eval_terms(OpTable, BaseDir, Terms, !Env, !ST, !SP, !Stack
+          +, !Pool,                                                      
+      225 +        !Bytecode, !HashTable, !IO),                          
+      226      % Extract values pushed by the generator as an array
+      227 -    datastack.extract_range(!.Array, SavedPtr, !.Ptr, ResultAr
+          -ray),                                                         
+      227 +    datastack.extract_range(!.Stack, SavedSP, !.SP, ResultArra
+          +y),                                                           
+      228      % Restore stack pointer and push the result array
+      229 -    !:Ptr = SavedPtr,                                         
+      230 -    datastack.push(arrayval(ResultArray), !Array, !Ptr).      
+      229 +    !:SP = SavedSP,                                           
+      230 +    datastack.push(arrayval(ResultArray), !Stack, !SP).       
+      231  
+      232  %-------------------------------------------------------------
+           ----------%
+      233  % apply (!)
+
+● Update(src/eval.m)
+  ⎿  Added 11 lines, removed 9 lines                                     
+      234  %-------------------------------------------------------------
+           ----------%
+      235  
+      236  :- pred eval_apply(operator_table::in, string::in, env::in, en
+           v::out,
+      237 +    string_table::in, string_table::out,                      
+      238 +    int::in, int::out,                                        
+      239      array(value)::array_di, array(value)::array_uo,
+      238 -    int::in, int::out, string_table::in, string_table::out,   
+      239 -    array(int)::array_di, array(int)::array_uo,               
+      240      array(value)::array_di, array(value)::array_uo,
+      241 +    array(int)::array_di, array(int)::array_uo,               
+      242      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      243      io::di, io::uo) is det.
+      244  
+      244 -eval_apply(OpTable, BaseDir, Env, Env, !Array, !Ptr, !ST, !BC,
+          - !Pool, !HT, !IO) :-                                          
+      245 -    datastack.pop("!", V, !Array, !Ptr),                      
+      245 +eval_apply(OpTable, BaseDir, Env, Env, !ST, !SP, !Stack, !Pool
+          +,                                                             
+      246 +        !Bytecode, !HashTable, !IO) :-                        
+      247 +    datastack.pop("!", V, !Stack, !SP),                       
+      248      ( if V = closureval(ClosureEnv, Terms) then
+      249          % Evaluate with closure's env, then discard env change
+           s (lexical scoping)
+      248 -        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !Ar
+          -ray, !Ptr, !ST, !BC,                                          
+      249 -            !Pool, !HT, !IO)                                  
+      250 +        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !ST
+          +, !SP, !Stack, !Pool,                                         
+      251 +            !Bytecode, !HashTable, !IO)                       
+      252      else if V = bytecodeval(Context, CodeAddr) then
+      253          % Execute bytecode closure via VM
+      254          % RP=-1 means return to eval_apply (sentinel value)
+      255          % FP starts at top of stack array (frame grows downwar
+           d)
+      256          % GenStack starts empty (no active generators)
+      255 -        FP = array.size(!.Array),                             
+      257 +        FP = array.size(!.Stack),                             
+      258          PP0 = array.size(!.Pool),
+      259          Store0 = vm.vm_store(PP0, !.ST),
+      258 -        vm.run(OpTable, Env, Context, [], Store0, Store, CodeA
+          -ddr, -1, FP, !Ptr,                                            
+      259 -            !Array, !Pool, !BC, !HT, !IO),                    
+      260 +        vm.run(OpTable, Env, Context, [], Store0, Store, CodeA
+          +ddr, -1, FP, !SP,                                             
+      261 +            !Stack, !Pool, !Bytecode, !HashTable, !IO),       
+      262          !:ST = Store ^ vm.vs_string_table
+      263      else
+      264          throw(type_error("closure", V))
+
+● Update(src/eval.m)
+  ⎿  Added 8 lines, removed 7 lines                                      
+      269  %-------------------------------------------------------------
+           ----------%
+      270  
+      271  :- pred eval_import(operator_table::in, string::in, env::in, e
+           nv::out,
+      272 -    array(value)::array_di, array(value)::array_uo,           
+      273 -    int::in, int::out,                                        
+      272      string_table::in, string_table::out,
+      275 -    array(int)::array_di, array(int)::array_uo,               
+      273 +    int::in, int::out,                                        
+      274      array(value)::array_di, array(value)::array_uo,
+      275 +    array(value)::array_di, array(value)::array_uo,           
+      276 +    array(int)::array_di, array(int)::array_uo,               
+      277      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      278      io::di, io::uo) is det.
+      279  
+      280 -eval_import(OpTable, BaseDir, !Env, !Array, !Ptr, !ST, !BC, !P
+          -ool, !HT, !IO) :-                                             
+      281 -    datastack.pop("import", V, !Array, !Ptr),                 
+      280 +eval_import(OpTable, BaseDir, !Env, !ST, !SP, !Stack, !Pool,  
+      281 +        !Bytecode, !HashTable, !IO) :-                        
+      282 +    datastack.pop("import", V, !Stack, !SP),                  
+      283      RelFilename = values.value_to_string(!.ST, V),
+      284      % Resolve relative paths using BaseDir
+      285      ( if dir.path_name_is_absolute(RelFilename) then
+     ...
+      297              parser.parse(Tokens, ParseResult),
+      298              (
+      299                  ParseResult = ok(Terms),
+      299 -                eval_terms(OpTable, NewBaseDir, Terms, !Env, !
+          -Array, !Ptr, !ST, !BC,                                        
+      300 -                    !Pool, !HT, !IO)                          
+      300 +                eval_terms(OpTable, NewBaseDir, Terms, !Env, !
+          +ST, !SP, !Stack, !Pool,                                       
+      301 +                    !Bytecode, !HashTable, !IO)               
+      302              ;
+      303                  ParseResult = error(ParseError),
+      304                  throw_parse_error(Filename, ParseError)
+
+● Update(src/eval.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      366      array(value)::array_di, array(value)::array_uo,
+      367      int::in, int::out) is det.
+      368  
+      369 -eval_restore(!Env, !Array, !Ptr) :-                           
+      370 -    datastack.pop("restore", V, !Array, !Ptr),                
+      369 +eval_restore(!Env, !Stack, !SP) :-                            
+      370 +    datastack.pop("restore", V, !Stack, !SP),                 
+      371      ( if V = mapval(NewEnv) then
+      372          !:Env = NewEnv
+      373      else
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      383      int::in, int::out,
+      384      array(int)::in) is det.
+      385  
+      386 -eval_peek(!Array, !Ptr, BC) :-                                
+      387 -    datastack.pop("peek", V, !Array, !Ptr),                   
+      386 +eval_peek(!Stack, !SP, Bytecode) :-                           
+      387 +    datastack.pop("peek", V, !Stack, !SP),                    
+      388      ( if V = intval(Addr) then
+      389 -        Value = bytecode.peek(Addr, BC),                      
+      390 -        datastack.push(intval(Value), !Array, !Ptr)           
+      389 +        Value = bytecode.peek(Addr, Bytecode),                
+      390 +        datastack.push(intval(Value), !Stack, !SP)            
+      391      else
+      392          throw(type_error("int", V))
+      393      ).
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      401      int::in, int::out,
+      402      array(int)::array_di, array(int)::array_uo) is det.
+      403  
+      404 -eval_poke(!Array, !Ptr, !BC) :-                               
+      405 -    datastack.pop("poke", AddrVal, !Array, !Ptr),             
+      406 -    datastack.pop("poke", ValueVal, !Array, !Ptr),            
+      404 +eval_poke(!Stack, !SP, !Bytecode) :-                          
+      405 +    datastack.pop("poke", AddrVal, !Stack, !SP),              
+      406 +    datastack.pop("poke", ValueVal, !Stack, !SP),             
+      407      ( if AddrVal = intval(Addr), ValueVal = intval(Value) then
+      408 -        bytecode.poke(Addr, Value, !BC)                       
+      408 +        bytecode.poke(Addr, Value, !Bytecode)                 
+      409      else if AddrVal = intval(_) then
+      410          throw(type_error("int", ValueVal))
+      411      else
+
+● Update(src/eval.m)
+  ⎿  Added 6 lines, removed 6 lines                                      
+      423      hash_table(value, int)::hash_table_di,
+      424      hash_table(value, int)::hash_table_uo) is det.
+      425  
+      426 -eval_ref(!Array, !Ptr, !Pool, !HT) :-                         
+      427 -    datastack.pop("ref", V, !Array, !Ptr),                    
+      426 +eval_ref(!Stack, !SP, !Pool, !HashTable) :-                   
+      427 +    datastack.pop("ref", V, !Stack, !SP),                     
+      428      % Check if value is already in the pool (deduplication)
+      429 -    ( if hash_table.search(!.HT, V, ExistingIdx) then         
+      429 +    ( if hash_table.search(!.HashTable, V, ExistingIdx) then  
+      430          % Already exists, return existing index
+      431 -        datastack.push(intval(ExistingIdx), !Array, !Ptr)     
+      431 +        datastack.push(intval(ExistingIdx), !Stack, !SP)      
+      432      else
+      433          % New value: add to pool and hash table
+      434          Idx = array.size(!.Pool),
+      435          array.resize(Idx + 1, V, !Pool),
+      436 -        hash_table.det_insert(V, Idx, !HT),                   
+      437 -        datastack.push(intval(Idx), !Array, !Ptr)             
+      436 +        hash_table.det_insert(V, Idx, !HashTable),            
+      437 +        datastack.push(intval(Idx), !Stack, !SP)              
+      438      ).
+      439  
+      440  %-------------------------------------------------------------
+           ----------%
+
+● Update(src/eval.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      446      int::in, int::out,
+      447      array(value)::in) is det.
+      448  
+      449 -eval_deref(!Array, !Ptr, Pool) :-                             
+      450 -    datastack.pop("deref", V, !Array, !Ptr),                  
+      449 +eval_deref(!Stack, !SP, Pool) :-                              
+      450 +    datastack.pop("deref", V, !Stack, !SP),                   
+      451      ( if V = intval(Idx) then
+      452          ( if Idx >= 0, Idx < array.size(Pool) then
+      453              array.lookup(Pool, Idx, Value),
+      454 -            datastack.push(Value, !Array, !Ptr)               
+      454 +            datastack.push(Value, !Stack, !SP)                
+      455          else
+      456              throw(index_out_of_bounds(Idx, array.size(Pool)))
+      457          )
+
+● Now I need to find the caller of eval_terms in the main module:
+
+● Search(pattern: "eval_terms\(")
+  ⎿  Found 23 files (ctrl+o to expand)
+
+● Search(pattern: "eval_terms\(", path: "src/froth.m", output_mode: "content")
+  ⎿  Found 7 lines (ctrl+o to expand)
+
+● Read(src/froth.m)
+  ⎿  Read 30 lines
+
+● Update(src/froth.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      608  
+      609  eval_terms_wrapper(OpTable, BaseDir, ST0, BC0, Terms, Env0, Ar
+           ray0, Ptr0,
+      610          Pool0, HT0, {ST, BC, Env, Array, Ptr, Pool, HT}, !IO) 
+           :-
+      611 -    eval.eval_terms(OpTable, BaseDir, Terms, Env0, Env, Array0
+          -, Array,                                                      
+      612 -        Ptr0, Ptr, ST0, ST, BC0, BC, Pool0, Pool, HT0, HT, !IO
+          -).                                                            
+      611 +    eval.eval_terms(OpTable, BaseDir, Terms, Env0, Env, ST0, S
+          +T,                                                            
+      612 +        Ptr0, Ptr, Array0, Array, Pool0, Pool, BC0, BC, HT0, H
+          +T, !IO).                                                      
+      613  
+      614  %-------------------------------------------------------------
+           ----------%
+      615  % Error reporting
+
+● Search(pattern: "eval_terms\(", path: "src/unit_tests/eval_test.m",
+        output_mode: "content")
+  ⎿  Found 7 lines (ctrl+o to expand)
+
+● Read(src/unit_tests/eval_test.m)
+  ⎿  Read 30 lines
+
+● Read(src/unit_tests/eval_test.m)
+  ⎿  Read 50 lines
+
+● Bash(ls -la /home/mark/Documents/projects/froth/src/unit_tests/)
+  ⎿  total 40                                   
+     drwxrwxr-x 2 mark mark 4096 Jan  6 23:53 .
+     drwxrwxr-x 4 mark mark 4096 Jan  7 16:03 ..
+     … +4 lines (ctrl+o to expand)
+
+● Search(pattern: "eval_test", path: "Makefile", output_mode: "content")
+  ⎿  Found 6 lines (ctrl+o to expand)
+
+● Read(Makefile)
+  ⎿  Read 41 lines
+
+● The eval_test.m file appears to be an outdated unit test that uses a legacy interface. It's not built by default (make test only runs the shell-based tests). Let me compile and run the main tests:
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth     
+     Making Mercury/int3s/froth.int3
+     Making Mercury/int3s/eval.int3
+     … +8 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | grep -E "^(PASS|FAIL|Tests:)")
+  ⎿  PASS: add                     
+     PASS: alist
+     PASS: apply_op
+     … +62 lines (ctrl+o to expand)
+
+● Refactoring complete. All tests pass (63 passed, 2 failed - the same bootstrap-related failures as before).
+
+  The new argument order for eval_terms is:
+  eval_terms(OpTable, BaseDir, Terms, !Env, !ST, !SP, !Stack, !Pool, !Bytecode, !HashTable, !IO)
+
+  Grouping:
+  1. Read-only context: OpTable, BaseDir, Terms
+  2. Threaded state: !Env, !ST
+  3. Machine register: !SP
+  4. Threaded memory: !Stack, !Pool, !Bytecode, !HashTable, !IO
+
+> Let's put OpTable and BaseDir together in a data structure, so they can be
+ easily passed between run and eval_terms. 
+
+● I'll create an exec_context type to bundle OpTable and BaseDir together. Let me add it to types.m first:
+
+● Read(src/types.m)
+  ⎿  Read 252 lines
+
+● Update(src/types.m)
+  ⎿  Added 8 lines                                                       
+      84  
+      85  :- type operator_table == map(string_id, operator_info).
+      86  
+      87 +    % Execution context: read-only state for evaluation and VM 
+         +execution.                                                     
+      88 +    %                                                          
+      89 +:- type exec_context                                           
+      90 +    --->    exec_context(                                      
+      91 +                ec_op_table :: operator_table,                 
+      92 +                ec_base_dir :: string                          
+      93 +            ).                                                 
+      94 +                                                               
+      95      % Intern table: bidirectional mapping between strings and I
+          Ds,
+      96      % plus operator lookup table.
+      97      %
+
+● Now let me update vm.m to use exec_context:
+
+● Update(src/vm.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      22                  vs_string_table :: string_table % ST: string in
+          tern table
+      23              ).
+      24  
+      25 -    % run(OpTable, Env, Context, GenStack, !Store,             
+      25 +    % run(Ctx, Env, Context, GenStack, !Store,                 
+      26      %     IP, RP, FP, !SP, !Stack, !Pool, !Bytecode, !HashTable
+          , !IO):
+      27      %
+      28      % Execute bytecode starting at IP until return.
+      29      %
+      30      % Execution context (read-only):
+      31 -    %   OpTable - operator dispatch table                      
+      31 +    %   Ctx - execution context (operator table, base dir)     
+      32      %   Env - environment for 'env' operator
+      33      %   Context - closure's captured environment array
+      34      %   GenStack - saved stack pointers for generators
+     ...
+      50      %   IO - I/O state
+      51      %
+      52  :- pred run(
+      53 -    operator_table::in, env::in, array(value)::in, list(int)::i
+         -n,                                                             
+      53 +    exec_context::in, env::in, array(value)::in, list(int)::in,
+      54      vm_store::in, vm_store::out,
+      55      int::in, int::in, int::in,
+      56      int::in, int::out,
+
+● Now update the implementation:
+
+● Update(src/vm.m)
+  ⎿  Added 23 lines, removed 22 lines                                    
+      123  % VM execution
+      124  %-------------------------------------------------------------
+           ----------%
+      125  
+      126 -run(OpTable, Env, Context, GenStack, !Store, IP, RP, FP, !SP, 
+      126 +run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,     
+      127          !Stack, !Pool, !Bytecode, !HashTable, !IO) :-
+      128 +    OpTable = Ctx ^ ec_op_table,                              
+      129      array.lookup(!.Bytecode, IP, Opcode),
+      130      ( if Opcode = oc_pushInt then
+      131          % pushInt n: push integer n onto stack
+      132          array.lookup(!.Bytecode, IP + 1, N),
+      133          datastack.push(intval(N), !Stack, !SP),
+      133 -        run(OpTable, Env, Context, GenStack, !Store, IP + 2, R
+          -P, FP, !SP,                                                   
+      134 +        run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, F
+          +P, !SP,                                                       
+      135              !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      136      else if Opcode = oc_op then
+      137          % op n: execute operator n
+     ...
+      139          ( if operator_table.int_to_operator(OpNum, Op) then
+      140              ( if Op = op_ref then
+      141                  vm_ref(!Stack, !SP, !Pool, !HashTable),
+      141 -                run(OpTable, Env, Context, GenStack, !Store, I
+          -P + 2, RP, FP, !SP,                                           
+      142 +                run(Ctx, Env, Context, GenStack, !Store, IP + 
+          +2, RP, FP, !SP,                                               
+      143                      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      144              else if Op = op_deref then
+      145                  vm_deref(!Stack, !SP, !.Pool),
+      145 -                run(OpTable, Env, Context, GenStack, !Store, I
+          -P + 2, RP, FP, !SP,                                           
+      146 +                run(Ctx, Env, Context, GenStack, !Store, IP + 
+          +2, RP, FP, !SP,                                               
+      147                      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      148              else
+      149                  operators.eval_operator(OpTable, !.Store ^ vs_
+           string_table, Op, Env,
+      150                      !Stack, !SP, !IO),
+      150 -                run(OpTable, Env, Context, GenStack, !Store, I
+          -P + 2, RP, FP, !SP,                                           
+      151 +                run(Ctx, Env, Context, GenStack, !Store, IP + 
+          +2, RP, FP, !SP,                                               
+      152                      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      153              )
+      154          else
+     ...
+      160          ( if RP = -1 then
+      161              true
+      162          else
+      162 -            run(OpTable, Env, Context, GenStack, !Store, RP, R
+          -P, FP, !SP,                                                   
+      163 +            run(Ctx, Env, Context, GenStack, !Store, RP, RP, F
+          +P, !SP,                                                       
+      164                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      165          )
+      166      else if Opcode = oc_pushString then
+      167          % pushString n: push string with intern ID n
+      168          array.lookup(!.Bytecode, IP + 1, StrId),
+      169          datastack.push(stringval(StrId), !Stack, !SP),
+      169 -        run(OpTable, Env, Context, GenStack, !Store, IP + 2, R
+          -P, FP, !SP,                                                   
+      170 +        run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, F
+          +P, !SP,                                                       
+      171              !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      172      else if Opcode = oc_pushContext then
+      173          % pushContext n: push value from context slot n
+      174          array.lookup(!.Bytecode, IP + 1, Slot),
+      175          array.lookup(Context, Slot, Val),
+      176          datastack.push(Val, !Stack, !SP),
+      176 -        run(OpTable, Env, Context, GenStack, !Store, IP + 2, R
+          -P, FP, !SP,                                                   
+      177 +        run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, F
+          +P, !SP,                                                       
+      178              !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      179      else if Opcode = oc_popUnused then
+      180          % popUnused: pop and discard top of stack
+      181          datastack.pop("popUnused", _, !Stack, !SP),
+      181 -        run(OpTable, Env, Context, GenStack, !Store, IP + 1, R
+          -P, FP, !SP,                                                   
+      182 +        run(Ctx, Env, Context, GenStack, !Store, IP + 1, RP, F
+          +P, !SP,                                                       
+      183              !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      184      else if Opcode = oc_pushLocal then
+      185          % pushLocal n: push value from frame slot n
+      186          array.lookup(!.Bytecode, IP + 1, Slot),
+      187          array.lookup(!.Stack, FP + Slot, Val),
+      188          datastack.push(Val, !Stack, !SP),
+      188 -        run(OpTable, Env, Context, GenStack, !Store, IP + 2, R
+          -P, FP, !SP,                                                   
+      189 +        run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, F
+          +P, !SP,                                                       
+      190              !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      191      else if Opcode = oc_popLocal then
+      192          % popLocal n: pop value into frame slot n
+      193          array.lookup(!.Bytecode, IP + 1, Slot),
+      194          datastack.pop("popLocal", Val, !Stack, !SP),
+      195          array.set(FP + Slot, Val, !Stack),
+      195 -        run(OpTable, Env, Context, GenStack, !Store, IP + 2, R
+          -P, FP, !SP,                                                   
+      196 +        run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, F
+          +P, !SP,                                                       
+      197              !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      198      else if Opcode = oc_enterFrame then
+      199          % enterFrame n: allocate n frame slots (FP -= n)
+     ...
+      202          ( if NewFP < !.SP then
+      203              throw(vm_error("stack overflow: frame collision"))
+      204          else
+      204 -            run(OpTable, Env, Context, GenStack, !Store, IP + 
+          -2, RP, NewFP, !SP,                                            
+      205 +            run(Ctx, Env, Context, GenStack, !Store, IP + 2, R
+          +P, NewFP, !SP,                                                
+      206                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      207          )
+      208      else if Opcode = oc_leaveFrame then
+      209          % leaveFrame n: deallocate n frame slots (FP += n)
+      210          array.lookup(!.Bytecode, IP + 1, N),
+      211          NewFP = FP + N,
+      211 -        run(OpTable, Env, Context, GenStack, !Store, IP + 2, R
+          -P, NewFP, !SP,                                                
+      212 +        run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, N
+          +ewFP, !SP,                                                    
+      213              !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      214      else if Opcode = oc_startArray then
+      215          % startArray: save current SP for later array extracti
+           on
+      215 -        run(OpTable, Env, Context, [!.SP | GenStack], !Store, 
+          -IP + 1, RP, FP, !SP,                                          
+      216 +        run(Ctx, Env, Context, [!.SP | GenStack], !Store, IP +
+          + 1, RP, FP, !SP,                                              
+      217              !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      218      else if Opcode = oc_endArray then
+      219          % endArray: extract values since saved SP as array
+     ...
+      222              datastack.extract_range(!.Stack, SavedSP, !.SP, Re
+           sultArray),
+      223              !:SP = SavedSP,
+      224              datastack.push(arrayval(ResultArray), !Stack, !SP)
+           ,
+      224 -            run(OpTable, Env, Context, RestGenStack, !Store, I
+          -P + 1, RP, FP, !SP,                                           
+      225 +            run(Ctx, Env, Context, RestGenStack, !Store, IP + 
+          +1, RP, FP, !SP,                                               
+      226                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      227          ;
+      228              GenStack = [],
+     ...
+      232          % call: pop closure, set RP to return address, switch 
+           context, jump
+      233          datastack.pop("call", V, !Stack, !SP),
+      234          ( if V = bytecodeval(CalleeContext, CodeAddr) then
+      234 -            run(OpTable, Env, CalleeContext, GenStack, !Store,
+          - CodeAddr, IP + 1, FP, !SP,                                   
+      235 +            run(Ctx, Env, CalleeContext, GenStack, !Store, Cod
+          +eAddr, IP + 1, FP, !SP,                                       
+      236                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      237          else
+      238              throw(type_error("bytecode closure", V))
+     ...
+      241          % tail-call: pop closure, preserve RP, switch context,
+            jump
+      242          datastack.pop("tail-call", V, !Stack, !SP),
+      243          ( if V = bytecodeval(CalleeContext, CodeAddr) then
+      243 -            run(OpTable, Env, CalleeContext, GenStack, !Store,
+          - CodeAddr, RP, FP, !SP,                                       
+      244 +            run(Ctx, Env, CalleeContext, GenStack, !Store, Cod
+          +eAddr, RP, FP, !SP,                                           
+      245                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      246          else
+      247              throw(type_error("bytecode closure", V))
+     ...
+      249      else if Opcode = oc_saveReturnPtr then
+      250          % saveReturnPtr: push current RP onto data stack
+      251          datastack.push(intval(RP), !Stack, !SP),
+      251 -        run(OpTable, Env, Context, GenStack, !Store, IP + 1, R
+          -P, FP, !SP,                                                   
+      252 +        run(Ctx, Env, Context, GenStack, !Store, IP + 1, RP, F
+          +P, !SP,                                                       
+      253              !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      254      else if Opcode = oc_restoreReturnPtr then
+      255          % restoreReturnPtr: pop RP from data stack
+      256          datastack.pop("restoreReturnPtr", V, !Stack, !SP),
+      257          ( if V = intval(NewRP) then
+      257 -            run(OpTable, Env, Context, GenStack, !Store, IP + 
+          -1, NewRP, FP, !SP,                                            
+      258 +            run(Ctx, Env, Context, GenStack, !Store, IP + 1, N
+          +ewRP, FP, !SP,                                                
+      259                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      260          else
+      261              throw(type_error("int", V))
+     ...
+      263      else if Opcode = oc_saveContextPtr then
+      264          % saveContextPtr: push current context array onto data
+            stack
+      265          datastack.push(arrayval(Context), !Stack, !SP),
+      265 -        run(OpTable, Env, Context, GenStack, !Store, IP + 1, R
+          -P, FP, !SP,                                                   
+      266 +        run(Ctx, Env, Context, GenStack, !Store, IP + 1, RP, F
+          +P, !SP,                                                       
+      267              !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      268      else if Opcode = oc_restoreContextPtr then
+      269          % restoreContextPtr: pop context array from data stack
+      270          datastack.pop("restoreContextPtr", V, !Stack, !SP),
+      271          ( if V = arrayval(NewContext) then
+      271 -            run(OpTable, Env, NewContext, GenStack, !Store, IP
+          - + 1, RP, FP, !SP,                                            
+      272 +            run(Ctx, Env, NewContext, GenStack, !Store, IP + 1
+          +, RP, FP, !SP,                                                
+      273                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      274          else
+      275              throw(type_error("array", V))
+     ...
+      277      else if Opcode = oc_pushQuotedApply then
+      278          % pushQuotedApply: push quoted apply term ('!)
+      279          datastack.push(termval(apply_term), !Stack, !SP),
+      279 -        run(OpTable, Env, Context, GenStack, !Store, IP + 1, R
+          -P, FP, !SP,                                                   
+      280 +        run(Ctx, Env, Context, GenStack, !Store, IP + 1, RP, F
+          +P, !SP,                                                       
+      281              !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      282      else
+      283          throw(vm_error("unknown opcode"))
+
+● Now update eval.m to use exec_context:
+
+● Update(src/eval.m)
+  ⎿  Added 3 lines, removed 4 lines                                      
+      14  
+      15  %--------------------------------------------------------------
+          ---------%
+      16  
+      17 -    % eval_terms(OpTable, BaseDir, Terms, !Env, !ST,           
+      17 +    % eval_terms(Ctx, Terms, !Env, !ST,                        
+      18      %            !SP, !Stack, !Pool, !Bytecode, !HashTable, !IO
+          ):
+      19      %
+      20      % Evaluate a list of terms, updating the environment and st
+          ack.
+      21      %
+      22      % Read-only context:
+      23 -    %   OpTable - operator dispatch table (fixed at engine star
+         -tup)                                                           
+      24 -    %   BaseDir - base directory for resolving relative imports
+      23 +    %   Ctx - execution context (operator table, base directory
+         +)                                                              
+      24      %   Terms - list of terms to evaluate
+      25      %
+      26      % Threaded state:
+     ...
+      39      %
+      40      % Throws eval_error on failure.
+      41      %
+      43 -:- pred eval_terms(operator_table::in, string::in, list(term)::
+         -in,                                                            
+      42 +:- pred eval_terms(exec_context::in, list(term)::in,           
+      43      env::in, env::out,
+      44      string_table::in, string_table::out,
+      45      int::in, int::out,
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      85  % Main evaluation
+      86  %--------------------------------------------------------------
+          ---------%
+      87  
+      88 -eval_terms(_, _, [], !Env, !ST, !SP, !Stack, !Pool, !Bytecode, 
+         -!HashTable, !IO).                                              
+      89 -eval_terms(OpTable, BaseDir, [Term | Terms], !Env, !ST, !SP, !S
+         -tack, !Pool,                                                   
+      88 +eval_terms(_, [], !Env, !ST, !SP, !Stack, !Pool, !Bytecode, !Ha
+         +shTable, !IO).                                                 
+      89 +eval_terms(Ctx, [Term | Terms], !Env, !ST, !SP, !Stack, !Pool, 
+      90          !Bytecode, !HashTable, !IO) :-
+      91 -    eval_term(OpTable, BaseDir, Term, !Env, !ST, !SP, !Stack, !
+         -Pool,                                                          
+      91 +    eval_term(Ctx, Term, !Env, !ST, !SP, !Stack, !Pool,        
+      92          !Bytecode, !HashTable, !IO),
+      93 -    eval_terms(OpTable, BaseDir, Terms, !Env, !ST, !SP, !Stack,
+         - !Pool,                                                        
+      93 +    eval_terms(Ctx, Terms, !Env, !ST, !SP, !Stack, !Pool,      
+      94          !Bytecode, !HashTable, !IO).
+      95  
+      96  :- pred eval_term(operator_table::in, string::in, term::in, env
+          ::in, env::out,
+
+● Update(src/eval.m)
+  ⎿  Added 5 lines, removed 5 lines                                      
+      93      eval_terms(Ctx, Terms, !Env, !ST, !SP, !Stack, !Pool,
+      94          !Bytecode, !HashTable, !IO).
+      95  
+      96 -:- pred eval_term(operator_table::in, string::in, term::in, env
+         -::in, env::out,                                                
+      96 +:- pred eval_term(exec_context::in, term::in, env::in, env::out
+         +,                                                              
+      97      string_table::in, string_table::out,
+      98      int::in, int::out,
+      99      array(value)::array_di, array(value)::array_uo,
+     ...
+      102      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      103      io::di, io::uo) is det.
+      104  
+      105 -eval_term(OpTable, BaseDir, Term, !Env, !ST, !SP, !Stack, !Poo
+          -l,                                                            
+      105 +eval_term(Ctx, Term, !Env, !ST, !SP, !Stack, !Pool,           
+      106          !Bytecode, !HashTable, !IO) :-
+      107      (
+      108          Term = identifier(NameId),
+      109 -        eval_identifier(OpTable, BaseDir, NameId, !Env, !ST, !
+          -SP, !Stack, !Pool,                                            
+      109 +        eval_identifier(Ctx, NameId, !Env, !ST, !SP, !Stack, !
+          +Pool,                                                         
+      110              !Bytecode, !HashTable, !IO)
+      111      ;
+      112          Term = binder(NameId),
+     ...
+      116          eval_function(Terms, !.Env, !Stack, !SP)
+      117      ;
+      118          Term = generator(Terms),
+      119 -        eval_generator(OpTable, BaseDir, Terms, !Env, !ST, !SP
+          -, !Stack, !Pool,                                              
+      119 +        eval_generator(Ctx, Terms, !Env, !ST, !SP, !Stack, !Po
+          +ol,                                                           
+      120              !Bytecode, !HashTable, !IO)
+      121      ;
+      122          Term = quoted(T),
+     ...
+      126          datastack.push(V, !Stack, !SP)
+      127      ;
+      128          Term = apply_term,
+      129 -        eval_apply(OpTable, BaseDir, !Env, !ST, !SP, !Stack, !
+          -Pool,                                                         
+      129 +        eval_apply(Ctx, !Env, !ST, !SP, !Stack, !Pool,        
+      130              !Bytecode, !HashTable, !IO)
+      131      ).
+      132  
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 3 lines                                      
+      134  % Identifier evaluation
+      135  %-------------------------------------------------------------
+           ----------%
+      136  
+      137 -:- pred eval_identifier(operator_table::in, string::in, string
+          -_id::in,                                                      
+      137 +:- pred eval_identifier(exec_context::in, string_id::in,      
+      138      env::in, env::out,
+      139      string_table::in, string_table::out,
+      140      int::in, int::out,
+     ...
+      144      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      145      io::di, io::uo) is det.
+      146  
+      147 -eval_identifier(OpTable, BaseDir, NameId, !Env, !ST, !SP, !Sta
+          -ck, !Pool,                                                    
+      147 +eval_identifier(Ctx, NameId, !Env, !ST, !SP, !Stack, !Pool,   
+      148          !Bytecode, !HashTable, !IO) :-
+      149 +    OpTable = Ctx ^ ec_op_table,                              
+      150      ( if get_env(NameId, V, !.Env) then
+      151          datastack.push(V, !Stack, !SP)
+      152      else if map.search(OpTable, NameId, Info) then
+      153          ( if Info ^ oi_operator = op_import then
+      154              % import is special: it can modify Env and ST
+      154 -            eval_import(OpTable, BaseDir, !Env, !ST, !SP, !Sta
+          -ck, !Pool,                                                    
+      155 +            eval_import(Ctx, !Env, !ST, !SP, !Stack, !Pool,   
+      156                  !Bytecode, !HashTable, !IO)
+      157          else if Info ^ oi_operator = op_restore then
+      158              % restore is special: it replaces the current Env
+
+● Update(src/eval.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      206  % Generator evaluation
+      207  %-------------------------------------------------------------
+           ----------%
+      208  
+      209 -:- pred eval_generator(operator_table::in, string::in, list(te
+          -rm)::in,                                                      
+      209 +:- pred eval_generator(exec_context::in, list(term)::in,      
+      210      env::in, env::out,
+      211      string_table::in, string_table::out,
+      212      int::in, int::out,
+     ...
+      216      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      217      io::di, io::uo) is det.
+      218  
+      219 -eval_generator(OpTable, BaseDir, Terms, !Env, !ST, !SP, !Stack
+          -, !Pool,                                                      
+      219 +eval_generator(Ctx, Terms, !Env, !ST, !SP, !Stack, !Pool,     
+      220          !Bytecode, !HashTable, !IO) :-
+      221      % Save current stack pointer
+      222      SavedSP = !.SP,
+      223      % Evaluate generator terms (they push values onto the stac
+           k)
+      224 -    eval_terms(OpTable, BaseDir, Terms, !Env, !ST, !SP, !Stack
+          -, !Pool,                                                      
+      224 +    eval_terms(Ctx, Terms, !Env, !ST, !SP, !Stack, !Pool,     
+      225          !Bytecode, !HashTable, !IO),
+      226      % Extract values pushed by the generator as an array
+      227      datastack.extract_range(!.Stack, SavedSP, !.SP, ResultArra
+           y),
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      233  % apply (!)
+      234  %-------------------------------------------------------------
+           ----------%
+      235  
+      236 -:- pred eval_apply(operator_table::in, string::in, env::in, en
+          -v::out,                                                       
+      236 +:- pred eval_apply(exec_context::in, env::in, env::out,       
+      237      string_table::in, string_table::out,
+      238      int::in, int::out,
+      239      array(value)::array_di, array(value)::array_uo,
+     ...
+      242      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      243      io::di, io::uo) is det.
+      244  
+      245 -eval_apply(OpTable, BaseDir, Env, Env, !ST, !SP, !Stack, !Pool
+          -,                                                             
+      245 +eval_apply(Ctx, Env, Env, !ST, !SP, !Stack, !Pool,            
+      246          !Bytecode, !HashTable, !IO) :-
+      247      datastack.pop("!", V, !Stack, !SP),
+      248      ( if V = closureval(ClosureEnv, Terms) then
+      249          % Evaluate with closure's env, then discard env change
+           s (lexical scoping)
+      250 -        eval_terms(OpTable, BaseDir, Terms, ClosureEnv, _, !ST
+          -, !SP, !Stack, !Pool,                                         
+      250 +        eval_terms(Ctx, Terms, ClosureEnv, _, !ST, !SP, !Stack
+          +, !Pool,                                                      
+      251              !Bytecode, !HashTable, !IO)
+      252      else if V = bytecodeval(Context, CodeAddr) then
+      253          % Execute bytecode closure via VM
+     ...
+      257          FP = array.size(!.Stack),
+      258          PP0 = array.size(!.Pool),
+      259          Store0 = vm.vm_store(PP0, !.ST),
+      260 -        vm.run(OpTable, Env, Context, [], Store0, Store, CodeA
+          -ddr, -1, FP, !SP,                                             
+      260 +        vm.run(Ctx, Env, Context, [], Store0, Store, CodeAddr,
+          + -1, FP, !SP,                                                 
+      261              !Stack, !Pool, !Bytecode, !HashTable, !IO),
+      262          !:ST = Store ^ vm.vs_string_table
+      263      else
+
+● Update(src/eval.m)
+  ⎿  Added 6 lines, removed 3 lines                                      
+      268  % import: ( filename -- ) Load and evaluate a file
+      269  %-------------------------------------------------------------
+           ----------%
+      270  
+      271 -:- pred eval_import(operator_table::in, string::in, env::in, e
+          -nv::out,                                                      
+      271 +:- pred eval_import(exec_context::in, env::in, env::out,      
+      272      string_table::in, string_table::out,
+      273      int::in, int::out,
+      274      array(value)::array_di, array(value)::array_uo,
+     ...
+      277      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      278      io::di, io::uo) is det.
+      279  
+      280 -eval_import(OpTable, BaseDir, !Env, !ST, !SP, !Stack, !Pool,  
+      280 +eval_import(Ctx, !Env, !ST, !SP, !Stack, !Pool,               
+      281          !Bytecode, !HashTable, !IO) :-
+      282 +    BaseDir = Ctx ^ ec_base_dir,                              
+      283 +    OpTable = Ctx ^ ec_op_table,                              
+      284      datastack.pop("import", V, !Stack, !SP),
+      285      RelFilename = values.value_to_string(!.ST, V),
+      286      % Resolve relative paths using BaseDir
+     ...
+      290          Filename = dir.make_path_name(BaseDir, RelFilename)
+      291      ),
+      292      NewBaseDir = dir.dirname(Filename),
+      293 +    NewCtx = exec_context(OpTable, NewBaseDir),               
+      294      io.read_named_file_as_string(Filename, ReadResult, !IO),
+      295      (
+      296          ReadResult = ok(Content),
+     ...
+      300              parser.parse(Tokens, ParseResult),
+      301              (
+      302                  ParseResult = ok(Terms),
+      300 -                eval_terms(OpTable, NewBaseDir, Terms, !Env, !
+          -ST, !SP, !Stack, !Pool,                                       
+      303 +                eval_terms(NewCtx, Terms, !Env, !ST, !SP, !Sta
+          +ck, !Pool,                                                    
+      304                      !Bytecode, !HashTable, !IO)
+      305              ;
+      306                  ParseResult = error(ParseError),
+
+● Now update the caller in froth.m:
+
+● Read(src/froth.m)
+  ⎿  Read 30 lines
+
+● Update(src/froth.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      598  % Evaluation wrapper
+      599  %-------------------------------------------------------------
+           ----------%
+      600  
+      601 -:- pred eval_terms_wrapper(operator_table::in, string::in, str
+          -ing_table::in,                                                
+      601 +:- pred eval_terms_wrapper(exec_context::in, string_table::in,
+      602      array(int)::array_di, list(term)::in, env::in,
+      603      array(value)::array_di, int::in,
+      604      array(value)::array_di, hash_table(value, int)::hash_table
+           _di,
+     ...
+      606          array(value), hash_table(value, int)}::out,
+      607      io::di, io::uo) is det.
+      608  
+      609 -eval_terms_wrapper(OpTable, BaseDir, ST0, BC0, Terms, Env0, Ar
+          -ray0, Ptr0,                                                   
+      609 +eval_terms_wrapper(Ctx, ST0, BC0, Terms, Env0, Array0, Ptr0,  
+      610          Pool0, HT0, {ST, BC, Env, Array, Ptr, Pool, HT}, !IO) 
+           :-
+      611 -    eval.eval_terms(OpTable, BaseDir, Terms, Env0, Env, ST0, S
+          -T,                                                            
+      611 +    eval.eval_terms(Ctx, Terms, Env0, Env, ST0, ST,           
+      612          Ptr0, Ptr, Array0, Array, Pool0, Pool, BC0, BC, HT0, H
+           T, !IO).
+      613  
+      614  %-------------------------------------------------------------
+           ----------%
+
+● Search(pattern: "eval_terms_wrapper\(", path: "src/froth.m", output_mode:
+        "content")
+  ⎿  Found 47 lines (ctrl+o to expand)
+
+● Update(src/froth.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      214                  ParseResult = ok(Terms),
+      215                  datastack.init(Array0, Ptr0),
+      216                  init_pool(Pool0, HT0),
+      217 -                try_io(eval_terms_wrapper(OpTable, LibDir, ST1
+          -, BC0,                                                        
+      217 +                Ctx0 = exec_context(OpTable, LibDir),         
+      218 +                try_io(eval_terms_wrapper(Ctx0, ST1, BC0,     
+      219                      Terms, map.init, Array0, Ptr0, Pool0, HT0)
+           , EvalResult, !IO),
+      220                  (
+      221                      EvalResult = succeeded({ST, BC, Env, _Arra
+           y, _Ptr,
+
+● Update(src/froth.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      379          (
+      380              ParseResult = ok(Terms),
+      381              % Use "." as BaseDir for code strings (current dir
+           ectory)
+      382 -            try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, 
+          -Terms,                                                        
+      382 +            Ctx = exec_context(OpTable, "."),                 
+      383 +            try_io(eval_terms_wrapper(Ctx, ST1, BC0, Terms,   
+      384                  Env0, Array0, Ptr0, Pool0, HT0), EvalResult, !
+           IO),
+      385              (
+      386                  EvalResult = succeeded({ST, BC, Env, Array, Pt
+           r, Pool, HT}),
+
+● Update(src/froth.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      438              parser.parse(Tokens, ParseResult),
+      439              (
+      440                  ParseResult = ok(Terms),
+      441 -                try_io(eval_terms_wrapper(OpTable, BaseDir, ST
+          -1, BC0,                                                       
+      441 +                Ctx = exec_context(OpTable, BaseDir),         
+      442 +                try_io(eval_terms_wrapper(Ctx, ST1, BC0,      
+      443                      Terms, Env0, Array0, Ptr0, Pool0, HT0), Ev
+           alResult, !IO),
+      444                  (
+      445                      EvalResult = succeeded({ST, BC, Env, Array
+           , Ptr, Pool, HT}),
+
+● Update(src/froth.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      544          parser.parse(Tokens, ParseResult),
+      545          (
+      546              ParseResult = ok(Terms),
+      547 -            try_io(eval_terms_wrapper(OpTable, ".", ST1, BC0, 
+          -Terms,                                                        
+      547 +            Ctx = exec_context(OpTable, "."),                 
+      548 +            try_io(eval_terms_wrapper(Ctx, ST1, BC0, Terms,   
+      549                  Env0, Array0, Ptr0, Pool0, HT0), Result, !IO),
+      550              (
+      551                  Result = succeeded({ST, BC, Env, Array, Ptr, P
+           ool, HT})
+
+● Now let me compile and test:
+
+● Bash(make 2>&1)
+  ⎿  cd src && mmc --make froth     
+     Making Mercury/int3s/froth.int3
+     Making Mercury/int3s/types.int3
+     … +37 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | grep -E "^(PASS|FAIL|Tests:)")
+  ⎿  PASS: add                     
+     PASS: alist
+     PASS: apply_op
+     … +62 lines (ctrl+o to expand)
+
+● Refactoring complete. All tests pass (63 passed, 2 failed - same bootstrap-related failures).
+
+  Summary of changes:
+  - Added exec_context type to types.m bundling operator_table and base_dir
+  - Updated vm.run to take exec_context instead of operator_table (still takes env separately since it's needed for the env operator)
+  - Updated eval_terms and all helper predicates to take exec_context instead of separate OpTable and BaseDir
+  - Updated all call sites in froth.m to construct exec_context
+
+  The new signatures:
+  % vm.run
+  run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
+      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+
+  % eval_terms  
+  eval_terms(Ctx, Terms, !Env, !ST, !SP, !Stack, !Pool, !Bytecode, !HashTable, !IO)
+
+> Why isn't eval_terms threading the pool count through? 
+
+● Good question. Looking at the code, eval_terms doesn't need to track pool count separately because it's implicit in the array size - eval_ref just uses array.size(!.Pool) to get the next index.
+
+  But you're right to notice the inconsistency. Looking at vm_store:
+
+  :- type vm_store
+      --->    vm_store(
+                  vs_pool_count   :: int,
+                  vs_string_table :: string_table
+              ).
+
+  And how it's used in eval_apply:
+  PP0 = array.size(!.Pool),
+  Store0 = vm.vm_store(PP0, !.ST),
+  vm.run(..., Store0, Store, ...),
+  !:ST = Store ^ vm.vs_string_table  % only ST is extracted!
+
+  The vs_pool_count is computed from array.size(!.Pool), passed into the VM, but never used or extracted afterward. And in vm_ref, it also just uses array.size(!.Pool):
+
+  Idx = array.size(!.Pool),
+  array.resize(Idx + 1, V, !Pool),
+
+  So vs_pool_count in vm_store appears to be vestigial - it's not actually needed since the pool count is always derivable from the array size.
+
+  Should I remove it from vm_store to clean this up?
+
+> Mercury arrays have fixed size. The pool count is required, as "size" 
+means the capacity of the array. 
+
+● You're right, I misunderstood. Mercury arrays have fixed capacity and array.size returns that capacity, not the number of valid elements. The current code using array.resize on every insert is inefficient (O(n) per insert).
+
+  So vs_pool_count tracks how many slots are actually used, and the array is pre-allocated with extra capacity. The eval_terms side should also be threading pool count through to avoid resizing on every ref operation.
+
+  Should I:
+  1. Add pool count threading to eval_terms (similar to how vm_store bundles it for vm.run), or
+  2. Create a shared store type that both vm.run and eval_terms use for ST and pool count?
+
+> 2 
+
+● I'll create a shared store type in types.m and update both vm.m and eval.m to use it.
+
+● Update(src/types.m)
+  ⎿  Added 8 lines                                                       
+       92                  ec_base_dir :: string
+       93              ).
+       94  
+       95 +    % Evaluation store: threaded non-unique state for evaluati
+          +on and VM.                                                    
+       96 +    %                                                         
+       97 +:- type eval_store                                            
+       98 +    --->    eval_store(                                       
+       99 +                es_pool_count   :: int,         % PP: next ava
+          +ilable pool slot                                              
+      100 +                es_string_table :: string_table % ST: string i
+          +ntern table                                                   
+      101 +            ).                                                
+      102 +                                                              
+      103      % Intern table: bidirectional mapping between strings and 
+           IDs,
+      104      % plus operator lookup table.
+      105      %
+
+● Now update vm.m to use eval_store:
+
+● Update(src/vm.m)
+  ⎿  Removed 8 lines                                                     
+      14  
+      15  %--------------------------------------------------------------
+          ---------%
+      16  
+      17 -    % Non-unique storage bundled together for threading.       
+      18 -    %                                                          
+      19 -:- type vm_store                                               
+      20 -    --->    vm_store(                                          
+      21 -                vs_pool_count   :: int,         % PP: next avai
+         -lable pool slot                                                
+      22 -                vs_string_table :: string_table % ST: string in
+         -tern table                                                     
+      23 -            ).                                                 
+      24 -                                                               
+      17      % run(Ctx, Env, Context, GenStack, !Store,
+      18      %     IP, RP, FP, !SP, !Stack, !Pool, !Bytecode, !HashTable
+          , !IO):
+      19      %
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      43      %
+      44  :- pred run(
+      45      exec_context::in, env::in, array(value)::in, list(int)::in,
+      46 -    vm_store::in, vm_store::out,                               
+      46 +    eval_store::in, eval_store::out,                           
+      47      int::in, int::in, int::in,
+      48      int::in, int::out,
+      49      array(value)::array_di, array(value)::array_uo,
+
+● Now update the implementation to use es_string_table:
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      138                  run(Ctx, Env, Context, GenStack, !Store, IP + 
+           2, RP, FP, !SP,
+      139                      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      140              else
+      141 -                operators.eval_operator(OpTable, !.Store ^ vs_
+          -string_table, Op, Env,                                        
+      141 +                operators.eval_operator(OpTable, !.Store ^ es_
+          +string_table, Op, Env,                                        
+      142                      !Stack, !SP, !IO),
+      143                  run(Ctx, Env, Context, GenStack, !Store, IP + 
+           2, RP, FP, !SP,
+      144                      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+
+● Now update eval.m to use eval_store:
+
+● Update(src/eval.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      14  
+      15  %--------------------------------------------------------------
+          ---------%
+      16  
+      17 -    % eval_terms(Ctx, Terms, !Env, !ST,                        
+      17 +    % eval_terms(Ctx, Terms, !Env, !Store,                     
+      18      %            !SP, !Stack, !Pool, !Bytecode, !HashTable, !IO
+          ):
+      19      %
+      20      % Evaluate a list of terms, updating the environment and st
+          ack.
+     ...
+      25      %
+      26      % Threaded state:
+      27      %   Env - environment map
+      28 -    %   ST - string table (may grow with dynamic imports)      
+      28 +    %   Store - bundled PP (pool count) and ST (string table)  
+      29      %
+      30      % Machine register:
+      31      %   SP - stack pointer
+     ...
+      41      %
+      42  :- pred eval_terms(exec_context::in, list(term)::in,
+      43      env::in, env::out,
+      44 -    string_table::in, string_table::out,                       
+      44 +    eval_store::in, eval_store::out,                           
+      45      int::in, int::out,
+      46      array(value)::array_di, array(value)::array_uo,
+      47      array(value)::array_di, array(value)::array_uo,
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      85  % Main evaluation
+      86  %--------------------------------------------------------------
+          ---------%
+      87  
+      88 -eval_terms(_, [], !Env, !ST, !SP, !Stack, !Pool, !Bytecode, !Ha
+         -shTable, !IO).                                                 
+      89 -eval_terms(Ctx, [Term | Terms], !Env, !ST, !SP, !Stack, !Pool, 
+      88 +eval_terms(_, [], !Env, !Store, !SP, !Stack, !Pool, !Bytecode, 
+         +!HashTable, !IO).                                              
+      89 +eval_terms(Ctx, [Term | Terms], !Env, !Store, !SP, !Stack, !Poo
+         +l,                                                             
+      90          !Bytecode, !HashTable, !IO) :-
+      91 -    eval_term(Ctx, Term, !Env, !ST, !SP, !Stack, !Pool,        
+      91 +    eval_term(Ctx, Term, !Env, !Store, !SP, !Stack, !Pool,     
+      92          !Bytecode, !HashTable, !IO),
+      93 -    eval_terms(Ctx, Terms, !Env, !ST, !SP, !Stack, !Pool,      
+      93 +    eval_terms(Ctx, Terms, !Env, !Store, !SP, !Stack, !Pool,   
+      94          !Bytecode, !HashTable, !IO).
+      95  
+      96  :- pred eval_term(exec_context::in, term::in, env::in, env::out
+          ,
+
+● Update(src/eval.m)
+  ⎿  Added 5 lines, removed 5 lines                                      
+       94          !Bytecode, !HashTable, !IO).
+       95  
+       96  :- pred eval_term(exec_context::in, term::in, env::in, env::ou
+           t,
+       97 -    string_table::in, string_table::out,                      
+       97 +    eval_store::in, eval_store::out,                          
+       98      int::in, int::out,
+       99      array(value)::array_di, array(value)::array_uo,
+      100      array(value)::array_di, array(value)::array_uo,
+     ...
+      102      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      103      io::di, io::uo) is det.
+      104  
+      105 -eval_term(Ctx, Term, !Env, !ST, !SP, !Stack, !Pool,           
+      105 +eval_term(Ctx, Term, !Env, !Store, !SP, !Stack, !Pool,        
+      106          !Bytecode, !HashTable, !IO) :-
+      107      (
+      108          Term = identifier(NameId),
+      109 -        eval_identifier(Ctx, NameId, !Env, !ST, !SP, !Stack, !
+          -Pool,                                                         
+      109 +        eval_identifier(Ctx, NameId, !Env, !Store, !SP, !Stack
+          +, !Pool,                                                      
+      110              !Bytecode, !HashTable, !IO)
+      111      ;
+      112          Term = binder(NameId),
+     ...
+      116          eval_function(Terms, !.Env, !Stack, !SP)
+      117      ;
+      118          Term = generator(Terms),
+      119 -        eval_generator(Ctx, Terms, !Env, !ST, !SP, !Stack, !Po
+          -ol,                                                           
+      119 +        eval_generator(Ctx, Terms, !Env, !Store, !SP, !Stack, 
+          +!Pool,                                                        
+      120              !Bytecode, !HashTable, !IO)
+      121      ;
+      122          Term = quoted(T),
+     ...
+      126          datastack.push(V, !Stack, !SP)
+      127      ;
+      128          Term = apply_term,
+      129 -        eval_apply(Ctx, !Env, !ST, !SP, !Stack, !Pool,        
+      129 +        eval_apply(Ctx, !Env, !Store, !SP, !Stack, !Pool,     
+      130              !Bytecode, !HashTable, !IO)
+      131      ).
+      132  
+
+● Update(src/eval.m)
+  ⎿  Added 8 lines, removed 8 lines                                      
+      136  
+      137  :- pred eval_identifier(exec_context::in, string_id::in,
+      138      env::in, env::out,
+      139 -    string_table::in, string_table::out,                      
+      139 +    eval_store::in, eval_store::out,                          
+      140      int::in, int::out,
+      141      array(value)::array_di, array(value)::array_uo,
+      142      array(value)::array_di, array(value)::array_uo,
+     ...
+      144      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      145      io::di, io::uo) is det.
+      146  
+      147 -eval_identifier(Ctx, NameId, !Env, !ST, !SP, !Stack, !Pool,   
+      147 +eval_identifier(Ctx, NameId, !Env, !Store, !SP, !Stack, !Pool,
+      148          !Bytecode, !HashTable, !IO) :-
+      149      OpTable = Ctx ^ ec_op_table,
+      150      ( if get_env(NameId, V, !.Env) then
+      151          datastack.push(V, !Stack, !SP)
+      152      else if map.search(OpTable, NameId, Info) then
+      153          ( if Info ^ oi_operator = op_import then
+      154 -            % import is special: it can modify Env and ST     
+      155 -            eval_import(Ctx, !Env, !ST, !SP, !Stack, !Pool,   
+      154 +            % import is special: it can modify Env and Store  
+      155 +            eval_import(Ctx, !Env, !Store, !SP, !Stack, !Pool,
+      156                  !Bytecode, !HashTable, !IO)
+      157          else if Info ^ oi_operator = op_restore then
+      158              % restore is special: it replaces the current Env
+     ...
+      165              eval_poke(!Stack, !SP, !Bytecode)
+      166          else if Info ^ oi_operator = op_ref then
+      167              % ref is special: it modifies the constant pool
+      168 -            eval_ref(!Stack, !SP, !Pool, !HashTable)          
+      168 +            eval_ref(!Store, !Stack, !SP, !Pool, !HashTable)  
+      169          else if Info ^ oi_operator = op_deref then
+      170              % deref is special: it reads the constant pool
+      171 -            eval_deref(!Stack, !SP, !.Pool)                   
+      171 +            eval_deref(!.Store, !Stack, !SP, !.Pool)          
+      172          else
+      173 -            operators.eval_operator(OpTable, !.ST, Info ^ oi_o
+          -perator, !.Env,                                               
+      174 -                !Stack, !SP, !IO)                             
+      173 +            operators.eval_operator(OpTable, !.Store ^ es_stri
+          +ng_table,                                                     
+      174 +                Info ^ oi_operator, !.Env, !Stack, !SP, !IO)  
+      175          )
+      176      else
+      177          throw(undefined_name(NameId))
+
+● Update(src/eval.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      208  
+      209  :- pred eval_generator(exec_context::in, list(term)::in,
+      210      env::in, env::out,
+      211 -    string_table::in, string_table::out,                      
+      211 +    eval_store::in, eval_store::out,                          
+      212      int::in, int::out,
+      213      array(value)::array_di, array(value)::array_uo,
+      214      array(value)::array_di, array(value)::array_uo,
+     ...
+      216      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      217      io::di, io::uo) is det.
+      218  
+      219 -eval_generator(Ctx, Terms, !Env, !ST, !SP, !Stack, !Pool,     
+      219 +eval_generator(Ctx, Terms, !Env, !Store, !SP, !Stack, !Pool,  
+      220          !Bytecode, !HashTable, !IO) :-
+      221      % Save current stack pointer
+      222      SavedSP = !.SP,
+      223      % Evaluate generator terms (they push values onto the stac
+           k)
+      224 -    eval_terms(Ctx, Terms, !Env, !ST, !SP, !Stack, !Pool,     
+      224 +    eval_terms(Ctx, Terms, !Env, !Store, !SP, !Stack, !Pool,  
+      225          !Bytecode, !HashTable, !IO),
+      226      % Extract values pushed by the generator as an array
+      227      datastack.extract_range(!.Stack, SavedSP, !.SP, ResultArra
+           y),
+
+● Update(src/eval.m)
+  ⎿  Added 5 lines, removed 8 lines                                      
+      234  %-------------------------------------------------------------
+           ----------%
+      235  
+      236  :- pred eval_apply(exec_context::in, env::in, env::out,
+      237 -    string_table::in, string_table::out,                      
+      237 +    eval_store::in, eval_store::out,                          
+      238      int::in, int::out,
+      239      array(value)::array_di, array(value)::array_uo,
+      240      array(value)::array_di, array(value)::array_uo,
+     ...
+      242      hash_table(value, int)::hash_table_di, hash_table(value, i
+           nt)::hash_table_uo,
+      243      io::di, io::uo) is det.
+      244  
+      245 -eval_apply(Ctx, Env, Env, !ST, !SP, !Stack, !Pool,            
+      245 +eval_apply(Ctx, Env, Env, !Store, !SP, !Stack, !Pool,         
+      246          !Bytecode, !HashTable, !IO) :-
+      247      datastack.pop("!", V, !Stack, !SP),
+      248      ( if V = closureval(ClosureEnv, Terms) then
+      249          % Evaluate with closure's env, then discard env change
+           s (lexical scoping)
+      250 -        eval_terms(Ctx, Terms, ClosureEnv, _, !ST, !SP, !Stack
+          -, !Pool,                                                      
+      250 +        eval_terms(Ctx, Terms, ClosureEnv, _, !Store, !SP, !St
+          +ack, !Pool,                                                   
+      251              !Bytecode, !HashTable, !IO)
+      252      else if V = bytecodeval(Context, CodeAddr) then
+      253          % Execute bytecode closure via VM
+     ...
+      255          % FP starts at top of stack array (frame grows downwar
+           d)
+      256          % GenStack starts empty (no active generators)
+      257          FP = array.size(!.Stack),
+      258 -        PP0 = array.size(!.Pool),                             
+      259 -        Store0 = vm.vm_store(PP0, !.ST),                      
+      260 -        vm.run(Ctx, Env, Context, [], Store0, Store, CodeAddr,
+          - -1, FP, !SP,                                                 
+      261 -            !Stack, !Pool, !Bytecode, !HashTable, !IO),       
+      262 -        !:ST = Store ^ vm.vs_string_table                     
+      258 +        vm.run(Ctx, Env, Context, [], !Store, CodeAddr, -1, FP
+          +, !SP,                                                        
+      259 +            !Stack, !Pool, !Bytecode, !HashTable, !IO)        
+      260      else
+      261          throw(type_error("closure", V))
+      262      ).
+  ⎿  Interrupted · What should Claude do instead?
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 199k/200k tokens (100%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 18.5k tokens (9.3%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 118.0k tokens (59.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 1k (0.3%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 127 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.1k tokens
+     └ FROTH_COMPILER.md: 6.2k tokens
+     └ FROTH_BYTECODE.md: 853 tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+

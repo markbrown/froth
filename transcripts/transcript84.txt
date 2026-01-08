@@ -1,0 +1,1194 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.75
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read lib/build.froth (14 lines)
+  ⎿  Read tests/liveness.expected (21 lines)
+  ⎿  Read tests/compile_closure.froth (61 lines)
+  ⎿  Read tests/liveness.froth (78 lines)
+  ⎿  Read tests/boundness.froth (64 lines)
+
+> Try enabling def-fn in lib/build.froth 
+
+● I'll enable def-fn compilation in lib/build.froth and run the tests to see what happens.
+
+● Update(lib/build.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      3  cache-empty! tree-empty! 0 env
+      4  
+      5    ; defs.froth
+      6 -  ; 'def-fn compile!  ; disabled - causes array index out of bou
+        -nds                                                             
+      6 +  'def-fn compile!                                              
+      7  
+      8    ; io.froth
+      9    'nl compile!
+
+● Bash(make test 2>&1 | head -100)
+  ⎿  cd src && mmc --make froth        
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+     … +83 lines (ctrl+o to expand)
+
+● The test is failing with "index 1025 not in range [0, 1023]", suggesting the bytecode store has a fixed size of 1024. Let me check the bytecode store implementation and the def-fn test.
+
+● Search(pattern: "1024", path: "src", output_mode: "content")
+  ⎿  Found 3 lines (ctrl+o to expand)
+
+● Read(src/bytecode.m)
+  ⎿  Read 114 lines
+
+● The bytecode store should auto-extend via poke, but the error is from array.lookup directly. Let me search for where array.lookup is used directly in the VM.
+
+● Search(pattern: "array.lookup", path: "src", output_mode: "content")
+  ⎿  Found 21 lines (ctrl+o to expand)
+
+● The VM directly uses array.lookup for bytecode reads at line 129, which throws when IP exceeds the array size. The bytecode array only grows via poke (writes), not when executing. Let me check what's happening:
+
+● Bash(timeout 5 ./bin/froth -e 'froth-bytecode-top println!')
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +4 lines (ctrl+o to expand)
+
+● Read(tests/def-fn.froth)
+  ⎿  Read 26 lines
+
+● Let me look at the def-fn implementation to understand what it does:
+
+● Read(lib/defs.froth)
+  ⎿  Read 44 lines
+
+● Let me test def-fn in isolation to understand the failure better:
+
+● Bash(timeout 5 ./bin/froth -e '
+      { 1 } /a…)
+  ⎿  Error: Exit code 2
+     /bin/bash: line 13: def-fn returned: command not found
+     /bin/bash: line 14: c!: command not found
+     /bin/bash: eval: line 15: unexpected EOF while looking for matching `''
+
+     FROTH: compiled 'def-fn
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     FROTH: compiled 'nl
+     FROTH: compiled 'println
+     … +3 lines (ctrl+o to see all)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      { 1 } /a…)
+  ⎿  Error: Exit code 1
+     Uncaught Mercury exception:
+     index_out_of_bounds("array.lookup: index 1025 not in range [0, 1023]")
+     Stack dump not available in this grade.
+
+     FROTH: compiled 'def-fn
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     FROTH: compiled 'nl
+     FROTH: compiled 'println
+     … +4 lines (ctrl+o to see all)
+
+● The crash happens when calling def-fn. Let me check what address restrict-env-impl is compiled to:
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "def-fn address: " print def-fn open /body /env body println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +9 lines (ctrl+o to expand)
+
+● Interesting - def-fn's body shows address 0. Let me look at the def-fn closure structure more carefully:
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      def-fn open /body /env…)
+  ⎿  Error: Exit code 1
+     Uncaught Mercury exception:
+     index_out_of_bounds("array.lookup: index 1024 not in range [0, 1023]")
+     Stack dump not available in this grade.
+
+     FROTH: compiled 'def-fn
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     FROTH: compiled 'nl
+     FROTH: compiled 'println
+     … +4 lines (ctrl+o to see all)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      def-fn open /addr /ctx…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +8 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "bytecode at 0: " print 0 peek println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +13 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      def-fn open /addr /ctx…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +10 lines (ctrl+o to expand)
+
+● Let me disassemble the bytecode at address 34 (restrict-env):
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "restrict-env bytecode:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +9 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "restrict-env bytecode at 34:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +33 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "instruction table:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +25 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "operator 19:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +7 lines (ctrl+o to expand)
+
+● Let me look at the full bytecode from address 34 to 70 to understand the flow:
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      [ 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57
+      58 59 60 61 62 63 64 65 66 67 68 69 70 ] { /i i print ":…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +42 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "restrict-env-impl bytecode at 153:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +68 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      operator-table keys { /k operator-table k @ 48 = { k print " = 48"
+      println! } { } ?! } foldl!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +9 lines (ctrl+o to expand)
+
+● Let me check the constant pool (via ref/deref) for any suspicious values:
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "checking constant pool:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +24 lines (ctrl+o to expand)
+
+● Let me try a minimal test to isolate the issue:
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "testing empty restrict-env:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +7 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "testing def-fn with empty deps:" println!…)
+  ⎿  Error: Exit code 1
+     Uncaught Mercury exception:
+     index_out_of_bounds("array.lookup: index 1025 not in range [0, 1023]")
+     Stack dump not available in this grade.
+
+     FROTH: compiled 'def-fn
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     FROTH: compiled 'nl
+     FROTH: compiled 'println
+     … +4 lines (ctrl+o to see all)
+
+● Let me examine def-fn's bytecode (starting at address 0):
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "def-fn bytecode at 0:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +40 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      operator-table keys { /k operator-table k @ 49 = { k print " = 49"
+      println! } { } ?! } foldl!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +6 lines (ctrl+o to expand)
+
+● Search(pattern: "call", path: "src/vm.m", output_mode: "content")
+  ⎿  Found 124 lines (ctrl+o to expand)
+
+● Let me search for where 1025 might come from:
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "Searching for 1025 in bytecode:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +7 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "froth-bytecode-top: " print froth-bytecode-top println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +10 lines (ctrl+o to expand)
+
+● Let me look at what addresses the inner functions are compiled to by examining more of the bytecode:
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "Looking for function entry points (enter-frame = 8):" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +9 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "Looking for function starts:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +9 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "Bytecode around address 55:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +16 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "Bytecode 58-80:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +29 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      operator-table keys { /k operator-table k @ 20 = { k print " = 20"
+      println! } { } ?! } foldl!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +8 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "Bytecode 165-180:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +22 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "Instruction table:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +27 lines (ctrl+o to expand)
+
+● I think I found the issue. The bytecode at 169-170 is leave-frame 5, but then 176-177 is push-local 2 - accessing a local after leaving the frame. Let me check the compiler's analysis:
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /self /idx /result /keys /old-env…)
+  ⎿  Error: Exit code 1
+     Uncaught Mercury exception:
+     index_out_of_bounds("array.lookup: index 1024 not in range [0, 1023]")
+     Stack dump not available in this grade.
+
+     FROTH: compiled 'def-fn
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     FROTH: compiled 'nl
+     FROTH: compiled 'println
+     … +7 lines (ctrl+o to see all)
+
+● Let me first disable def-fn and then test the compiler:
+
+● Update(lib/build.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      3  cache-empty! tree-empty! 0 env
+      4  
+      5    ; defs.froth
+      6 -  'def-fn compile!                                              
+      6 +  ; 'def-fn compile!  ; disabled - bytecode leaves frame before 
+        +closure creation                                                
+      7  
+      8    ; io.froth
+      9    'nl compile!
+
+● Bash(timeout 5 ./bin/froth tests/liveness.froth 2>&1 | head -30)
+  ⎿  FROTH: compiled 'nl           
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +70 lines (ctrl+o to expand)
+
+● I see the issue! Looking at line 9 of the liveness output for {x {x}}, the first x has 'leave-frame : 0 (meaning "leave frame here"), but the {x} closure after it still needs to capture x from the frame. The dead-set shows ['x] indicating x's last use is the capture, but the frame is being left too early.
+
+  Let me look at the liveness analysis code:
+
+● Read(lib/liveness.froth)
+  ⎿  Read 155 lines
+
+● I see the bug. When processing a closure in liveness analysis (lines 49-61), the code correctly adds the closure's free variables to seen but doesn't update seen-frame. If the closure captures bound variables from the outer function, the frame is still needed to read those values when creating the closure's context.
+
+  Let me look at how the bound-set is available:
+
+● Read(lib/compile.froth)
+  ⎿  Read 143 lines
+
+● I understand the bug now. When a closure captures bound variables from the outer function, the frame is needed to read those values when building the closure's context. But the liveness analysis doesn't update seen-frame when processing closures.
+
+  The fix is to pass the outer bound-set to liveness-term-impl and check if any captured variables are bound. If so, set seen-frame = 0.
+
+● Update(lib/liveness.froth)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      1  ; liveness.froth - Liveness analysis for compiler
+      2  
+      3 -; liveness-term-impl: (bnd-map seen need-ctx seen-nontail seen-r
+        -estore-ctx seen-frame is-tail seq-fn term-fn -- result-map new-s
+        -een new-need-ctx new-seen-nontail new-seen-restore-ctx new-seen-
+        -frame)                                                          
+      3 +; liveness-term-impl: (bnd-map seen need-ctx seen-nontail seen-r
+        +estore-ctx seen-frame is-tail bound-set seq-fn term-fn -- result
+        +-map new-seen new-need-ctx new-seen-nontail new-seen-restore-ctx
+        + new-seen-frame)                                                
+      4  ; Analyze a single term for liveness (last reference) and contex
+         t/return restore.
+      5  ; Takes node (with 'term key), returns node with liveness info a
+         dded.
+      6  ; seen: set of variables still live after this point
+     ...
+       9  ; seen-restore-ctx: 0 if we've seen a call needing context rest
+          ore
+      10  ; seen-frame: 0 if we've seen any frame usage (bound var access
+           or register restore)
+      11  ; is-tail: 0 if this term is in tail position
+      12 +; bound-set: set of variables bound in the outer function      
+      13  ; Traverses right-to-left using boundness info.
+      13 -['delete-keys 'add-keys 'restrict 'not 'and 'or 'filter 'lfoldr
+         -] { /term-fn /seq-fn /is-tail /seen-frame /seen-restore-ctx /se
+         -en-nontail /need-ctx /seen /bnd-map                            
+      14 +['delete-keys 'add-keys 'restrict 'not 'and 'or 'filter 'lfoldr
+         +] { /term-fn /seq-fn /bound-set /is-tail /seen-frame /seen-rest
+         +ore-ctx /seen-nontail /need-ctx /seen /bnd-map                 
+      15    bnd-map 'term @ /term
+      16    ; Check if this is a variable (identifier that's not an opera
+          tor)
+      17    term isIdent {
+
+● Update(lib/liveness.froth)
+  ⎿  Added 5 lines, removed 2 lines                                      
+      58      seen inner-free-set keys add-keys! /new-seen
+      59      ; Add dead-set to node
+      60      bnd-map dead-set 'dead-set :
+      61 -    ; Return result; outer state unchanged                     
+      62 -    new-seen need-ctx seen-nontail seen-restore-ctx seen-frame 
+      61 +    ; Check if closure captures any bound variables (frame need
+         +ed for context)                                                
+      62 +    inner-free-set keys { /v bound-set v in not! } filter! # 0 
+         +> /has-bound-captures                                          
+      63 +    has-bound-captures { 0 } { seen-frame } ?! /new-seen-frame 
+      64 +    ; Return result                                            
+      65 +    new-seen need-ctx seen-nontail seen-restore-ctx new-seen-fr
+         +ame                                                            
+      66    } {
+      67    term isGen {
+      68      ; Generator: shares scope for free vars, but binders are lo
+          cal
+
+● Update(lib/liveness.froth)
+  ⎿  Added 3 lines, removed 1 line                                       
+      75      seen bound-vars delete-keys! /gen-seen
+      76      ; Process generator with modified seen; generators don't ha
+          ve tail calls (is-tail=1)
+      77      ; Generators share seen-nontail, seen-restore-ctx, seen-fra
+          me with outer scope
+      78 +    ; Generator's bound-set is union of outer bound-set and inn
+         +er bound-set                                                   
+      79 +    bound-set inner-bound-set keys add-keys! /gen-bound-set    
+      80      inner-body # 1 - /inner-last-idx
+      79 -    inner-body gen-seen need-ctx seen-nontail seen-restore-ctx 
+         -seen-frame inner-last-idx 1 seq-fn term-fn seq-fn! /new-seen-fr
+         -ame /new-seen-restore-ctx /new-seen-nontail /new-need-ctx /afte
+         -r-seen /new-body-list                                          
+      81 +    inner-body gen-seen need-ctx seen-nontail seen-restore-ctx 
+         +seen-frame inner-last-idx gen-bound-set 1 seq-fn term-fn seq-fn
+         +! /new-seen-frame /new-seen-restore-ctx /new-seen-nontail /new-
+         +need-ctx /after-seen /new-body-list                            
+      82      ; Convert list to array (lfoldr goes tail-to-head, reversin
+          g the list order)
+      83      [ new-body-list { } lfoldr! ] /new-body
+      84      ; Restore shadowed vars
+
+● Update(lib/liveness.froth)
+  ⎿  Added 5 lines, removed 4 lines                                      
+      114    } ?! } ?! } ?! } ?! } ?! } ?!
+      115  } def-fn! /liveness-term-impl
+      116  
+      117 -; liveness-seq-impl: (body-arr seen need-ctx seen-nontail seen
+          --restore-ctx seen-frame idx is-tail seq-fn term-fn -- new-body
+          --list new-seen new-need-ctx new-seen-nontail new-seen-restore-
+          -ctx new-seen-frame)                                           
+      117 +; liveness-seq-impl: (body-arr seen need-ctx seen-nontail seen
+          +-restore-ctx seen-frame idx bound-set is-tail seq-fn term-fn -
+          +- new-body-list new-seen new-need-ctx new-seen-nontail new-see
+          +n-restore-ctx new-seen-frame)                                 
+      118  ; Process terms from idx down to 0 (right-to-left)
+      119  ; is-tail: 0 for first term (rightmost), 1 for rest
+      120 +; bound-set: set of variables bound in the outer function     
+      121  ; Returns a list in reverse order (rightmost element at head)
+      121 -['liveness-term-impl] { /term-fn /seq-fn /is-tail /idx /seen-f
+          -rame /seen-restore-ctx /seen-nontail /need-ctx /seen /body-arr
+      122 +['liveness-term-impl] { /term-fn /seq-fn /is-tail /bound-set /
+          +idx /seen-frame /seen-restore-ctx /seen-nontail /need-ctx /see
+          +n /body-arr                                                   
+      123    idx 0 < {
+      124      ; Done: return empty list and current state
+      125      . seen need-ctx seen-nontail seen-restore-ctx seen-frame
+      126    } {
+      127      ; Process current term (rightmost remaining)
+      127 -    body-arr idx @ seen need-ctx seen-nontail seen-restore-ctx
+          - seen-frame is-tail seq-fn term-fn term-fn! /after-seen-frame 
+          -/after-seen-restore-ctx /after-seen-nontail /after-need-ctx /a
+          -fter-term-seen /term-map                                      
+      128 +    body-arr idx @ seen need-ctx seen-nontail seen-restore-ctx
+          + seen-frame is-tail bound-set seq-fn term-fn term-fn! /after-s
+          +een-frame /after-seen-restore-ctx /after-seen-nontail /after-n
+          +eed-ctx /after-term-seen /term-map                            
+      129      ; Recurse for rest (to the left); is-tail becomes 1 (not t
+           ail)
+      129 -    body-arr after-term-seen after-need-ctx after-seen-nontail
+          - after-seen-restore-ctx after-seen-frame idx 1 - 1 seq-fn term
+          --fn seq-fn! /rest-seen-frame /rest-seen-restore-ctx /rest-seen
+          --nontail /rest-need-ctx /rest-seen /rest-body                 
+      130 +    body-arr after-term-seen after-need-ctx after-seen-nontail
+          + after-seen-restore-ctx after-seen-frame idx 1 - bound-set 1 s
+          +eq-fn term-fn seq-fn! /rest-seen-frame /rest-seen-restore-ctx 
+          +/rest-seen-nontail /rest-need-ctx /rest-seen /rest-body       
+      131      ; Cons current node onto rest (builds list in reverse orde
+           r)
+      132      rest-body term-map , rest-seen rest-need-ctx rest-seen-non
+           tail rest-seen-restore-ctx rest-seen-frame
+      133    } ?!
+
+● Update(lib/liveness.froth)
+  ⎿  Added 2 lines, removed 1 line                                       
+      146  ;   'needs-frame: 0 if function needs a frame (function-level)
+      147  ['liveness-seq-impl 'liveness-term-impl 'lfoldr] { /func-node
+      148    func-node 'body @ /body
+      149 +  func-node 'bound-set @ /bound-set                           
+      150    body # 1 - /last-idx
+      151    ; Start with need-ctx=1, seen-nontail=1, seen-restore-ctx=1,
+            seen-frame=1, is-tail=0
+      151 -  body $ 1 1 1 1 last-idx 0 liveness-seq-impl liveness-term-im
+          -pl liveness-seq-impl!                                         
+      152 +  body $ 1 1 1 1 last-idx bound-set 0 liveness-seq-impl livene
+          +ss-term-impl liveness-seq-impl!                               
+      153    /final-seen-frame /final-seen-restore-ctx /final-seen-nontai
+           l /final-need-ctx /final-seen /new-body-list
+      154    ; Convert list to array (lfoldr goes tail-to-head, reversing
+            the list order)
+      155    [ new-body-list { } lfoldr! ] /new-body
+
+● Bash(make test 2>&1 | tail -20)
+  ⎿  generator free var test: [ 7 8 ]               
+     generator with nested func test: 42
+     quoted complex terms test: ''{ 1 } ''[ 2 ] '''x
+     … +17 lines (ctrl+o to expand)
+
+● Bash(make test 2>&1 | grep -E "^(PASS|FAIL|SKIP)")
+  ⎿  PASS: add                     
+     PASS: alist
+     PASS: apply_op
+     … +63 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | grep -A 30 "=== codegen ===")
+  ⎿  === codegen ===               
+     Expected:
+     func-addr=1000 next-addr=1007
+     … +28 lines (ctrl+o to expand)
+
+● Bash(diff tests/codegen.expected <(./bin/froth tests/codegen.froth
+      2>/dev/null))
+  ⎿  Error: Exit code 1
+     0a1,3
+     > FROTH: compiled 'nl
+     > FROTH: compiled 'println
+     > FROTH: compiled 'writeln
+     4c7
+     < bytecode2: 0 42 3 557 2 
+     ---
+     > bytecode2: 0 42 3 559 2
+
+● Bash(./bin/froth tests/codegen.froth 2>/dev/null > tests/codegen.expected)
+  ⎿  (No content)
+
+● Bash(make test 2>&1 | grep -E "^(PASS|FAIL|SKIP)")
+  ⎿  PASS: add                     
+     PASS: alist
+     PASS: apply_op
+     … +63 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | grep -A 10 "=== codegen ===")
+  ⎿  === codegen ===              
+     Expected:
+     FROTH: compiled 'nl
+     … +8 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 | head -20)
+  ⎿  FROTH: compiled 'nl           
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +17 lines (ctrl+o to expand)
+
+● Read(run_tests.sh)
+  ⎿  Read 30 lines
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 | grep -v '^FROTH: ' >
+      tests/codegen.expected)
+  ⎿  (No content)
+
+● Bash(make test 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● Now let me enable def-fn compilation and test:
+
+● Update(lib/build.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      3  cache-empty! tree-empty! 0 env
+      4  
+      5    ; defs.froth
+      6 -  ; 'def-fn compile!  ; disabled - bytecode leaves frame before 
+        -closure creation                                                
+      6 +  'def-fn compile!                                              
+      7  
+      8    ; io.froth
+      9    'nl compile!
+
+● Bash(make test 2>&1 | tail -10)
+  ⎿  1                            
+     3
+     3
+     … +7 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/liveness.froth 2>&1 | head -20)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +55 lines (ctrl+o to expand)
+
+● Let me test a simpler case that matches the restrict-env-impl pattern:
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /addr /code-map…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +10 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /addr /code-map…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +9 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /addr /code-map…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +10 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /addr /code-map…)
+  ⎿  Error: Exit code 1
+     Uncaught Mercury exception:
+     index_out_of_bounds("array.lookup: index 1024 not in range [0, 1023]")
+     Stack dump not available in this grade.
+
+     FROTH: compiled 'def-fn
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     FROTH: compiled 'nl
+     FROTH: compiled 'println
+     … +4 lines (ctrl+o to see all)
+
+● Update(lib/build.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      3  cache-empty! tree-empty! 0 env
+      4  
+      5    ; defs.froth
+      6 -  'def-fn compile!                                              
+      6 +  ; 'def-fn compile!  ; temporarily disabled for testing        
+      7  
+      8    ; io.froth
+      9    'nl compile!
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /addr /code-map…)
+  ⎿  Error: Exit code 1
+     Uncaught Mercury exception:
+     index_out_of_bounds("array.lookup: index 1024 not in range [0, 1023]")
+     Stack dump not available in this grade.
+
+     FROTH: compiled 'nl
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     Froth! REPL. Press Ctrl-D to exit.
+     > > Runtime error: stack underflow in 'binder'
+     … +1 line (ctrl+o to see all)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "testing compile-func" println!…)
+  ⎿  FROTH: compiled 'nl          
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +4 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "testing codegen" println!…)
+  ⎿  FROTH: compiled 'nl          
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +5 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "testing codegen and peek" println!…)
+  ⎿  FROTH: compiled 'nl          
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +6 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "testing simple foldl" println!…)
+  ⎿  FROTH: compiled 'nl          
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +7 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /addr /code-map…)
+  ⎿  FROTH: compiled 'nl          
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +3 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /addr /code-map…)
+  ⎿  FROTH: compiled 'nl          
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +5 lines (ctrl+o to expand)
+
+● Read(tests/codegen.froth)
+  ⎿  Read 40 lines
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /next-addr /code-map…)
+  ⎿  FROTH: compiled 'nl          
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +5 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /next-addr /code-map…)
+  ⎿  FROTH: compiled 'nl          
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +4 lines (ctrl+o to expand)
+
+● I see the issue - the bytecode at 1015 is just return (2), with no leave-frame before it. Let me check if the liveness analysis marked leave-frame:
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /next-addr /code-map…)
+  ⎿  FROTH: compiled 'nl          
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +9 lines (ctrl+o to expand)
+
+● I found the bug in my fix. The filter condition is backwards. I'm filtering for vars NOT in bound-set, but I should be filtering for vars that ARE in bound-set. Let me fix this:
+
+● Update(lib/liveness.froth)
+  ⎿  Added 2 lines, removed 1 line                                       
+      59      ; Add dead-set to node
+      60      bnd-map dead-set 'dead-set :
+      61      ; Check if closure captures any bound variables (frame need
+          ed for context)
+      62 -    inner-free-set keys { /v bound-set v in not! } filter! # 0 
+         -> /has-bound-captures                                          
+      62 +    ; in returns 0 if found, 1 if not found. So we filter for 0
+         + (found in bound-set)                                          
+      63 +    inner-free-set keys { /v bound-set v in { 0 } { 1 } ?! } fi
+         +lter! # 0 > /has-bound-captures                                
+      64      has-bound-captures { 0 } { seen-frame } ?! /new-seen-frame
+      65      ; Return result
+      66      new-seen need-ctx seen-nontail seen-restore-ctx new-seen-fr
+          ame
+
+● Update(lib/liveness.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      59      ; Add dead-set to node
+      60      bnd-map dead-set 'dead-set :
+      61      ; Check if closure captures any bound variables (frame need
+          ed for context)
+      62 -    ; in returns 0 if found, 1 if not found. So we filter for 0
+         - (found in bound-set)                                          
+      63 -    inner-free-set keys { /v bound-set v in { 0 } { 1 } ?! } fi
+         -lter! # 0 > /has-bound-captures                                
+      62 +    ; in returns 0 if found, 1 if not found. Filter keeps items
+         + where predicate returns 0.                                    
+      63 +    inner-free-set keys { /v bound-set v in } filter! # 0 > /ha
+         +s-bound-captures                                               
+      64      has-bound-captures { 0 } { seen-frame } ?! /new-seen-frame
+      65      ; Return result
+      66      new-seen need-ctx seen-nontail seen-restore-ctx new-seen-fr
+          ame
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /next-addr /code-map…)
+  ⎿  FROTH: compiled 'nl          
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +9 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /next-addr /code-map…)
+  ⎿  FROTH: compiled 'nl          
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +5 lines (ctrl+o to expand)
+
+● Let me check how codegen handles leave-frame:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 377 lines
+
+● I see the issue now. The codegen only checks leave-frame on identifier nodes (line 98), but closures that capture bound variables also access the frame via push-local. The closure node should have leave-frame marked when it's the last frame access.
+
+  Let me update the liveness to mark leave-frame on closure nodes:
+
+● Update(lib/liveness.froth)
+  ⎿  Added 3 lines                                                       
+      61      ; Check if closure captures any bound variables (frame need
+          ed for context)
+      62      ; in returns 0 if found, 1 if not found. Filter keeps items
+           where predicate returns 0.
+      63      inner-free-set keys { /v bound-set v in } filter! # 0 > /ha
+          s-bound-captures
+      64 +    ; If captures bound vars and this is first frame usage, mar
+         +k leave-frame                                                  
+      65 +    has-bound-captures seen-frame 1 = and! /needs-leave-frame  
+      66 +    needs-leave-frame { bnd-map 0 'leave-frame : } { bnd-map } 
+         +?!                                                             
+      67      has-bound-captures { 0 } { seen-frame } ?! /new-seen-frame
+      68      ; Return result
+      69      new-seen need-ctx seen-nontail seen-restore-ctx new-seen-fr
+          ame
+
+● Update(lib/codegen.froth)
+  ⎿  Added 6 lines, removed 1 line                                       
+      181  
+      182        ; End array, push address, close
+      183        ctx-code2 ocEndArray , ocPushInt , nested-addr , ocOp , 
+           opClose ,
+      184 -    } ?! /new-code                                            
+      184 +    } ?!                                                      
+      185 +    ; Check if this closure is the last frame access          
+      186 +    node 'leave-frame in { node 'leave-frame @ 0 = } { 1 } ?! 
+          +{                                                             
+      187 +      ocLeaveFrame , max-slots ,                              
+      188 +    } { } ?!                                                  
+      189 +    /new-code                                                 
+      190  
+      191      ; addr unchanged (no recursive compilation)
+      192      addr new-code need-enter
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /next-addr /code-map…)
+  ⎿  Error: Exit code 1
+     Uncaught Mercury exception:
+     index_out_of_bounds("array.lookup: index 1024 not in range [0, 1023]")
+     Stack dump not available in this grade.
+
+     FROTH: compiled 'nl
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     Froth! REPL. Press Ctrl-D to exit.
+     > Runtime error: type error: expected int, got map
+     … +1 line (ctrl+o to see all)
+
+● Update(lib/liveness.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      63      inner-free-set keys { /v bound-set v in } filter! # 0 > /ha
+          s-bound-captures
+      64      ; If captures bound vars and this is first frame usage, mar
+          k leave-frame
+      65      has-bound-captures seen-frame 1 = and! /needs-leave-frame
+      66 -    needs-leave-frame { bnd-map 0 'leave-frame : } { bnd-map } 
+         -?!                                                             
+      66 +    needs-leave-frame { bnd-map 0 'leave-frame : } { bnd-map } 
+         +?! /bnd-map2                                                   
+      67      has-bound-captures { 0 } { seen-frame } ?! /new-seen-frame
+      68      ; Return result
+      69 -    new-seen need-ctx seen-nontail seen-restore-ctx new-seen-fr
+         -ame                                                            
+      69 +    bnd-map2 new-seen need-ctx seen-nontail seen-restore-ctx ne
+         +w-seen-frame                                                   
+      70    } {
+      71    term isGen {
+      72      ; Generator: shares scope for free vars, but binders are lo
+          cal
+
+● Update(lib/liveness.froth)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      57      ; Add all free vars to seen (binders to left need to see th
+          em as used)
+      58      seen inner-free-set keys add-keys! /new-seen
+      59      ; Add dead-set to node
+      60 -    bnd-map dead-set 'dead-set :                               
+      60 +    bnd-map dead-set 'dead-set : /bnd-map2                     
+      61      ; Check if closure captures any bound variables (frame need
+          ed for context)
+      62      ; in returns 0 if found, 1 if not found. Filter keeps items
+           where predicate returns 0.
+      63      inner-free-set keys { /v bound-set v in } filter! # 0 > /ha
+          s-bound-captures
+      64      ; If captures bound vars and this is first frame usage, mar
+          k leave-frame
+      65      has-bound-captures seen-frame 1 = and! /needs-leave-frame
+      66 -    needs-leave-frame { bnd-map 0 'leave-frame : } { bnd-map } 
+         -?! /bnd-map2                                                   
+      66 +    needs-leave-frame { bnd-map2 0 'leave-frame : } { bnd-map2 
+         +} ?! /bnd-map3                                                 
+      67      has-bound-captures { 0 } { seen-frame } ?! /new-seen-frame
+      68      ; Return result
+      69 -    bnd-map2 new-seen need-ctx seen-nontail seen-restore-ctx ne
+         -w-seen-frame                                                   
+      69 +    bnd-map3 new-seen need-ctx seen-nontail seen-restore-ctx ne
+         +w-seen-frame                                                   
+      70    } {
+      71    term isGen {
+      72      ; Generator: shares scope for free vars, but binders are lo
+          cal
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      tree-empty! 1000 '{ /x { x } } compile-func! /node /next-addr /code-map…)
+  ⎿  FROTH: compiled 'nl          
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +5 lines (ctrl+o to expand)
+
+● Bash(make test 2>&1 | tail -10)
+  ⎿  call ok                        
+     inner-addr=1215 outer-addr=1218
+     inner direct call: 42
+     … +7 lines (ctrl+o to expand)
+
+● Bash(make test 2>&1 | grep -E "^(PASS|FAIL|SKIP)")
+  ⎿  PASS: add                     
+     PASS: alist
+     PASS: apply_op
+     … +63 lines (ctrl+o to expand)
+
+● Bash(diff tests/boundness.expected <(./bin/froth tests/boundness.froth 2>&1 |
+      grep -v '^FROTH: ') | head -30)
+  ⎿ 8c8                                                                    
+    < free=$ bound=$ . 'x : body=[ $ 0 'is-used : 0 'slot : '/x 'term : $ [
+     $ 0 'is-used : 0 'slot : '/y 'term : $ [ $ 1 'is-bound : 1 'is-live :
+    … +19 lines (ctrl+o to expand)
+
+
+● Bash(./bin/froth tests/boundness.froth 2>&1 | grep -v '^FROTH: ' >
+      tests/boundness.expected
+      ./bin/froth tests/codegen.froth 2>&1 | grep -v '^FROTH: ' >
+      tests/codegen…)
+  ⎿  No matches found
+
+● Bash(make test 2>&1 | tail -5)
+  ⎿  non-tail call execution: 11  
+     multiple non-tail calls: 15
+     non-tail with bound var: 107
+     … +2 lines (ctrl+o to expand)
+
+● Bash(make test 2>&1 | grep -E "^(PASS|FAIL|SKIP)")
+  ⎿  PASS: add                     
+     PASS: alist
+     PASS: apply_op
+     … +63 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | grep -A 20 "=== boundness ===")
+  ⎿  === boundness ===                     
+     Expected:
+     grep: ./bin/froth: binary file matches
+     … +23 lines (ctrl+o to expand)
+
+● Bash(head -5 tests/boundness.expected)
+  ⎿  grep: ./bin/froth: binary file matches                                
+     tests/codegen.froth:; Test codegen via compile-func
+     tests/codegen.froth:; compile-func runs boundness -> liveness -> slots
+     … +4 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/boundness.froth 2>&1)
+  ⎿  FROTH: compiled 'nl           
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +87 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/boundness.froth 2>&1 | grep -v '^FROTH:' >
+      tests/boundness.expected
+      ./bin/froth tests/codegen.froth 2>&1 | grep -v '^FROTH:' >
+      tests/codegen.e…)
+  ⎿  No matches found
+
+● Bash(make test 2>&1 | grep -E "^(PASS|FAIL|SKIP|Results)")
+  ⎿  PASS: add                     
+     PASS: alist
+     PASS: apply_op
+     … +64 lines (ctrl+o to expand)
+
+● Bash(head -1 tests/boundness.expected)
+  ⎿  grep: ./bin/froth: binary file matches
+
+● Bash(./bin/froth tests/boundness.froth 2>&1 | sed '/^FROTH:/d' >
+      tests/boundness.expected
+      ./bin/froth tests/codegen.froth 2>&1 | sed '/^FROTH:/d' >
+      tests/codegen.exp…)
+  ⎿  (No content)
+
+● Bash(head -2 tests/boundness.expected)
+  ⎿  ELF          >        @       �q         @ 8  @        
+      @       @       @       �      �                             
+                                                                P  
+     @ A	"B   �`	 �  @F P * @ b  
+
+● Bash(./bin/froth tests/boundness.froth 2>&1 | head -20)
+  ⎿  FROTH: compiled 'nl           
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     … +87 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/boundness.froth 2>&1 | awk '!/^FROTH:/' >
+      tests/boundness.expected
+      head -2 tests/boundness.expected)
+  ⎿  Error: Exit code 2
+     awk: fatal: cannot open file `head' for reading: No such file or directory
+
+● Bash(./bin/froth tests/boundness.froth 2>&1 | awk '!/^FROTH:/' >
+      tests/boundness.expected)
+  ⎿  (No content)
+
+● Bash(head -2 tests/boundness.expected)
+  ⎿ free=$ 0 'x : bound=$ . 'x : body=[ $ 1 'is-bound : 1 'is-live : 1 'is-
+    operator : 1 'leave-frame : 0 'slot : 'x 'term : $ 0 'is-used : 0 'slot
+     : '/x 'term : $ 0 'is-bound : 1 'is-live : 1 'is-operator : 0 'leave-f
+    … +5 lines (ctrl+o to expand)
+
+
+
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 | awk '!/^FROTH:/' >
+      tests/codegen.expected)
+  ⎿  (No content)
+
+● Bash(make test 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● All tests pass. Now let me enable def-fn compilation and test:
+
+● Update(lib/build.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      3  cache-empty! tree-empty! 0 env
+      4  
+      5    ; defs.froth
+      6 -  ; 'def-fn compile!  ; temporarily disabled for testing        
+      6 +  'def-fn compile!                                              
+      7  
+      8    ; io.froth
+      9    'nl compile!
+
+● Bash(make test 2>&1 | tail -10)
+  ⎿  Expected:                    
+     0
+     1
+     … +7 lines (ctrl+o to expand)
+
+● Bash(make test 2>&1 | grep -E "^(PASS|FAIL|SKIP)" | head -20)
+  ⎿  PASS: add                     
+     PASS: alist
+     PASS: apply_op
+     … +17 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth tests/def-fn.froth)
+  ⎿  Error: Exit code 1
+     FROTH: compiled 'def-fn
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     FROTH: compiled 'nl
+     FROTH: compiled 'println
+     FROTH: compiled 'writeln
+     Runtime error: stack underflow in 'keys'
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      def-fn open /addr /ctx…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +8 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      def-fn open /addr /ctx…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +8 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "bytecode at 55:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +7 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      def-fn open /addr /ctx…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +9 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "testing def-fn with empty deps:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +7 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "testing with empty array:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +7 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "def-fn context:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +8 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      def-fn open /addr /ctx…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +8 lines (ctrl+o to expand)
+
+● Bash(timeout 5 ./bin/froth <<'EOF'
+      "bytecode at 102-120:" println!…)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +7 lines (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+> Summarize the problem you are currently trying to solve. 
+
+● Summary of Current Problem
+
+  I'm trying to enable bytecode compilation for the def-fn library function in Froth!. When def-fn is compiled and then executed at runtime, it crashes with:
+
+  Runtime error: stack underflow in 'keys'
+
+  Or with empty deps:
+  Runtime error: type error: expected closure or bytecode, got array
+
+  Root Cause Investigation
+
+  The def-fn function calls restrict-env, which calls restrict-env-impl. The restrict-env-impl function is recursive and uses a ?! pattern to choose between two closure branches:
+
+  idx keys # = { result } { ... recursive call ... } ?!
+
+  The compiled bytecode for restrict-env-impl:
+  1. Builds the then-branch closure { result } (address 55)
+  2. Builds the else-branch closure { ... } (address 102)
+  3. Leaves the frame
+  4. Calls the ? operator to pick one closure
+  5. Tail-calls the chosen closure
+
+  I verified the bytecode sequence looks correct, but something is going wrong when the closures are built or executed at runtime. The inner function at address 102 (the else-branch) may have incorrect bytecode or the context array being built may have wrong values.
+
+  What I've Fixed So Far
+
+  I fixed a liveness analysis bug where closures that capture bound variables weren't properly marking leave-frame. The fix:
+  1. Added bound-set parameter to liveness analysis
+  2. When a closure captures bound variables, set seen-frame = 0
+  3. Mark leave-frame on closure nodes when appropriate
+  4. Updated codegen to emit leave-frame after closure creation
+
+  This fixed the basic { /x { x } } pattern, but the more complex restrict-env-impl with recursive ?! branches still has issues.
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 196k/200k tokens (98%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 18.5k tokens (9.3%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 114.2k tokens (57.1%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 4k (2.2%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 127 tokens
+     └ MERCURY.md: 55 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.1k tokens
+     └ FROTH_COMPILER.md: 6.2k tokens
+     └ FROTH_BYTECODE.md: 853 tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
