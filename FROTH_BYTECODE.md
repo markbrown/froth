@@ -26,6 +26,7 @@ Nodes are the single source of truth for a function and its metadata. Each node 
 - Type-specific keys from analysis passes
 
 **Function nodes** additionally contain:
+
 - `'body`: Array of child nodes (one per term in function body)
 - `'free-vars-map`: Map from identifier to context slot number
 - `'free-vars-array`: Array of identifiers indexed by context slot
@@ -36,6 +37,7 @@ Nodes are the single source of truth for a function and its metadata. Each node 
 - `'func-addr`: Bytecode entry point (added by codegen)
 
 **Generator nodes** contain:
+
 - `'body`: Array of child nodes (generators share outer frame and context)
 - `'bound-set`: Map of identifiers bound inside the generator
 

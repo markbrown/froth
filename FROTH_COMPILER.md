@@ -170,6 +170,7 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 | `make-node` | `(term -- node)` | Create appropriate node type based on term |
 
 **Value conventions:**
+
 - All nodes have `'term` key storing the original syntax term
 - Keys use 0 for "yes/true" and 1 for "no/false" (Froth! convention)
 - Defaults are set to the common case; passes only write when different
@@ -177,6 +178,7 @@ Compiler node constructors. The compiler passes (boundness, liveness, slots) pro
 
 **Identifier node keys:**
 Both variables and operators use identifier nodes. The `'is-operator` key distinguishes them:
+
 - `'is-operator`: 0 = operator (looked up in operator-table), 1 = variable (default)
 - `'is-bound`: 0 = bound variable, 1 = free variable (only meaningful when `'is-operator` = 1)
 - `'is-live`: 0 = still live after this point, 1 = last reference
@@ -186,10 +188,12 @@ Both variables and operators use identifier nodes. The `'is-operator` key distin
 The `'is-operator` key is set by the boundness pass. Operators that are shadowed by a binder (e.g., `+` in `{/+ x + y}`) have `'is-operator` = 1 and are treated as bound variables.
 
 **Binder node keys:**
+
 - `'is-used`: 0 = used somewhere, 1 = dead (never referenced)
 - `'slot`: frame slot number (only set if used)
 
 **Apply node keys:**
+
 - `'is-tail-call`: 0 = tail call, 1 = non-tail call
 - `'restore-context`: 0 = non-tail call needing context restore after
 - `'restore-return`: 0 = last non-tail call (needs return restore)
@@ -200,6 +204,7 @@ The `'is-operator` key is set by the boundness pass. Operators that are shadowed
 - `'rp-save-slot`: frame slot for saving return pointer (set by slots)
 
 **Function node keys:**
+
 - `'body`: array of node maps (parallel to body terms)
 - `'free-vars-map`: map: identifier -> context slot number
 - `'free-vars-array`: array: slot index -> identifier
@@ -209,6 +214,7 @@ The `'is-operator` key is set by the boundness pass. Operators that are shadowed
 - `'needs-frame`: 0 = function needs a frame
 
 **Generator node keys:**
+
 - `'body`: array of node maps (parallel to body terms)
 - `'bound-set`: map: identifier -> nil (set of bound vars)
 
@@ -225,11 +231,13 @@ Boundness analysis for the compiler.
 Takes a function-node (from `compile-func`) with `'term` and `'body` keys, and adds boundness information. Does not recurse into nested functions (they are already analyzed by `compile-func`), but does recurse into generators (which share the outer scope).
 
 Adds these keys to the function-node:
+
 - `'free-vars-map`: map from identifiers to context slot numbers
 - `'free-vars-array`: array of identifiers indexed by context slot
 - `'bound-set`: map from identifiers to nil (marking presence)
 
 Updates child nodes with:
+
 - `'is-operator`: 0 = operator, 1 = variable (for identifiers not shadowed by binders)
 - `'is-bound`: 0 = bound variable, 1 = free variable (for variable identifiers)
 - `'slot`: context slot number (for free identifiers)
@@ -256,6 +264,7 @@ Liveness analysis for the compiler.
 Takes a function-node (from `compile-func` after `boundness`) and adds liveness information. Does not recurse into nested functions (they are already analyzed), but does recurse into generators (which share the outer scope).
 
 **Per-term keys:**
+
 - `'is-live`: `0` (still live) or `1` (last reference) for identifiers
 - `'is-used`: `0` (used) or `1` (dead) for binders
 - `'dead-set`: set of vars whose last use is capture (for closures only)
@@ -265,9 +274,11 @@ Takes a function-node (from `compile-func` after `boundness`) and adds liveness 
 - `'leave-frame`: `0` for the last term that uses the frame
 
 **Function-level keys:**
+
 - `'needs-frame`: `0` if function uses a frame (bound vars or register saves)
 
 The analysis traverses right-to-left to determine which references are "last" in each scope. Key behaviors:
+
 - For nested functions, computes `'dead-set` (captured vars not used later in outer scope)
 - Generators share outer scope; binders inside create local scope within generator only
 - Binders report whether the variable is actually used (0) or dead (1)
@@ -334,6 +345,7 @@ Takes a function node containing the term and analysis data, generates bytecode 
 - `func-node` (returned): Updated with `'func-addr` set to this function's bytecode entry point
 
 Supports:
+
 - Integer and string literals (`push-int`, `push-string`)
 - Operators (`op`)
 - Free variables (`push-context`)
@@ -376,6 +388,7 @@ Takes a quoted function and returns a fully analyzed function-node. Recursively 
 - `func-node`: Fully analyzed node with boundness, liveness, and slots info
 
 The compilation pipeline for each function:
+
 1. Build node tree (creates nodes for each term, recurses into nested functions)
 2. Run `boundness` (classify variables as bound/free, assign context slots)
 3. Run `liveness` (mark last references, tail calls, register save/restore points)
@@ -406,6 +419,7 @@ Compiles a closureval to a bytecodeval, recursively compiling any captured closu
 - `bytecodeval`: The compiled closure (array + bytecode address)
 
 The function:
+
 1. Checks the cache for an already-compiled version
 2. Opens the closure to get its body (quoted function) and environment
 3. Compiles the function body using `compile-func`

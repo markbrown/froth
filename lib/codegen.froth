@@ -28,12 +28,10 @@ operator-table 'wrap @ /opWrap
 operator-table 'close @ /opClose
 operator-table 'deref @ /opDeref
 
-; codegen-term-impl: (addr code need-enter node outer-free-vars outer-bound-slots max-slots seq-fn term-fn -- addr' code' need-enter')
+; codegen-term-impl: (addr code need-enter node max-slots seq-fn term-fn -- addr' code' need-enter')
 ; Generate bytecode for a single term, append to code array.
 ; seq-fn/term-fn are passed for processing generator bodies
 ; node is the analysis node for this term (from boundness/liveness/slots), contains 'term
-; outer-free-vars maps identifiers to context slot numbers in the current function
-; outer-bound-slots maps identifiers to frame slot numbers in the current function
 ; max-slots is the number of frame slots needed (for enter-frame/leave-frame)
 ; need-enter is 0 if we still need to emit enter-frame, 1 if already emitted
 ; Returns updated addr, code, and need-enter flag
@@ -44,7 +42,7 @@ operator-table 'deref @ /opDeref
  'ocStartArray 'ocEndArray 'opClose 'opDeref 'ocTailCall 'ocCall
  'ocSaveContextPtr 'ocRestoreContextPtr 'ocSaveReturnPtr 'ocRestoreReturnPtr
  'foldl 'reduce 'drop 'or 'and] {
-  /term-fn /seq-fn /max-slots /outer-bound-slots /outer-free-vars /node /need-enter /code /addr
+  /term-fn /seq-fn /max-slots /node /need-enter /code /addr
   node 'term @ /term
   term isValue {
     ; Quoted literal value - unwrap and check type
@@ -104,8 +102,8 @@ operator-table 'deref @ /opDeref
         /new-code
         addr new-code need-enter
       } {
-        ; Free variable (is-bound=1) - look up context slot
-        outer-free-vars term @ /slot
+        ; Free variable (is-bound=1) - slot already set on node
+        node 'slot @ /slot
         addr code ocPushContext , slot , need-enter
       } ?!
     } ?!
@@ -152,6 +150,10 @@ operator-table 'deref @ /opDeref
     ; Read the pre-computed bytecode address
     node 'func-addr @ /nested-addr
 
+    ; Get parent scope maps (set by boundness and slots passes)
+    node 'parent-bound-vars-map in { node 'parent-bound-vars-map @ } { $ } ?! /parent-bound
+    node 'parent-free-vars-map in { node 'parent-free-vars-map @ } { $ } ?! /parent-free
+
     ; Build context array at runtime: [start-array, push each captured var, end-array]
     ; The nested function's free-vars-array tells us what to capture (already in slot order)
     ; For each captured var, check if it's bound or free in OUTER scope
@@ -168,13 +170,13 @@ operator-table 'deref @ /opDeref
       nested-free-array ctx-code {
         /ident /acc
         ; Check if this var is bound or free in outer scope
-        outer-bound-slots ident in {
+        parent-bound ident in {
           ; Bound in outer - push from frame
-          outer-bound-slots ident @ /outer-slot
+          parent-bound ident @ /outer-slot
           acc ocPushLocal , outer-slot ,
         } {
           ; Free in outer - push from context
-          outer-free-vars ident @ /outer-slot
+          parent-free ident @ /outer-slot
           acc ocPushContext , outer-slot ,
         } ?!
       } reduce! /ctx-code2
@@ -195,26 +197,9 @@ operator-table 'deref @ /opDeref
     ; Generator - wrap body in start-array/end-array, share outer frame
     node 'body in { node 'body @ } { [ term { drop! $ } foldl! ] } ?! /gen-body-nodes
 
-    ; Build combined bound-slots including generator's binders
-    ; Scan gen-body-nodes for binder nodes with 'slot set
-    outer-bound-slots 0  ; start with outer's bound-slots, idx=0
-    gen-body-nodes {
-      /gnode /idx /gmap
-      gnode 'term @ /gterm
-      gterm isBinder {
-        gnode 'slot in {
-          gnode 'slot @ /slot
-          gterm intern idToIdent /ident
-          gmap slot ident : idx 1 +
-        } { gmap idx 1 + } ?!
-      } { gmap idx 1 + } ?!
-    } foldl!
-    drop!  ; discard final idx
-    /gen-bound-slots
-
     ; Process: start-array, generator body, end-array
-    ; Use seq-fn to process terms (shares outer's frame)
-    addr code ocStartArray , need-enter gen-body-nodes outer-free-vars gen-bound-slots max-slots 0 seq-fn term-fn seq-fn!
+    ; Nested functions inside have parent-bound-vars-map/parent-free-vars-map already set
+    addr code ocStartArray , need-enter gen-body-nodes max-slots 0 seq-fn term-fn seq-fn!
     /gen-code /gen-addr
 
     gen-addr gen-code ocEndArray , need-enter
@@ -278,14 +263,12 @@ operator-table 'deref @ /opDeref
   } ?! } ?! } ?! } ?! } ?! } ?! } ?!
 } def-fn! /codegen-term-impl
 
-; codegen-seq-impl: (addr code need-enter body-nodes outer-free-vars outer-bound-slots max-slots idx seq-fn term-fn -- addr' code')
+; codegen-seq-impl: (addr code need-enter body-nodes max-slots idx seq-fn term-fn -- addr' code')
 ; Process terms from idx to end of body-nodes.
 ; body-nodes is an array of analysis nodes (each contains 'term)
-; outer-free-vars maps identifiers to context slot numbers
-; outer-bound-slots maps identifiers to frame slot numbers
 ; max-slots is the number of frame slots needed
 ; need-enter tracks whether enter-frame has been emitted (0=need, 1=done)
-['codegen-term-impl] { /term-fn /seq-fn /idx /max-slots /outer-bound-slots /outer-free-vars /body-nodes /need-enter /code /addr
+['codegen-term-impl] { /term-fn /seq-fn /idx /max-slots /body-nodes /need-enter /code /addr
   idx body-nodes # = {
     ; Done - discard need-enter, return (addr code)
     addr code
@@ -293,10 +276,10 @@ operator-table 'deref @ /opDeref
     ; Get node for current term
     body-nodes idx @ /node
     ; Process current term with term-fn
-    addr code need-enter node outer-free-vars outer-bound-slots max-slots seq-fn term-fn term-fn!
+    addr code need-enter node max-slots seq-fn term-fn term-fn!
     /new-need-enter /new-code /new-addr
     ; Recurse with seq-fn
-    new-addr new-code new-need-enter body-nodes outer-free-vars outer-bound-slots max-slots idx 1 + seq-fn term-fn seq-fn!
+    new-addr new-code new-need-enter body-nodes max-slots idx 1 + seq-fn term-fn seq-fn!
   } ?!
 } def-fn! /codegen-seq-impl
 
@@ -305,7 +288,7 @@ operator-table 'deref @ /opDeref
 ; Walks body left-to-right, collects bytecode, emits at addr.
 ; func-node contains 'term (the function) and analysis data.
 ; Stores 'func-addr in node before returning.
-['codegen-seq-impl 'codegen-term-impl 'lfoldr 'emit-all-at 'ocReturn 'foldl 'drop 'make-node] { /func-node /addr
+['codegen-seq-impl 'codegen-term-impl 'lfoldr 'emit-all-at 'ocReturn 'foldl 'make-node] { /func-node /addr
   ; Extract the function term from the node
   func-node 'term @ /func
 
@@ -319,7 +302,6 @@ operator-table 'deref @ /opDeref
   } {
     maybe-body
   } ?! /body-nodes
-  func-node 'free-vars-map in { func-node 'free-vars-map @ } { $ } ?! /free-vars
 
   ; Extract frame info
   ; max-slots: number of frame slots needed (default 0)
@@ -328,29 +310,10 @@ operator-table 'deref @ /opDeref
   ; need-enter: inverse of needs-frame (0 = need to emit enter-frame, 1 = already done/not needed)
   func-node 'needs-frame in { func-node 'needs-frame @ } { 1 } ?! /need-enter
 
-  ; Build bound-slots map: identifier -> frame slot for each used binder
-  ; Scan body-nodes for binder nodes that have 'slot set
-  ; Carry (map, idx) through foldl
-  ; Note: convert binder term /x to quoted identifier 'x for map key
-  $ 0  ; initial: map=empty, idx=0
-  body-nodes {
-    /node /idx /map
-    node 'term @ /term
-    term isBinder {
-      node 'slot in {
-        node 'slot @ /slot
-        term intern idToIdent /ident  ; convert /x to 'x
-        map slot ident : idx 1 +
-      } { map idx 1 + } ?!
-    } { map idx 1 + } ?!
-  } foldl!
-  drop!  ; discard final idx
-  /bound-slots
-
   ; Collect bytecode for each term in function body
   ; codegen-seq-impl returns (addr' code') where code' is a cons list (reversed)
   ; Pass impl functions for generator body processing
-  addr . need-enter body-nodes free-vars bound-slots max-slots 0 codegen-seq-impl codegen-term-impl codegen-seq-impl!
+  addr . need-enter body-nodes max-slots 0 codegen-seq-impl codegen-term-impl codegen-seq-impl!
   /body-code /next-emit-addr
 
   ; Check if last term is a tail call by looking at its node
