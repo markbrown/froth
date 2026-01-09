@@ -20,10 +20,11 @@ Liveness reads node fields to mark last references and tail calls. All nodes hav
 
 | Field | Node Types | Source | Description |
 |-------|------------|--------|-------------|
-| `'bound-set` | function, generator | boundness | Set of bound identifiers |
+| `'bound-set` | generator | boundness | Set of bound identifiers |
 | `'free-vars-map` | function (nested) | boundness | Captured vars with context slots |
 | `'is-bound` | identifier | boundness | 0 = bound, 1 = free |
 | `'is-operator` | identifier | boundness | 0 = operator, 1 = variable |
+| `'parent-free-vars-map` | function (nested) | boundness | Outer's free-vars-map |
 | `'body` | function, generator | node creation | Array of child nodes |
 
 ## Slots Pass

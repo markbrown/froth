@@ -208,7 +208,6 @@ The `'is-operator` key is set by the boundness pass. Operators that are shadowed
 - `'body`: array of node maps (parallel to body terms)
 - `'free-vars-map`: map: identifier -> context slot number
 - `'free-vars-array`: array: slot index -> identifier
-- `'bound-set`: map: identifier -> nil (set of bound vars)
 - `'dead-set`: map: identifier -> nil (vars whose last use is capture)
 - `'max-slots`: maximum frame slots needed
 - `'needs-frame`: 0 = function needs a frame
@@ -239,7 +238,6 @@ Adds these keys to the function-node:
 
 - `'free-vars-map`: map from identifiers to context slot numbers
 - `'free-vars-array`: array of identifiers indexed by context slot
-- `'bound-set`: map from identifiers to nil (marking presence)
 
 Updates child nodes with:
 
@@ -256,7 +254,6 @@ When called via `compile-func`, the passes compose automatically. For direct use
 '{ /x x } make-node! /node
 node [ '{ /x x } { make-node! } foldl! ] 'body : boundness! /bnd-map
 bnd-map 'free-vars-map @           ; $ (empty - no free vars)
-bnd-map 'bound-set @               ; $ . 'x : (x is bound)
 ```
 
 ## Liveness (liveness.froth)
