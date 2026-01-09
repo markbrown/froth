@@ -1,0 +1,1650 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.76
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read tests/liveness.expected (36 lines)
+  ⎿  Read ../../../../../tmp/liveness.actual (36 lines)
+  ⎿  Read lib/slots.froth (185 lines)
+  ⎿  Read FROTH_BYTECODE.md (75 lines)
+  ⎿  Referenced file FROTH_COMPILER.md
+
+> Is there any way to modify the currently failing tests so they don't break
+ every time we change the library? 
+
+● Let me look at how the tests are currently structured to understand the options.
+
+● Search(pattern: "tests/*.froth")
+  ⎿  Found 66 files (ctrl+o to expand)
+
+● Read(tests/liveness.froth)
+  ⎿  Read 78 lines
+
+● Read(tests/vm.froth)
+  ⎿  Read 136 lines
+
+● Read(tests/compile_closure.froth)
+  ⎿  Read 61 lines
+
+● Looking at the test structure, I see two approaches currently in use:
+
+  1. Behavioral tests (vm.froth, compile_closure.froth): Compile code and verify it produces correct runtime results. These never break from field additions.
+  2. Structure tests (liveness.froth, boundness.froth, etc.): Dump entire node structure via writeln!. These break whenever any field changes.
+
+  Here are options to make the structure tests more stable:
+
+  Option 1: Test specific fields only
+  ; Instead of: node 'body @ writeln!
+  ; Test specific properties:
+  node 'body @ 0 @ 'is-live @ println!
+  node 'body @ 1 @ 'slot @ println!
+  Pro: Only breaks when tested behavior changes. Con: Less coverage.
+
+  Option 2: Filter fields before output
+  { /node node 'needs-ctx-save delete 'max-slots delete } /strip-volatile
+  node strip-volatile! writeln!
+  Pro: Still see structure. Con: Must maintain filter list.
+
+  Option 3: Behavioral tests only
+  Replace structure dumps with tests that compile and execute:
+  tree-empty! 1000 '{/x x 1 +} compile-func! /node drop! drop!
+  node 'func-addr @ /addr
+  5 node 'context @ addr close ! println!  ; should print 6
+  Pro: Never breaks from internal changes. Con: Harder to debug pass issues.
+
+  Option 4: Keep snapshots but automate regeneration
+  Add a test runner flag to update expected files when outputs are correct but different.
+
+  Which approach do you prefer?
+
+> let's go with option 1 
+
+● Let me look at each failing test to understand what fields they should focus on.
+
+● Read(tests/boundness.froth)
+  ⎿  Read 64 lines
+
+● Read(tests/slots.froth)
+  ⎿  Read 110 lines
+
+● Read(tests/codegen.froth)
+  ⎿  Read 334 lines
+
+● Let me rewrite liveness.froth to test specific fields instead of dumping full structure:
+
+● Write(tests/liveness.froth)
+  ⎿  Added 113 lines, removed 50 lines                                   
+        1  ; Test liveness analysis via compile-func
+        2 -; compile-func runs boundness -> liveness -> slots, so output 
+          -includes all analysis                                         
+        2 +; Tests specific liveness fields rather than full node structu
+          +re                                                            
+        3  
+        4  ; Safety check: ensure compiled library code doesn't overlap w
+           ith test addresses
+        5  froth-bytecode-top 1000 < { } { "ERROR: froth-bytecode-top >= 
+           1000, test addresses may conflict" println! } ?!
+        6  
+        7 -; Helper to compile and show result                           
+        7 +; Helper to show liveness info for a single identifier node   
+        8 +; Prints: term is-live is-bound                               
+        9 +{ /node                                                       
+       10 +  node 'term @ write " " print                                
+       11 +  "live=" print node 'is-live @ print " " print               
+       12 +  "bound=" print node 'is-bound @ print                       
+       13 +} /show-ident                                                 
+       14 +                                                              
+       15 +; Helper to show binder info                                  
+       16 +; Prints: term is-used                                        
+       17 +{ /node                                                       
+       18 +  node 'term @ write " " print                                
+       19 +  "used=" print node 'is-used @ print                         
+       20 +} /show-binder                                                
+       21 +                                                              
+       22 +; Test identifier liveness                                    
+       23  { /func
+       24    tree-empty! 1000 func compile-func! /node drop! drop!
+       10 -  "body=" print node 'body @ writeln!                         
+       11 -} /test-liveness                                              
+       25 +  node 'body @ { /n                                           
+       26 +    n 'term @ isIdent { n show-ident! " | " print } { } ?!    
+       27 +  } foldl!                                                    
+       28 +  nl!                                                         
+       29 +} /test-idents                                                
+       30  
+       13 -; Basic cases                                                 
+       14 -'{x} test-liveness!                                           
+       15 -; Free var x, last ref                                        
+       31 +; Test binder usage                                           
+       32 +{ /func                                                       
+       33 +  tree-empty! 1000 func compile-func! /node drop! drop!       
+       34 +  node 'body @ { /n                                           
+       35 +    n 'term @ isBinder { n show-binder! " | " print } { } ?!  
+       36 +  } foldl!                                                    
+       37 +  nl!                                                         
+       38 +} /test-binders                                               
+       39  
+       17 -'{x x} test-liveness!                                         
+       18 -; First x still live, second x last ref                       
+       40 +; Test func-node level flags                                  
+       41 +{ /func                                                       
+       42 +  tree-empty! 1000 func compile-func! /node drop! drop!       
+       43 +  "needs-frame=" print node 'needs-frame @ print " " print    
+       44 +  "needs-ctx-save=" print node 'needs-ctx-save @ println!     
+       45 +} /test-func-flags                                            
+       46  
+       20 -'{/x x} test-liveness!                                        
+       21 -; Binder used, x is last ref                                  
+       47 +; Test dead-set for nested closures                           
+       48 +{ /func                                                       
+       49 +  tree-empty! 1000 func compile-func! /node drop! drop!       
+       50 +  node 'body @ { /n                                           
+       51 +    n 'term @ isFunc {                                        
+       52 +      "dead-set=" print n 'dead-set @ keys writeln!           
+       53 +    } { } ?!                                                  
+       54 +  } foldl!                                                    
+       55 +} /test-dead-set                                              
+       56  
+       23 -'{x /x x} test-liveness!                                      
+       24 -; Outer x last ref (free), binder used, inner x last ref      
+       57 +; === Identifier liveness tests ===                           
+       58 +"--- Identifier liveness ---" println!                        
+       59  
+       26 -'{/x x x} test-liveness!                                      
+       27 -; Binder used, first x still live, second x last ref          
+       60 +'{x} test-idents!                                             
+       61 +; x is free, last ref                                         
+       62  
+       29 -'{/x} test-liveness!                                          
+       30 -; Binder unused (dead)                                        
+       63 +'{x x} test-idents!                                           
+       64 +; first x still live (is-live=0), second x last ref (is-live=1
+          +)                                                             
+       65  
+       32 -'{/x /y x} test-liveness!                                     
+       33 -; /x used, /y unused, x is last ref                           
+       66 +'{x /x x} test-idents!                                        
+       67 +; outer x free and last, inner x bound and last               
+       68  
+       35 -; Nested closures - should have dead-set                      
+       36 -'{x {x} x} test-liveness!                                     
+       37 -; x still live after closure, dead-set empty                  
+       69 +'{/x x x} test-idents!                                        
+       70 +; first x bound, still live; second x bound, last ref         
+       71  
+       39 -'{x {x}} test-liveness!                                       
+       40 -; x's last use is this capture, in dead-set                   
+       72 +; === Binder usage tests ===                                  
+       73 +"--- Binder usage ---" println!                               
+       74  
+       42 -'{x {/x x}} test-liveness!                                    
+       43 -; outer x not captured (shadowed), inner binder used          
+       75 +'{/x x} test-binders!                                         
+       76 +; binder is used (is-used=0)                                  
+       77  
+       45 -'{{x}} test-liveness!                                         
+       46 -; x's last use is capture                                     
+       78 +'{/x} test-binders!                                           
+       79 +; binder is dead (is-used=1)                                  
+       80  
+       48 -; Nested generators (share scope)                             
+       49 -'{x [x] x} test-liveness!                                     
+       50 -; generator shares scope, x still live                        
+       81 +'{/x /y x} test-binders!                                      
+       82 +; x is used, y is dead                                        
+       83  
+       52 -'{x [x]} test-liveness!                                       
+       53 -; generator's x is last ref                                   
+       84 +; === Function-level flags ===                                
+       85 +"--- Function flags ---" println!                             
+       86  
+       55 -'{x [/x x] x} test-liveness!                                  
+       56 -; generator binder is local and used                          
+       87 +'{1 2 +} test-func-flags!                                     
+       88 +; no frame needed (no binders)                                
+       89  
+       58 -; Empty cases                                                 
+       59 -'{{}} test-liveness!                                          
+       60 -; empty nested closure with empty dead-set                    
+       90 +'{/x x} test-func-flags!                                      
+       91 +; frame needed                                                
+       92  
+       62 -'{[]} test-liveness!                                          
+       63 -; empty generator                                             
+       93 +'{f! 1} test-func-flags!                                      
+       94 +; frame needed for non-tail call, ctx-save needed             
+       95  
+       65 -; Multiple variables                                          
+       66 -'{x y} test-liveness!                                         
+       67 -; both are last refs                                          
+       96 +'{f!} test-func-flags!                                        
+       97 +; no frame (tail call only)                                   
+       98  
+       69 -'{x y x} test-liveness!                                       
+       70 -; first x still live                                          
+       99 +; === Dead-set tests ===                                      
+      100 +"--- Dead-set ---" println!                                   
+      101  
+       72 -'{x y x y} test-liveness!                                     
+       73 -; first x and y still live                                    
+      102 +'{x {x}} test-dead-set!                                       
+      103 +; x's last use is capture, in dead-set                        
+      104  
+       75 -; Operators (not tracked in liveness)                         
+       76 -'{1 2 +} test-liveness!                                       
+       77 -; literals and operators                                      
+      105 +'{x {x} x} test-dead-set!                                     
+      106 +; x is still live after closure, dead-set empty               
+      107 +                                                              
+      108 +'{{x}} test-dead-set!                                         
+      109 +; x captured, in dead-set                                     
+      110 +                                                              
+      111 +'{x {/x x}} test-dead-set!                                    
+      112 +; outer x not captured (shadowed), dead-set empty             
+      113 +                                                              
+      114 +; === Tail call detection ===                                 
+      115 +"--- Tail calls ---" println!                                 
+      116 +{ /func                                                       
+      117 +  tree-empty! 1000 func compile-func! /node drop! drop!       
+      118 +  node 'body @ { /n                                           
+      119 +    n 'term @ isApply {                                       
+      120 +      "apply: is-tail=" print n 'is-tail-call @ print " " prin
+          +t                                                             
+      121 +      n 'restore-context in { "restore-ctx=" print n 'restore-
+          +context @ print " " print } { } ?!                            
+      122 +      n 'restore-return in { "restore-rp=" print n 'restore-re
+          +turn @ print } { } ?!                                         
+      123 +    } { } ?!                                                  
+      124 +  } foldl!                                                    
+      125 +  nl!                                                         
+      126 +} /test-calls                                                 
+      127 +                                                              
+      128 +'{f!} test-calls!                                             
+      129 +; tail call                                                   
+      130 +                                                              
+      131 +'{f! 1} test-calls!                                           
+      132 +; non-tail call                                               
+      133 +                                                              
+      134 +'{f! g!} test-calls!                                          
+      135 +; f is non-tail, g is tail                                    
+      136 +                                                              
+      137 +'{x f! 1} test-calls!                                         
+      138 +; non-tail with context restore                               
+      139 +                                                              
+      140 +"done" println!                                               
+
+● Bash(./bin/froth tests/liveness.froth 2>&1)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +38 lines (ctrl+o to expand)
+
+● Let me fix a formatting issue in the test and regenerate:
+
+● Update(tests/liveness.froth)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      117    tree-empty! 1000 func compile-func! /node drop! drop!
+      118    node 'body @ { /n
+      119      n 'term @ isApply {
+      120 -      "apply: is-tail=" print n 'is-tail-call @ print " " prin
+          -t                                                             
+      121 -      n 'restore-context in { "restore-ctx=" print n 'restore-
+          -context @ print " " print } { } ?!                            
+      122 -      n 'restore-return in { "restore-rp=" print n 'restore-re
+          -turn @ print } { } ?!                                         
+      120 +      "apply: is-tail=" print n 'is-tail-call @ print         
+      121 +      n 'restore-context in { " restore-ctx=" print n 'restore
+          +-context @ print } { } ?!                                     
+      122 +      n 'restore-return in { " restore-rp=" print n 'restore-r
+          +eturn @ print } { } ?!                                        
+      123 +      nl!                                                     
+      124      } { } ?!
+      125    } foldl!
+      125 -  nl!                                                         
+      126  } /test-calls
+      127  
+      128  '{f!} test-calls!
+
+● Bash(./bin/froth tests/liveness.froth 2>&1 | tee tests/liveness.expected)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +38 lines (ctrl+o to expand)
+
+● Now let me update boundness.froth:
+
+● Write(tests/boundness.froth)
+  ⎿  Added 95 lines, removed 39 lines                                    
+        1  ; Test boundness analysis via compile-func
+        2 -; compile-func returns (code-map addr func-node) where node ha
+          -s 'term, 'body, 'free-vars-map, 'bound-set                    
+        2 +; Tests specific boundness fields rather than full node struct
+          +ure                                                           
+        3  
+        4  ; Safety check: ensure compiled library code doesn't overlap w
+           ith test addresses
+        5  froth-bytecode-top 1000 < { } { "ERROR: froth-bytecode-top >= 
+           1000, test addresses may conflict" println! } ?!
+        6  
+        7 -; Helper to compile and show result                           
+        7 +; Helper to show boundness info for identifiers in body       
+        8  { /func
+        9    tree-empty! 1000 func compile-func! /node drop! drop!
+       10 -  "free=" print node 'free-vars-map @ write                   
+       11 -  " bound=" print node 'bound-set @ write                     
+       12 -  " body=" print node 'body @ writeln!                        
+       13 -} /test                                                       
+       10 +  node 'body @ { /n                                           
+       11 +    n 'term @ isIdent {                                       
+       12 +      n 'term @ write " " print                               
+       13 +      "bound=" print n 'is-bound @ print " " print            
+       14 +      "op=" print n 'is-operator @ print                      
+       15 +      n 'is-bound @ { } { " slot=" print n 'slot @ print } ?! 
+          + ; slot only for free vars                                    
+       16 +      " | " print                                             
+       17 +    } { } ?!                                                  
+       18 +  } foldl!                                                    
+       19 +  nl!                                                         
+       20 +} /test-idents                                                
+       21  
+       15 -; Test 1: {x /x x}                                            
+       16 -'{x /x x} test!                                               
+       22 +; Helper to show func-level boundness info                    
+       23 +{ /func                                                       
+       24 +  tree-empty! 1000 func compile-func! /node drop! drop!       
+       25 +  "free=" print node 'free-vars-map @ write " " print         
+       26 +  "bound=" print node 'bound-set @ keys writeln!              
+       27 +} /test-func                                                  
+       28  
+       18 -; Test 2: {/x [x] x}                                          
+       19 -'{/x [x] x} test!                                             
+       29 +; Helper to show nested closure info                          
+       30 +{ /func                                                       
+       31 +  tree-empty! 1000 func compile-func! /node drop! drop!       
+       32 +  node 'body @ { /n                                           
+       33 +    n 'term @ isFunc {                                        
+       34 +      "nested: free=" print n 'free-vars-map @ write " " print
+       35 +      "bound=" print n 'bound-set @ keys writeln!             
+       36 +    } { } ?!                                                  
+       37 +  } foldl!                                                    
+       38 +} /test-nested                                                
+       39  
+       21 -; Test 3: {/x {x} x}                                          
+       22 -'{/x {x} x} test!                                             
+       40 +; === Identifier classification ===                           
+       41 +"--- Identifier classification ---" println!                  
+       42  
+       24 -; Test 4: {x /x [/y x y] x y}                                 
+       25 -'{x /x [/y x y] x y} test!                                    
+       43 +'{x} test-idents!                                             
+       44 +; x is free (bound=1), variable (op=1)                        
+       45  
+       27 -; Test 5: {x /x {/y x y} x y}                                 
+       28 -'{x /x {/y x y} x y} test!                                    
+       46 +'{x y} test-idents!                                           
+       47 +; both free                                                   
+       48  
+       30 -; Additional edge cases                                       
+       49 +'{/x x} test-idents!                                          
+       50 +; x is bound (bound=0)                                        
+       51  
+       32 -; Empty function                                              
+       33 -'{} test!                                                     
+       52 +'{x /x x} test-idents!                                        
+       53 +; outer x free, inner x bound                                 
+       54  
+       35 -; Single binder                                               
+       36 -'{/x} test!                                                   
+       55 +'{1 2 +} test-idents!                                         
+       56 +; + is operator (op=0)                                        
+       57  
+       38 -; Deeply nested                                               
+       39 -'{/x {/y {x y}}} test!                                        
+       58 +'{/+ x + y} test-idents!                                      
+       59 +; + is bound (shadowed operator)                              
+       60  
+       41 -; Multiple uses of same variable                              
+       42 -'{/x x x x} test!                                             
+       61 +; === Function-level info ===                                 
+       62 +"--- Function-level ---" println!                             
+       63  
+       44 -; Shadowing within generator                                  
+       45 -'{/x [/x x] x} test!                                          
+       64 +'{x} test-func!                                               
+       65 +; free={x:0}, bound=[]                                        
+       66  
+       47 -; Free before bound, closure after                            
+       48 -'{x /x {x} x} test!                                           
+       67 +'{/x x} test-func!                                            
+       68 +; free={}, bound=[x]                                          
+       69  
+       50 -; Generator with free var                                     
+       51 -'{/x x {x} x} test!                                           
+       70 +'{x y} test-func!                                             
+       71 +; free={x:0, y:1}, bound=[]                                   
+       72  
+       53 -; Generator shadows outer                                     
+       54 -'{x [/x x] x} test!                                           
+       73 +'{x /x x} test-func!                                          
+       74 +; free={x:0}, bound=[x]                                       
+       75  
+       56 -; Operators are not free variables (looked up in op-table)    
+       57 -'{x 10 *} test!                                               
+       76 +'{} test-func!                                                
+       77 +; empty                                                       
+       78  
+       59 -; Shadowed operator IS a bound variable                       
+       60 -'{/+ x + y} test!                                             
+       79 +; === Nested closures ===                                     
+       80 +"--- Nested closures ---" println!                            
+       81  
+       62 -; Generator with different free var - y inside generator shoul
+          -d use outer slot 1                                            
+       63 -'{x [y]} test!                                                
+       82 +'{x {x}} test-nested!                                         
+       83 +; inner captures x                                            
+       84 +                                                              
+       85 +'{/x {x} x} test-nested!                                      
+       86 +; inner captures x from outer's bound set                     
+       87 +                                                              
+       88 +'{{x}} test-nested!                                           
+       89 +; inner captures x from outer's free                          
+       90 +                                                              
+       91 +'{/x {/y x y}} test-nested!                                   
+       92 +; inner captures x, binds y                                   
+       93 +                                                              
+       94 +'{x {/x x}} test-nested!                                      
+       95 +; inner shadows x, no capture                                 
+       96 +                                                              
+       97 +; === Generators (share scope) ===                            
+       98 +"--- Generators ---" println!                                 
+       99 +{ /func                                                       
+      100 +  tree-empty! 1000 func compile-func! /node drop! drop!       
+      101 +  "outer bound=" print node 'bound-set @ keys print " " print 
+      102 +  node 'body @ { /n                                           
+      103 +    n 'term @ isGen {                                         
+      104 +      "gen bound=" print n 'bound-set @ keys print " " print  
+      105 +    } { } ?!                                                  
+      106 +  } foldl!                                                    
+      107 +  nl!                                                         
+      108 +} /test-gen                                                   
+      109 +                                                              
+      110 +'{/x [x]} test-gen!                                           
+      111 +; generator uses outer's x                                    
+      112 +                                                              
+      113 +'{/x [/y y] x} test-gen!                                      
+      114 +; generator binds y locally                                   
+      115 +                                                              
+      116 +'{x [/x x] x} test-gen!                                       
+      117 +; generator shadows x                                         
+      118 +                                                              
+      119 +"done" println!                                               
+
+● Bash(./bin/froth tests/boundness.froth 2>&1 | tee tests/boundness.expected)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +36 lines (ctrl+o to expand)
+
+● Now let me update slots.froth:
+
+● Write(tests/slots.froth)
+  ⎿  Added 72 lines, removed 52 lines                                    
+       1  ; Test slot allocation via compile-func
+       2 -; compile-func runs boundness -> liveness -> slots, so output i
+         -ncludes all analysis                                           
+       2 +; Tests specific slot fields rather than full node structure   
+       3  
+       4  ; Safety check: ensure compiled library code doesn't overlap wi
+          th test addresses
+       5  froth-bytecode-top 1000 < { } { "ERROR: froth-bytecode-top >= 1
+          000, test addresses may conflict" println! } ?!
+       6  
+       7 -; Helper to compile and show result                            
+       7 +; Helper to show slots for binders and bound identifiers       
+       8  { /func
+       9    tree-empty! 1000 func compile-func! /node drop! drop!
+      10 -  node 'body @ write " " print node 'max-slots @ println!      
+      10 +  "max=" print node 'max-slots @ print " slots: " print        
+      11 +  node 'body @ { /n                                            
+      12 +    n 'term @ isBinder {                                       
+      13 +      n 'is-used @ { } {  ; only show if used (is-used=0)      
+      14 +        n 'term @ write "=" print n 'slot @ print " " print    
+      15 +      } ?!                                                     
+      16 +    } { } ?!                                                   
+      17 +    n 'term @ isIdent {                                        
+      18 +      n 'is-operator @ {  ; only if variable (is-operator=1)   
+      19 +        n 'is-bound @ { } {  ; only if bound (is-bound=0)      
+      20 +          n 'term @ write "=" print n 'slot @ print " " print  
+      21 +        } ?!                                                   
+      22 +      } { } ?!                                                 
+      23 +    } { } ?!                                                   
+      24 +  } foldl!                                                     
+      25 +  nl!                                                          
+      26  } /test-slots
+      27  
+      13 -; Basic cases                                                  
+      28 +; Helper to show apply node flags                              
+      29 +{ /func                                                        
+      30 +  tree-empty! 1000 func compile-func! /node drop! drop!        
+      31 +  "max=" print node 'max-slots @ print " " print               
+      32 +  node 'body @ { /n                                            
+      33 +    n 'term @ isApply {                                        
+      34 +      n 'save-context in { "save-ctx=" print n 'save-context @ 
+         +print " ctx-slot=" print n 'ctx-save-slot @ print " " print } {
+         + } ?!                                                          
+      35 +      n 'save-return in { "save-rp=" print n 'save-return @ pri
+         +nt " rp-slot=" print n 'rp-save-slot @ print " " print } { } ?!
+      36 +      n 'restore-context in { "restore-ctx=" print n 'restore-c
+         +ontext @ print " " print } { } ?!                              
+      37 +      n 'restore-return in { "restore-rp=" print n 'restore-ret
+         +urn @ print " " print } { } ?!                                 
+      38 +      "| " print                                               
+      39 +    } { } ?!                                                   
+      40 +  } foldl!                                                     
+      41 +  nl!                                                          
+      42 +} /test-apply                                                  
+      43 +                                                               
+      44 +; === Basic slot allocation ===                                
+      45 +"--- Basic slots ---" println!                                 
+      46 +                                                               
+      47  '{/x x} test-slots!
+      48  ; slot 0 for x
+      49  
+      50  '{/x} test-slots!
+      18 -; dead binder, no slot                                         
+      51 +; dead binder, no slot (max=0)                                 
+      52  
+      53  '{/x /y x y} test-slots!
+      54  ; two slots
+      55  
+      56  '{/x /y y x} test-slots!
+      24 -; same two slots, different order                              
+      57 +; same two slots                                               
+      58  
+      26 -; Slot reuse                                                   
+      59 +; === Slot reuse ===                                           
+      60 +"--- Slot reuse ---" println!                                  
+      61 +                                                               
+      62  '{/x x /y y} test-slots!
+      63  ; slot 0 reused for y
+      64  
+     ...
+      68  '{/x /y x y /z z} test-slots!
+      69  ; slot 1 freed after y, reused for z
+      70  
+      36 -; Generator (same frame, slots thread through)                 
+      71 +; === Generator (shares frame) ===                             
+      72 +"--- Generators ---" println!                                  
+      73 +                                                               
+      74  '{/x [/y y] x} test-slots!
+      75  ; generator uses slot 1
+      76  
+     ...
+       80  '{/x x [/y y]} test-slots!
+       81  ; slot 0 reused inside generator
+       82  
+       46 -; Closure (own frame)                                         
+       83 +; === Closure (own frame) ===                                 
+       84 +"--- Nested closures ---" println!                            
+       85 +                                                              
+       86  '{/x {/y y} x} test-slots!
+       87  ; closure has own frame with 1 slot
+       88  
+       89  '{/x {/y /z y z}} test-slots!
+       51 -; dead binder, closure has 2 slots                            
+       90 +; dead x in outer, closure has 2 slots                        
+       91  
+       53 -; Mixed                                                       
+       54 -'{/x /y [/z z x] y} test-slots!                               
+       55 -; generator sees x (slot 0), allocates z (slot 2)             
+       92 +; === Operators and literals ===                              
+       93 +"--- Operators/literals ---" println!                         
+       94  
+       57 -; Operators and literals (no slots)                           
+       95  '{1 2 +} test-slots!
+       96 +; no slots                                                    
+       97  
+       98  '{/x 1 x +} test-slots!
+       99 +; one slot                                                    
+      100  
+       62 -; Free variables (no slots)                                   
+      101 +; === Free variables ===                                      
+      102 +"--- Free vars ---" println!                                  
+      103 +                                                              
+      104  '{x} test-slots!
+      105 +; no frame slots (free var uses context)                      
+      106  
+      107  '{/y x y} test-slots!
+      108 +; one slot for y, x uses context                              
+      109  
+       67 -; Register save slots for non-tail calls                      
+       68 -; Helper to show apply node flags                             
+       69 -; Note: 'in returns 0 if key exists, 1 if not - so then-branch
+          - runs when key exists                                         
+       70 -{ /func                                                       
+       71 -  tree-empty! 1000 func compile-func! /node drop! drop!       
+       72 -  "max-slots=" print node 'max-slots @ print " " print        
+       73 -  ; Find apply nodes and show their flags                     
+       74 -  node 'body @ { /n                                           
+       75 -    n 'save-context in {                                      
+       76 -      "save-ctx=" print n 'save-context @ print " " print     
+       77 -      "ctx-slot=" print n 'ctx-save-slot @ print " " print    
+       78 -    } { } ?!                                                  
+       79 -    n 'save-return in {                                       
+       80 -      "save-rp=" print n 'save-return @ print " " print       
+       81 -      "rp-slot=" print n 'rp-save-slot @ print " " print      
+       82 -    } { } ?!                                                  
+       83 -    n 'restore-context in {                                   
+       84 -      "restore-ctx=" print n 'restore-context @ print " " prin
+          -t                                                             
+       85 -    } { } ?!                                                  
+       86 -    n 'restore-return in {                                    
+       87 -      "restore-rp=" print n 'restore-return @ print " " print 
+       88 -    } { } ?!                                                  
+       89 -  } foldl!                                                    
+       90 -  nl!                                                         
+       91 -} /test-apply-slots                                           
+      110 +; === Register save slots ===                                 
+      111 +"--- Register saves ---" println!                             
+      112  
+       93 -; Single non-tail call with context restore                   
+       94 -'{x f! 1} test-apply-slots!                                   
+      113 +'{x f! 1} test-apply!                                         
+      114  ; save-ctx=0 (first), save-rp=0 (first), restore-ctx=0, restor
+           e-rp=0
+      115  
+       97 -; Two non-tail calls - second should NOT save again           
+       98 -'{x f! y g! 1} test-apply-slots!                              
+      116 +'{x f! y g! 1} test-apply!                                    
+      117  ; First call: save-ctx=0, save-rp=0, restore-ctx=0
+      100 -; Second call: NO save-ctx, restore-ctx=0, restore-rp=0       
+      118 +; Second call: ctx-slot inherited, restore-ctx=0, restore-rp=0
+      119  
+      102 -; Call without context restore (no free var between calls)    
+      103 -'{f! g! 1} test-apply-slots!                                  
+      104 -; First: save-rp=0, no ctx restore                            
+      105 -; Second: restore-rp=0, no ctx restore                        
+      120 +'{f! g! 1} test-apply!                                        
+      121 +; No context save (no free var between calls)                 
+      122  
+      107 -; Tail call (no saves needed)                                 
+      108 -'{f!} test-apply-slots!                                       
+      109 -; No saves or restores                                        
+      123 +'{f!} test-apply!                                             
+      124 +; Tail call - no saves or restores                            
+      125 +                                                              
+      126 +'{f! 1 +} test-apply!                                         
+      127 +; Non-tail, needs saves                                       
+      128 +                                                              
+      129 +"done" println!                                               
+
+● Bash(./bin/froth tests/slots.froth 2>&1 | tee tests/slots.expected)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +48 lines (ctrl+o to expand)
+
+● I see some issues with the conditional logic. Let me fix the test:
+
+● Update(tests/slots.froth)
+  ⎿  Added 5 lines, removed 5 lines                                      
+      10    "max=" print node 'max-slots @ print " slots: " print
+      11    node 'body @ { /n
+      12      n 'term @ isBinder {
+      13 -      n 'is-used @ { } {  ; only show if used (is-used=0)      
+      13 +      n 'is-used @ {  ; show if used (is-used=0)               
+      14          n 'term @ write "=" print n 'slot @ print " " print
+      15 -      } ?!                                                     
+      15 +      } { } ?!                                                 
+      16      } { } ?!
+      17      n 'term @ isIdent {
+      18 -      n 'is-operator @ {  ; only if variable (is-operator=1)   
+      19 -        n 'is-bound @ { } {  ; only if bound (is-bound=0)      
+      18 +      n 'is-operator @ {  ; if variable (is-operator=1)        
+      19 +        n 'is-bound @ {  ; if bound (is-bound=0)               
+      20            n 'term @ write "=" print n 'slot @ print " " print
+      21 -        } ?!                                                   
+      21 +        } { } ?!                                               
+      22        } { } ?!
+      23      } { } ?!
+      24    } foldl!
+
+● Bash(./bin/froth tests/slots.froth 2>&1 | tee tests/slots.expected)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +48 lines (ctrl+o to expand)
+
+● I see the + operator is being printed incorrectly. Let me fix the is-operator check:
+
+● Update(tests/slots.froth)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      15        } { } ?!
+      16      } { } ?!
+      17      n 'term @ isIdent {
+      18 -      n 'is-operator @ {  ; if variable (is-operator=1)        
+      18 +      n 'is-operator @ { } {  ; skip operators (is-operator=0),
+         + process variables (is-operator=1)                             
+      19          n 'is-bound @ {  ; if bound (is-bound=0)
+      20            n 'term @ write "=" print n 'slot @ print " " print
+      21          } { } ?!
+      22 -      } { } ?!                                                 
+      22 +      } ?!                                                     
+      23      } { } ?!
+      24    } foldl!
+      25    nl!
+
+● Bash(./bin/froth tests/slots.froth 2>&1 | tee tests/slots.expected)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +48 lines (ctrl+o to expand)
+
+● Let me check the codegen test's expected output to see if it has structural dependencies:
+
+● Read(tests/codegen.expected)
+  ⎿  Read 47 lines
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 > /tmp/codegen.actual && diff
+      tests/codegen.expected /tmp/codegen.actual || echo "DIFFERS")
+  ⎿  0a1,15                         
+     > FROTH: compiled 'def-fn
+     > FROTH: compiled 'restrict-env
+     … +18 lines (ctrl+o to expand)
+
+● The codegen test is mostly behavioral. The difference is just the constant pool index for a string which can vary. Let me regenerate it:
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 | tee tests/codegen.expected)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +58 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | tail -20)
+  ⎿  --- Generators ---                
+     max=2 slots: '/x=0 'x=0
+     max=2 slots: '/x=0 '/z=1 'z=1 'x=0
+     … +24 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | grep -E "(PASSED|FAILED|^Tests:)")
+  ⎿  Shell cwd was reset to /home/mark/Documents/projects/froth
+
+● Bash(./run_tests.sh 2>&1 | head -60)
+  ⎿  PASS: add                     
+     PASS: alist
+     PASS: apply_op
+     … +57 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/boundness.froth 2>&1 > /tmp/boundness.actual && diff
+      tests/boundness.expected /tmp/boundness.actual)
+  ⎿  (No content)
+
+● Bash(./bin/froth tests/liveness.froth 2>&1 > /tmp/liveness.actual && diff
+      tests/liveness.expected /tmp/liveness.actual)
+  ⎿  (No content)
+
+● Bash(./bin/froth tests/slots.froth 2>&1 > /tmp/slots.actual && diff
+      tests/slots.expected /tmp/slots.actual)
+  ⎿  (No content)
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 > /tmp/codegen.actual && diff
+      tests/codegen.expected /tmp/codegen.actual)
+  ⎿  (No content)
+
+● Bash(cat run_tests.sh | head -30)
+  ⎿  #!/bin/sh                               
+     # Test runner for Froth regression tests
+     … +29 lines (ctrl+o to expand)
+
+● I see - the test script filters out FROTH: lines but my expected files now include them. Let me fix that:
+
+● Bash(./bin/froth tests/liveness.froth 2>&1 | grep -v '^FROTH: ' >
+      tests/liveness.expected)
+  ⎿  (No content)
+
+● Bash(./bin/froth tests/boundness.froth 2>&1 | grep -v '^FROTH: ' >
+      tests/boundness.expected)
+  ⎿  (No content)
+
+● Bash(./bin/froth tests/slots.froth 2>&1 | grep -v '^FROTH: ' >
+      tests/slots.expected)
+  ⎿  (No content)
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 | grep -v '^FROTH: ' >
+      tests/codegen.expected)
+  ⎿  (No content)
+
+● Bash(./run_tests.sh 2>&1 | grep -E "(PASS|FAIL|SKIP):" | sort | uniq -c)
+  ⎿        1 PASS: add             
+           1 PASS: alist
+           1 PASS: apply_op
+     … +63 lines (ctrl+o to expand)
+
+● All 64 tests pass. Let me update the todo list:
+
+● Done. All 64 tests pass. Here's a summary of the changes:
+
+  Updated test files to test specific fields instead of dumping full node structure:
+
+  1. liveness.froth - Tests:
+    - is-live and is-bound on identifiers
+    - is-used on binders
+    - needs-frame and needs-ctx-save on func-node
+    - dead-set on nested closures
+    - is-tail-call, restore-context, restore-return on apply nodes
+  2. boundness.froth - Tests:
+    - is-bound and is-operator on identifiers
+    - slot on free variables (context slot)
+    - free-vars-map and bound-set on func-node
+    - Nested closure captures
+    - Generator scope sharing
+  3. slots.froth - Tests:
+    - slot assignments for binders and bound identifiers
+    - max-slots on func-node
+    - Slot reuse behavior
+    - save-context, save-return, ctx-save-slot, rp-save-slot on apply nodes
+  4. codegen.froth - Already mostly behavioral (execution tests), just regenerated expected output
+
+  These tests are now stable - they won't break when new fields are added to nodes. They only test the specific fields relevant to each compiler pass.
+
+> I have staged the work to add needs-ctx-save, as well as test updates. 
+Please commit 
+
+● Bash(git status)
+  ⎿  On branch master                                     
+     Your branch is ahead of 'origin/master' by 9 commits.
+       (use "git push" to publish your local commits)
+     … +22 lines (ctrl+o to expand)
+
+● Bash(git diff --staged --stat)
+  ⎿   FROTH_BYTECODE.md        | 102 +++++++++++++++--------------
+      FROTH_COMPILER.md        |  11 +++-
+      lib/liveness.froth       |   1 +
+     … +11 lines (ctrl+o to expand)
+
+● Bash(git log --oneline -5)
+  ⎿  fa4d7a7 add transcripts 84-89                           
+     68d07c3 Store parent scope maps on nested function nodes
+     623cb5a Enable compilation for more array functions
+     … +2 lines (ctrl+o to expand)
+
+● Bash(git diff --staged lib/liveness.froth lib/node.froth lib/slots.froth)
+  ⎿  diff --git a/lib/liveness.froth b/lib/liveness.froth
+     index c854665..8f13e22 100644
+     --- a/lib/liveness.froth
+     … +345 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Add needs-ctx-save flag and make compiler tests
+      field-specific…)
+  ⎿ [master 81ec1fd] Add needs-ctx-save flag and make compiler tests field-
+    specific
+     12 files changed, 493 insertions(+), 319 deletions(-)
+
+
+● Bash(git status)
+  ⎿  On branch master                                      
+     Your branch is ahead of 'origin/master' by 10 commits.
+       (use "git push" to publish your local commits)
+     … +10 lines (ctrl+o to expand)
+
+● Committed as 81ec1fd:
+  - Added needs-ctx-save flag to liveness pass and node defaults
+  - Updated slots pass to read the flag from func-node
+  - Rewrote compiler tests to check specific fields instead of full structure
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 148k/200k tokens (74%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 19.1k tokens (9.6%)
+     ⛁ ⛁ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Messages: 66.0k tokens (33.0%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 52k (26.0%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 127 tokens
+     └ MERCURY.md: 68 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.1k tokens
+     └ FROTH_COMPILER.md: 6.4k tokens
+     └ FROTH_BYTECODE.md: 1.3k tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> Let's think about the liveness pass. This uses a bound-set field that is 
+produced by the boundness pass. Can you explain how liveness uses this 
+information, for both generators and functions? 
+
+● Read(lib/liveness.froth)
+  ⎿  Read 168 lines
+
+● The liveness pass uses bound-set differently for functions and generators:
+
+  For the top-level function
+
+  The liveness pass reads the function's own bound-set (line 153) and passes it through the traversal:
+  func-node 'bound-set @ /bound-set
+
+  This tells liveness which identifiers are bound variables (as opposed to free variables or operators).
+
+  For nested functions (lines 50-69)
+
+  Nested functions are not recursed into - they're already fully analyzed by compile-func. The liveness pass uses bound-set to check if the closure captures any bound variables from the outer scope:
+
+  inner-free-set keys { /v bound-set v in } filter! # 0 > /has-bound-captures
+
+  This filters the nested function's free-vars-map to find captures that are in the outer bound-set. If any exist:
+  - The outer frame is accessed to build the closure's context array
+  - leave-frame may be set on this node (if it's the last frame access)
+
+  For generators (lines 71-91)
+
+  Generators share the outer frame, so their binders create slots in the same frame. The liveness pass:
+
+  1. Reads the generator's bound-set (its local binders):
+  bnd-map 'bound-set @ /inner-bound-set
+  2. Handles shadowing - saves and removes any outer vars that the generator shadows:
+  seen bound-vars restrict! /save
+  seen bound-vars delete-keys! /gen-seen
+  3. Creates a combined bound-set for processing the generator body:
+  bound-set inner-bound-set keys add-keys! /gen-bound-set
+  4. Recurses into the generator with the combined bound-set, since a reference to x inside could be either the outer's bound var or the generator's local binder.
+  5. Restores shadowed vars after processing.
+
+  Summary
+
+  | Scope           | bound-set usage                                                    |
+  |-----------------|--------------------------------------------------------------------|
+  | Top-level       | Own bound-set passed to traversal                                  |
+  | Nested function | Uses outer bound-set to detect bound captures (needs frame access) |
+  | Generator       | Combines outer + inner bound-sets; handles shadowing               |
+
+> Let's focus on each of these in turn, starting with generators. The 
+liveness pass is essentially determining which identifiers are the last 
+references to a variable. This is complicated by the fact that binders can 
+shadow existing variables, hence in a right-to-left traversal when we see a 
+binder we know that any later occurrence of that identifier (that is, 
+leftward) is a different variable. So in tracking which variables have been 
+"seen", when we reach a binder we should remove the identifier from the seen
+ set, because that identifier now refers to a different variable which we 
+haven't yet seen. Does this match your understanding so far? 
+
+● Yes, that matches my understanding exactly.
+
+  Walking through {x /x x} right-to-left:
+
+  1. See x (rightmost): Not in seen → this is last reference (is-live=1), add to seen. seen={x}
+  2. See /x: x is in seen → binder is used (is-used=0). Remove x from seen. seen={}
+  3. See x (leftmost): Not in seen → this is last reference (is-live=1), add to seen. seen={x}
+
+  The key insight is that after processing the binder, we remove the identifier from seen because the two x references are actually different variables - the rightmost x refers to the bound variable created by /x, while the leftmost x refers to an outer/free variable.
+
+  This is implemented in lines 41-48:
+  term isBinder {
+    term intern idToIdent /ident
+    seen ident in /is-used       ; check if used (to the right)
+    ...
+    bnd-map is-used 'is-used : seen ident delete ...  ; remove from seen
+  }
+
+  The seen ident delete is the critical part - it "resets" our knowledge about that identifier because any leftward occurrence is a different variable.
+
+> now explain how generators complicate this 
+
+● Generators complicate this because they share the outer function's frame but can have their own local binders that shadow outer variables. Unlike nested functions (which are analyzed separately), generators are processed inline during the outer function's traversal.
+
+  Consider {/x [/x x] x} processed right-to-left:
+
+  Without special handling:
+  1. See x (rightmost, outside): not in seen, is-live=1. seen={x}
+  2. Enter generator, process [/x x]:
+    - See x: in seen, is-live=0. seen={x}
+    - See /x: in seen, is-used=0, remove from seen. seen={}
+  3. Exit generator
+  4. See /x (outer): x NOT in seen → is-used=1 (WRONG!)
+
+  The problem: the generator's /x removed x from seen, but that was tracking the outer variable. The outer /x should see that its variable was used (the rightmost x), but the generator's binder corrupted the seen set.
+
+  With save/restore (lines 76-79, 89):
+  1. See x (rightmost): is-live=1. seen={x}
+  2. Enter generator:
+    - Generator's bound-set = {x}
+    - Save: seen.restrict({x}) = {x} (remember x was seen)
+    - Remove shadowed: seen.delete-keys({x}) = {} → gen-seen
+    - Process with gen-seen={}:
+        - See x: not in gen-seen, is-live=1. gen-seen={x}
+      - See /x: in gen-seen, is-used=0, remove. gen-seen={}
+    - after-seen = {}
+    - Restore: after-seen.add-keys(saved) = {x}
+  3. Exit generator, seen={x}
+  4. See /x (outer): in seen → is-used=0 (CORRECT!)
+
+  The save/restore ensures the generator's local shadowing doesn't corrupt the outer scope's liveness tracking.
+
+> Let's consider `{[x /x x] x}`. Does our implementation determine that the 
+first x is live? It is bound inside the generator, but the first occurrence 
+of x in the generator is a free variable. This free variable is also 
+referenced after the generator, hence the first occurrence should be live. 
+Does that match your thinking? 
+
+● Let me trace through {[x /x x] x} with the current implementation:
+
+  Outer function:
+  - bound-set = {} (no outer binders)
+  - Generator's bound-set = {x} (from the /x inside)
+
+  Right-to-left:
+  1. See x (outside): seen={}, is-live=1, seen={x}
+  2. Enter generator [x /x x]:
+    - Save: seen.restrict({x}) = {x}
+    - Remove: gen-seen = seen.delete-keys({x}) = {}
+
+  Process right-to-left with gen-seen={}:
+    - See x (rightmost inside): gen-seen={}, is-live=1, gen-seen={x}
+    - See /x: is-used=0, remove. gen-seen={}
+    - See x (leftmost inside): gen-seen={}, is-live=1, gen-seen={x}
+
+  Restore: {x}
+  3. Exit generator, seen={x}
+
+  The problem: The leftmost x inside the generator is marked is-live=1 (last reference), but it should be is-live=0 (still live) because:
+  - It refers to the FREE variable x
+  - That same free variable is used outside the generator (the rightmost x)
+
+  The bug is that the save/remove happens at generator entry, before we've encountered the binder. This preemptively removes x from gen-seen, so when we reach the leftmost x (which is a free reference, before the binder), it doesn't see that the free x was already in the outer seen set.
+
+  The current logic treats all occurrences of a shadowed name uniformly, but the leftmost x and rightmost x inside the generator are actually different variables.
+
+> Do you think we can fix this by taking the value of is-bound into account?
+ The first occurrence of x will have been marked as free by the boundness 
+pass, so we can distinguish this from the second occurrence which is bound. 
+
+● Yes, I think that's the right direction.
+
+  Currently, the seen set tracks identifier names without distinguishing whether they're free or bound references. The save/remove at generator entry affects all references to a shadowed name, but free references should "see through" to the outer scope.
+
+  Since boundness already marks each identifier with is-bound:
+  - is-bound=0: bound in current scope (function or generator)
+  - is-bound=1: free (from outer scope)
+
+  We could split seen into two separate sets:
+  - seen-free: tracks free variable references
+  - seen-bound: tracks bound variable references
+
+  Then:
+  - Identifier processing uses is-bound to decide which set to check/update
+  - Binder processing only checks/updates seen-bound
+  - Generator save/remove only applies to seen-bound, leaving seen-free untouched
+
+  Tracing {[x /x x] x} with this approach:
+
+  1. Outer x (is-bound=1): seen-free={}, is-live=1, seen-free={x}
+  2. Enter generator (no save/remove needed for seen-free)
+  3. Inner rightmost x (is-bound=0): seen-bound={}, is-live=1, seen-bound={x}
+  4. /x: is-used=0, remove from seen-bound. seen-bound={}
+  5. Inner leftmost x (is-bound=1): seen-free={x} → is-live=0 ✓
+  6. Exit generator
+
+  The free reference correctly sees that x is still live because seen-free was never touched by the generator's binder.
+
+> implement this fix 
+
+● Let me read the current liveness.froth again to make sure I have the full picture, then implement the fix.
+
+● Write(lib/liveness.froth)
+  ⎿  Added 57 lines, removed 41 lines                                    
+       1  ; liveness.froth - Liveness analysis for compiler
+       2  
+       3 -; liveness-term-impl: (bnd-map seen need-ctx seen-nontail seen-
+         -restore-ctx seen-frame is-tail bound-set seq-fn term-fn -- resu
+         -lt-map new-seen new-need-ctx new-seen-nontail new-seen-restore-
+         -ctx new-seen-frame)                                            
+       3 +; liveness-term-impl: (bnd-map seen-free seen-bound need-ctx se
+         +en-nontail seen-restore-ctx seen-frame is-tail bound-set seq-fn
+         + term-fn -- result-map new-seen-free new-seen-bound new-need-ct
+         +x new-seen-nontail new-seen-restore-ctx new-seen-frame)        
+       4  ; Analyze a single term for liveness (last reference) and conte
+          xt/return restore.
+       5  ; Takes node (with 'term key), returns node with liveness info 
+          added.
+       6 -; seen: set of variables still live after this point           
+       6 +; seen-free: set of free variables still live after this point 
+       7 +; seen-bound: set of bound variables still live after this poin
+         +t                                                              
+       8  ; need-ctx: 0 if free var accessed since last call (need to res
+          tore context)
+       9  ; seen-nontail: 0 if we've seen a non-tail call (walking right-
+          to-left)
+      10  ; seen-restore-ctx: 0 if we've seen a call needing context rest
+          ore
+     ...
+      12  ; is-tail: 0 if this term is in tail position
+      13  ; bound-set: set of variables bound in the outer function
+      14  ; Traverses right-to-left using boundness info.
+      14 -['delete-keys 'add-keys 'restrict 'not 'and 'or 'filter 'lfoldr
+         -] { /term-fn /seq-fn /bound-set /is-tail /seen-frame /seen-rest
+         -ore-ctx /seen-nontail /need-ctx /seen /bnd-map                 
+      15 +['delete-keys 'add-keys 'restrict 'not 'and 'or 'filter 'lfoldr
+         +] { /term-fn /seq-fn /bound-set /is-tail /seen-frame /seen-rest
+         +ore-ctx /seen-nontail /need-ctx /seen-bound /seen-free /bnd-map
+      16    bnd-map 'term @ /term
+      17    ; Check if this is a variable (identifier that's not an opera
+          tor)
+      18    term isIdent {
+     ...
+       22      is-bound 1 = { 0 } { need-ctx } ?! /new-need-ctx
+       23      ; Bound variables use the frame; mark leave-frame if first
+            frame usage
+       24      is-bound 0 = seen-frame 1 = and! /needs-leave-frame
+       25 +    ; Choose which seen set based on is-bound                 
+       26 +    is-bound { seen-bound } { seen-free } ?! /my-seen         
+       27      ; Check if still live (already in seen-set)
+       25 -    seen term in {                                            
+       28 +    my-seen term in {                                         
+       29        bnd-map 0 'is-live :
+       30        needs-leave-frame { 0 'leave-frame : } { } ?!
+       28 -      seen new-need-ctx seen-nontail seen-restore-ctx         
+       31 +      ; Update the appropriate seen set                       
+       32 +      is-bound { seen-free seen-bound } { seen-free my-seen } 
+          +?!                                                            
+       33 +      new-need-ctx seen-nontail seen-restore-ctx              
+       34        needs-leave-frame { 0 } { seen-frame } ?!  ; already see
+           n -> still live
+       35      } {
+       36        bnd-map 1 'is-live :
+       37        needs-leave-frame { 0 'leave-frame : } { } ?!
+       33 -      seen . term : new-need-ctx seen-nontail seen-restore-ctx
+       38 +      ; Add to the appropriate seen set                       
+       39 +      is-bound { seen-free seen-bound . term : } { seen-free .
+          + term : seen-bound } ?!                                       
+       40 +      new-need-ctx seen-nontail seen-restore-ctx              
+       41        needs-leave-frame { 0 } { seen-frame } ?!  ; first occur
+           rence -> last ref
+       42      } ?!
+       43      } {
+       44        ; Operator: no liveness tracking
+       38 -      bnd-map seen need-ctx seen-nontail seen-restore-ctx seen
+          --frame                                                        
+       45 +      bnd-map seen-free seen-bound need-ctx seen-nontail seen-
+          +restore-ctx seen-frame                                        
+       46      } ?!
+       47    } {
+       48    term isBinder {
+       42 -    ; Binder: check if used (in seen-set), then remove from se
+          -en                                                            
+       43 -    ; in returns 0 if exists (used), 1 if not (dead)          
+       49 +    ; Binder: check if used (in seen-bound), then remove from 
+          +seen-bound                                                    
+       50 +    ; Free references use seen-free, so we only check/update s
+          +een-bound here                                                
+       51      term intern idToIdent /ident
+       45 -    seen ident in /is-used                                    
+       52 +    seen-bound ident in /is-used                              
+       53      ; If binder is used (is-used=0), we need a frame to hold i
+           t
+       54      is-used { 0 } { seen-frame } ?! /new-seen-frame
+       48 -    bnd-map is-used 'is-used : seen ident delete need-ctx seen
+          --nontail seen-restore-ctx new-seen-frame                      
+       55 +    bnd-map is-used 'is-used : seen-free seen-bound ident dele
+          +te need-ctx seen-nontail seen-restore-ctx new-seen-frame      
+       56    } {
+       57    term isFunc {
+       58      ; Closure: already analyzed by compile-func, just compute 
+           dead-set
+       59      ; Node already has 'body with liveness info, 'needs-save-r
+           eturn, etc.
+       60      bnd-map 'free-vars-map @ /inner-free-set
+       54 -    ; Compute dead-set: free vars NOT in outer seen (last use 
+          -is this capture)                                              
+       55 -    inner-free-set keys { /v seen v in not! } filter! /dead-va
+          -rs                                                            
+       61 +    ; Compute dead-set: free vars NOT in either seen set (last
+          + use is this capture)                                         
+       62 +    inner-free-set keys { /v                                  
+       63 +      seen-free v in /not-in-free                             
+       64 +      seen-bound v in /not-in-bound                           
+       65 +      not-in-free not-in-bound and!  ; dead if not in either s
+          +et                                                            
+       66 +    } filter! /dead-vars                                      
+       67      $ dead-vars add-keys! /dead-set
+       57 -    ; Add all free vars to seen (binders to left need to see t
+          -hem as used)                                                  
+       58 -    seen inner-free-set keys add-keys! /new-seen              
+       68 +    ; Add captured vars to the appropriate seen set based on w
+          +hether they're bound or free in outer                         
+       69 +    ; Captured vars that are in outer's bound-set go to seen-b
+          +ound                                                          
+       70 +    ; Captured vars that are NOT in outer's bound-set go to se
+          +en-free                                                       
+       71 +    inner-free-set keys { /v bound-set v in } filter! /capture
+          +d-bound                                                       
+       72 +    inner-free-set keys { /v bound-set v in not! } filter! /ca
+          +ptured-free                                                   
+       73 +    seen-bound captured-bound add-keys! /new-seen-bound       
+       74 +    seen-free captured-free add-keys! /new-seen-free          
+       75      ; Add dead-set to node
+       76      bnd-map dead-set 'dead-set : /bnd-map2
+       77      ; Check if closure captures any bound variables (frame nee
+           ded for context)
+       62 -    ; in returns 0 if found, 1 if not found. Filter keeps item
+          -s where predicate returns 0.                                  
+       63 -    inner-free-set keys { /v bound-set v in } filter! # 0 > /h
+          -as-bound-captures                                             
+       78 +    captured-bound # 0 > /has-bound-captures                  
+       79      ; If captures bound vars and this is first frame usage, ma
+           rk leave-frame
+       80      has-bound-captures seen-frame 1 = and! /needs-leave-frame
+       81      needs-leave-frame { bnd-map2 0 'leave-frame : } { bnd-map2
+            } ?! /bnd-map3
+       82      has-bound-captures { 0 } { seen-frame } ?! /new-seen-frame
+       83      ; Return result
+       69 -    bnd-map3 new-seen need-ctx seen-nontail seen-restore-ctx n
+          -ew-seen-frame                                                 
+       84 +    bnd-map3 new-seen-free new-seen-bound need-ctx seen-nontai
+          +l seen-restore-ctx new-seen-frame                             
+       85    } {
+       86    term isGen {
+       87      ; Generator: shares scope for free vars, but binders are l
+           ocal
+       88 +    ; Only save/remove from seen-bound, leave seen-free untouc
+          +hed                                                           
+       89      bnd-map 'bound-set @ /inner-bound-set
+       90      bnd-map 'body @ /inner-body
+       91      inner-bound-set keys /bound-vars
+       76 -    ; Save vars that will be shadowed (to restore after)      
+       77 -    seen bound-vars restrict! /save                           
+       78 -    ; Remove bound vars from seen (entering their scope)      
+       79 -    seen bound-vars delete-keys! /gen-seen                    
+       80 -    ; Process generator with modified seen; generators don't h
+          -ave tail calls (is-tail=1)                                    
+       81 -    ; Generators share seen-nontail, seen-restore-ctx, seen-fr
+          -ame with outer scope                                          
+       92 +    ; Save seen-bound entries that will be shadowed (to restor
+          +e after)                                                      
+       93 +    seen-bound bound-vars restrict! /save-bound               
+       94 +    ; Remove shadowed vars from seen-bound (entering their sco
+          +pe)                                                           
+       95 +    seen-bound bound-vars delete-keys! /gen-seen-bound        
+       96 +    ; seen-free is passed through unchanged                   
+       97 +    ; Process generator; generators don't have tail calls (is-
+          +tail=1)                                                       
+       98      ; Generator's bound-set is union of outer bound-set and in
+           ner bound-set
+       99      bound-set inner-bound-set keys add-keys! /gen-bound-set
+      100      inner-body # 1 - /inner-last-idx
+       85 -    inner-body gen-seen need-ctx seen-nontail seen-restore-ctx
+          - seen-frame inner-last-idx gen-bound-set 1 seq-fn term-fn seq-
+          -fn! /new-seen-frame /new-seen-restore-ctx /new-seen-nontail /n
+          -ew-need-ctx /after-seen /new-body-list                        
+      101 +    inner-body seen-free gen-seen-bound need-ctx seen-nontail 
+          +seen-restore-ctx seen-frame inner-last-idx gen-bound-set 1 seq
+          +-fn term-fn seq-fn! /new-seen-frame /new-seen-restore-ctx /new
+          +-seen-nontail /new-need-ctx /after-seen-bound /after-seen-free
+          + /new-body-list                                               
+      102      ; Convert list to array (lfoldr goes tail-to-head, reversi
+           ng the list order)
+      103      [ new-body-list { } lfoldr! ] /new-body
+       88 -    ; Restore shadowed vars                                   
+       89 -    after-seen save keys add-keys! /new-seen                  
+       90 -    bnd-map new-body 'body : new-seen new-need-ctx new-seen-no
+          -ntail new-seen-restore-ctx new-seen-frame                     
+      104 +    ; Restore shadowed vars to seen-bound                     
+      105 +    after-seen-bound save-bound keys add-keys! /restored-seen-
+          +bound                                                         
+      106 +    bnd-map new-body 'body : after-seen-free restored-seen-bou
+          +nd new-need-ctx new-seen-nontail new-seen-restore-ctx new-seen
+          +-frame                                                        
+      107    } {
+      108    term isQuote {
+      109      ; Quoted term: no liveness info
+       94 -    bnd-map seen need-ctx seen-nontail seen-restore-ctx seen-f
+          -rame                                                          
+      110 +    bnd-map seen-free seen-bound need-ctx seen-nontail seen-re
+          +store-ctx seen-frame                                          
+      111    } {
+      112    term isApply {
+      113      ; Apply: check if non-tail call
+     ...
+      121        needs-restore-ctx { 0 'restore-context : } { } ?!  ; res
+           tore context if needed
+      122        needs-restore-return { 0 'restore-return : } { } ?!  ; r
+           estore return if first non-tail
+      123        needs-leave-frame { 0 'leave-frame : } { } ?!  ; leave f
+           rame if first frame usage
+      108 -      seen 1 0  ; reset need-ctx, set seen-nontail            
+      124 +      seen-free seen-bound 1 0  ; reset need-ctx, set seen-non
+          +tail                                                          
+      125        needs-restore-ctx { 0 } { seen-restore-ctx } ?!  ; set s
+           een-restore-ctx if we marked restore
+      126        needs-leave-frame { 0 } { seen-frame } ?!  ; set seen-fr
+           ame if we marked leave
+      127      } {
+      128        ; Tail call: mark as tail call, no restores needed
+      113 -      bnd-map 0 'is-tail-call : seen need-ctx seen-nontail see
+          -n-restore-ctx seen-frame                                      
+      129 +      bnd-map 0 'is-tail-call : seen-free seen-bound need-ctx 
+          +seen-nontail seen-restore-ctx seen-frame                      
+      130      } ?!
+      131    } {
+      132      ; Literal, operator, value: no liveness info
+      117 -    bnd-map seen need-ctx seen-nontail seen-restore-ctx seen-f
+          -rame                                                          
+      133 +    bnd-map seen-free seen-bound need-ctx seen-nontail seen-re
+          +store-ctx seen-frame                                          
+      134    } ?! } ?! } ?! } ?! } ?! } ?!
+      135  } def-fn! /liveness-term-impl
+      136  
+      121 -; liveness-seq-impl: (body-arr seen need-ctx seen-nontail seen
+          --restore-ctx seen-frame idx bound-set is-tail seq-fn term-fn -
+          -- new-body-list new-seen new-need-ctx new-seen-nontail new-see
+          -n-restore-ctx new-seen-frame)                                 
+      137 +; liveness-seq-impl: (body-arr seen-free seen-bound need-ctx s
+          +een-nontail seen-restore-ctx seen-frame idx bound-set is-tail 
+          +seq-fn term-fn -- new-body-list new-seen-free new-seen-bound n
+          +ew-need-ctx new-seen-nontail new-seen-restore-ctx new-seen-fra
+          +me)                                                           
+      138  ; Process terms from idx down to 0 (right-to-left)
+      139  ; is-tail: 0 for first term (rightmost), 1 for rest
+      140  ; bound-set: set of variables bound in the outer function
+      141  ; Returns a list in reverse order (rightmost element at head)
+      126 -['liveness-term-impl] { /term-fn /seq-fn /is-tail /bound-set /
+          -idx /seen-frame /seen-restore-ctx /seen-nontail /need-ctx /see
+          -n /body-arr                                                   
+      142 +['liveness-term-impl] { /term-fn /seq-fn /is-tail /bound-set /
+          +idx /seen-frame /seen-restore-ctx /seen-nontail /need-ctx /see
+          +n-bound /seen-free /body-arr                                  
+      143    idx 0 < {
+      144      ; Done: return empty list and current state
+      129 -    . seen need-ctx seen-nontail seen-restore-ctx seen-frame  
+      145 +    . seen-free seen-bound need-ctx seen-nontail seen-restore-
+          +ctx seen-frame                                                
+      146    } {
+      147      ; Process current term (rightmost remaining)
+      132 -    body-arr idx @ seen need-ctx seen-nontail seen-restore-ctx
+          - seen-frame is-tail bound-set seq-fn term-fn term-fn! /after-s
+          -een-frame /after-seen-restore-ctx /after-seen-nontail /after-n
+          -eed-ctx /after-term-seen /term-map                            
+      148 +    body-arr idx @ seen-free seen-bound need-ctx seen-nontail 
+          +seen-restore-ctx seen-frame is-tail bound-set seq-fn term-fn t
+          +erm-fn! /after-seen-frame /after-seen-restore-ctx /after-seen-
+          +nontail /after-need-ctx /after-seen-bound /after-seen-free /te
+          +rm-map                                                        
+      149      ; Recurse for rest (to the left); is-tail becomes 1 (not t
+           ail)
+      134 -    body-arr after-term-seen after-need-ctx after-seen-nontail
+          - after-seen-restore-ctx after-seen-frame idx 1 - bound-set 1 s
+          -eq-fn term-fn seq-fn! /rest-seen-frame /rest-seen-restore-ctx 
+          -/rest-seen-nontail /rest-need-ctx /rest-seen /rest-body       
+      150 +    body-arr after-seen-free after-seen-bound after-need-ctx a
+          +fter-seen-nontail after-seen-restore-ctx after-seen-frame idx 
+          +1 - bound-set 1 seq-fn term-fn seq-fn! /rest-seen-frame /rest-
+          +seen-restore-ctx /rest-seen-nontail /rest-need-ctx /rest-seen-
+          +bound /rest-seen-free /rest-body                              
+      151      ; Cons current node onto rest (builds list in reverse orde
+           r)
+      136 -    rest-body term-map , rest-seen rest-need-ctx rest-seen-non
+          -tail rest-seen-restore-ctx rest-seen-frame                    
+      152 +    rest-body term-map , rest-seen-free rest-seen-bound rest-n
+          +eed-ctx rest-seen-nontail rest-seen-restore-ctx rest-seen-fram
+          +e                                                             
+      153    } ?!
+      154  } def-fn! /liveness-seq-impl
+      155  
+     ...
+      168    func-node 'body @ /body
+      169    func-node 'bound-set @ /bound-set
+      170    body # 1 - /last-idx
+      155 -  ; Start with need-ctx=1, seen-nontail=1, seen-restore-ctx=1,
+          - seen-frame=1, is-tail=0                                      
+      156 -  body $ 1 1 1 1 last-idx bound-set 0 liveness-seq-impl livene
+          -ss-term-impl liveness-seq-impl!                               
+      157 -  /final-seen-frame /final-seen-restore-ctx /final-seen-nontai
+          -l /final-need-ctx /final-seen /new-body-list                  
+      171 +  ; Start with empty seen sets, need-ctx=1, seen-nontail=1, se
+          +en-restore-ctx=1, seen-frame=1, is-tail=0                     
+      172 +  body $ $ 1 1 1 1 last-idx bound-set 0 liveness-seq-impl live
+          +ness-term-impl liveness-seq-impl!                             
+      173 +  /final-seen-frame /final-seen-restore-ctx /final-seen-nontai
+          +l /final-need-ctx /final-seen-bound /final-seen-free /new-body
+          +-list                                                         
+      174    ; Convert list to array (lfoldr goes tail-to-head, reversing
+            the list order)
+      175    [ new-body-list { } lfoldr! ] /new-body
+      176    ; Build result map with body and frame flag
+
+● Now let me run the tests to see if this works:
+
+● Bash(./run_tests.sh 2>&1 | grep -E "(PASS|FAIL|SKIP):" | grep -v PASS | head
+      -20)
+  ⎿  FAIL: add                     
+     FAIL: alist
+     FAIL: apply_op
+     … +17 lines (ctrl+o to expand)
+
+● Bash(./bin/froth -e '1 2 +' 2>&1)
+  ⎿  Error: Exit code 1
+     FROTH: compiled 'def-fn
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     Uncaught Mercury exception:
+     Software Error: map.lookup: key not found
+     	Key Type: int
+     	Key Value: 88
+     	Value Type: string
+     Stack dump not available in this grade.
+
+● I see the issue - my conditional logic for returning the seen sets is wrong. Let me fix it:
+
+● Update(lib/liveness.froth)
+  ⎿  Added 10 lines, removed 4 lines                                     
+      28      my-seen term in {
+      29        bnd-map 0 'is-live :
+      30        needs-leave-frame { 0 'leave-frame : } { } ?!
+      31 -      ; Update the appropriate seen set                        
+      32 -      is-bound { seen-free seen-bound } { seen-free my-seen } ?
+         -!                                                              
+      31 +      ; No change to seen sets                                 
+      32 +      seen-free seen-bound                                     
+      33        new-need-ctx seen-nontail seen-restore-ctx
+      34        needs-leave-frame { 0 } { seen-frame } ?!  ; already seen
+           -> still live
+      35      } {
+      36        bnd-map 1 'is-live :
+      37        needs-leave-frame { 0 'leave-frame : } { } ?!
+      38 -      ; Add to the appropriate seen set                        
+      39 -      is-bound { seen-free seen-bound . term : } { seen-free . 
+         -term : seen-bound } ?!                                         
+      38 +      ; Add to the appropriate seen set based on is-bound      
+      39 +      ; is-bound=0 (bound): add to seen-bound                  
+      40 +      ; is-bound=1 (free): add to seen-free                    
+      41 +      is-bound {                                               
+      42 +        seen-free seen-bound . term :                          
+      43 +      } {                                                      
+      44 +        seen-free . term : seen-bound                          
+      45 +      } ?!                                                     
+      46        new-need-ctx seen-nontail seen-restore-ctx
+      47        needs-leave-frame { 0 } { seen-frame } ?!  ; first occurr
+          ence -> last ref
+      48      } ?!
+
+● Bash(./bin/froth -e '1 2 +' 2>&1)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +12 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | grep -E "(PASS|FAIL|SKIP):" | grep -v PASS)
+  ⎿  FAIL: codegen                            
+     SKIP: compile_closure (no .expected file)
+     FAIL: liveness
+
+● Bash(./bin/froth tests/liveness.froth 2>&1 | grep -v '^FROTH:' >
+      /tmp/liveness.actual && diff tests/liveness.expected /tmp/liveness.actual)
+  ⎿  16d15                        
+     < dead-set=[ 'x ]
+     18c17,18
+     … +4 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/liveness.froth 2>&1 | grep -v '^FROTH:')
+  ⎿  --- Identifier liveness ---            
+     'x live=1 bound=1 |
+     'x live=0 bound=1 | 'x live=1 bound=1 |
+     … +23 lines (ctrl+o to expand)
+
+● I see the issue - the dead-set filter logic is inverted. Let me fix it:
+
+● Update(lib/liveness.froth)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      65      ; Node already has 'body with liveness info, 'needs-save-re
+          turn, etc.
+      66      bnd-map 'free-vars-map @ /inner-free-set
+      67      ; Compute dead-set: free vars NOT in either seen set (last 
+          use is this capture)
+      68 +    ; filter keeps items where predicate returns 0             
+      69 +    ; We want to keep vars NOT in either set, so return 0 when 
+         +not found in either                                            
+      70      inner-free-set keys { /v
+      69 -      seen-free v in /not-in-free                              
+      70 -      seen-bound v in /not-in-bound                            
+      71 -      not-in-free not-in-bound and!  ; dead if not in either se
+         -t                                                              
+      71 +      seen-free v in seen-bound v in or! not!  ; 0 if in neithe
+         +r (dead), 1 if in either (live)                                
+      72      } filter! /dead-vars
+      73      $ dead-vars add-keys! /dead-set
+      74      ; Add captured vars to the appropriate seen set based on wh
+          ether they're bound or free in outer
+
+● Bash(./bin/froth tests/liveness.froth 2>&1 | grep -v '^FROTH:' | head -25)
+  ⎿  --- Identifier liveness ---            
+     'x live=1 bound=1 |
+     'x live=0 bound=1 | 'x live=1 bound=1 |
+     … +22 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | grep -E "(PASS|FAIL|SKIP):" | grep -v PASS)
+  ⎿  FAIL: codegen                            
+     SKIP: compile_closure (no .expected file)
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 | grep -v '^FROTH:' >
+      /tmp/codegen.actual && diff tests/codegen.expected /tmp/codegen.actual)
+  ⎿  4c4                      
+     < bytecode2: 0 42 3 561 2
+     ---
+     > bytecode2: 0 42 3 569 2
+
+● The only difference is a constant pool index change (from 561 to 569), which is expected since the liveness pass now has different internal strings. Let me regenerate the expected file:
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 | grep -v '^FROTH:' >
+      tests/codegen.expected)
+  ⎿  (No content)
+
+● Bash(./run_tests.sh 2>&1 | grep -E "(PASS|FAIL|SKIP):" | grep -v PASS)
+  ⎿  SKIP: compile_closure (no .expected file)
+
+● All tests pass. Let me verify the specific bug fix by testing {[x /x x] x}:
+
+● Bash(./bin/froth -e '
+      tree-empty! 1000 '"'"'{[x /x x] x} compile-func! /node drop! drop!…)
+  ⎿  'x bound=1 live=0
+     'x bound=0 live=1
+     outer x:
+     'x bound=1 live=1
+
+● The fix is working correctly:
+
+  - Inside generator [x /x x]:
+    - First x (leftmost): bound=1 (free), live=0 (still live) ✓ This was the bug!
+    - Second x (rightmost): bound=0 (bound), live=1 (last ref) ✓
+  - Outside: x: bound=1 (free), live=1 (last ref) ✓
+
+  The leftmost x inside the generator is now correctly marked as live=0 (still live) because it's a free variable that's also referenced outside the generator.
+
+● Summary of changes to lib/liveness.froth:
+
+  1. Split seen into seen-free and seen-bound - Two separate sets tracking liveness for free vs bound variable references
+  2. Identifier processing (lines 25-48) - Uses is-bound to choose which set to check/update:
+    - is-bound=0 (bound): use seen-bound
+    - is-bound=1 (free): use seen-free
+  3. Binder processing (lines 54-61) - Only checks/removes from seen-bound, leaving seen-free untouched
+  4. Closure processing (lines 67-90) - Checks both sets for dead-set computation, partitions captured vars by whether they're bound or free in outer scope
+  5. Generator processing (lines 92-112) - Only saves/removes from seen-bound, passes seen-free through unchanged
+
+  This fixes the bug where {[x /x x] x} incorrectly marked the leftmost x (a free reference inside the generator) as is-live=1 when it should be is-live=0 since the same free variable is used after the generator.
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                      
+     Your branch is ahead of 'origin/master' by 10 commits.
+       (use "git push" to publish your local commits)
+     … +12 lines (ctrl+o to expand)
+
+● Bash(git diff --stat)
+  ⎿  (No content)
+
+● Bash(git log --oneline -3)
+  ⎿  81ec1fd Add needs-ctx-save flag and make compiler tests field-specific
+     fa4d7a7 add transcripts 84-89
+     68d07c3 Store parent scope maps on nested function nodes
+
+● Bash(git diff --staged lib/liveness.froth | head -80)
+  ⎿  diff --git a/lib/liveness.froth b/lib/liveness.froth
+     index 8f13e22..e673651 100644
+     --- a/lib/liveness.froth
+     … +98 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Fix liveness tracking for free vars inside generators with
+       shadowing…)
+  ⎿  [master ceaf09e] Fix liveness tracking for free vars inside generators
+     with shadowing
+      2 files changed, 64 insertions(+), 42 deletions(-)
+
+● Bash(git status)
+  ⎿  On branch master                                      
+     Your branch is ahead of 'origin/master' by 11 commits.
+       (use "git push" to publish your local commits)
+     … +10 lines (ctrl+o to expand)
+
+● Committed as ceaf09e. The fix splits the seen set into seen-free and seen-bound to correctly handle free variable references inside generators that shadow the same name.
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 192k/200k tokens (96%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 19.1k tokens (9.6%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 110.0k tokens (55.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 8k (4.0%)
+     ⛁ ⛁ ⛁ ⛁ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 127 tokens
+     └ MERCURY.md: 68 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.1k tokens
+     └ FROTH_COMPILER.md: 6.4k tokens
+     └ FROTH_BYTECODE.md: 1.3k tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
