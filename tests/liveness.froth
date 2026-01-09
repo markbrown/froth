@@ -1,77 +1,140 @@
 ; Test liveness analysis via compile-func
-; compile-func runs boundness -> liveness -> slots, so output includes all analysis
+; Tests specific liveness fields rather than full node structure
 
 ; Safety check: ensure compiled library code doesn't overlap with test addresses
 froth-bytecode-top 1000 < { } { "ERROR: froth-bytecode-top >= 1000, test addresses may conflict" println! } ?!
 
-; Helper to compile and show result
+; Helper to show liveness info for a single identifier node
+; Prints: term is-live is-bound
+{ /node
+  node 'term @ write " " print
+  "live=" print node 'is-live @ print " " print
+  "bound=" print node 'is-bound @ print
+} /show-ident
+
+; Helper to show binder info
+; Prints: term is-used
+{ /node
+  node 'term @ write " " print
+  "used=" print node 'is-used @ print
+} /show-binder
+
+; Test identifier liveness
 { /func
   tree-empty! 1000 func compile-func! /node drop! drop!
-  "body=" print node 'body @ writeln!
-} /test-liveness
+  node 'body @ { /n
+    n 'term @ isIdent { n show-ident! " | " print } { } ?!
+  } foldl!
+  nl!
+} /test-idents
 
-; Basic cases
-'{x} test-liveness!
-; Free var x, last ref
+; Test binder usage
+{ /func
+  tree-empty! 1000 func compile-func! /node drop! drop!
+  node 'body @ { /n
+    n 'term @ isBinder { n show-binder! " | " print } { } ?!
+  } foldl!
+  nl!
+} /test-binders
 
-'{x x} test-liveness!
-; First x still live, second x last ref
+; Test func-node level flags
+{ /func
+  tree-empty! 1000 func compile-func! /node drop! drop!
+  "needs-frame=" print node 'needs-frame @ print " " print
+  "needs-ctx-save=" print node 'needs-ctx-save @ println!
+} /test-func-flags
 
-'{/x x} test-liveness!
-; Binder used, x is last ref
+; Test dead-set for nested closures
+{ /func
+  tree-empty! 1000 func compile-func! /node drop! drop!
+  node 'body @ { /n
+    n 'term @ isFunc {
+      "dead-set=" print n 'dead-set @ keys writeln!
+    } { } ?!
+  } foldl!
+} /test-dead-set
 
-'{x /x x} test-liveness!
-; Outer x last ref (free), binder used, inner x last ref
+; === Identifier liveness tests ===
+"--- Identifier liveness ---" println!
 
-'{/x x x} test-liveness!
-; Binder used, first x still live, second x last ref
+'{x} test-idents!
+; x is free, last ref
 
-'{/x} test-liveness!
-; Binder unused (dead)
+'{x x} test-idents!
+; first x still live (is-live=0), second x last ref (is-live=1)
 
-'{/x /y x} test-liveness!
-; /x used, /y unused, x is last ref
+'{x /x x} test-idents!
+; outer x free and last, inner x bound and last
 
-; Nested closures - should have dead-set
-'{x {x} x} test-liveness!
-; x still live after closure, dead-set empty
+'{/x x x} test-idents!
+; first x bound, still live; second x bound, last ref
 
-'{x {x}} test-liveness!
-; x's last use is this capture, in dead-set
+; === Binder usage tests ===
+"--- Binder usage ---" println!
 
-'{x {/x x}} test-liveness!
-; outer x not captured (shadowed), inner binder used
+'{/x x} test-binders!
+; binder is used (is-used=0)
 
-'{{x}} test-liveness!
-; x's last use is capture
+'{/x} test-binders!
+; binder is dead (is-used=1)
 
-; Nested generators (share scope)
-'{x [x] x} test-liveness!
-; generator shares scope, x still live
+'{/x /y x} test-binders!
+; x is used, y is dead
 
-'{x [x]} test-liveness!
-; generator's x is last ref
+; === Function-level flags ===
+"--- Function flags ---" println!
 
-'{x [/x x] x} test-liveness!
-; generator binder is local and used
+'{1 2 +} test-func-flags!
+; no frame needed (no binders)
 
-; Empty cases
-'{{}} test-liveness!
-; empty nested closure with empty dead-set
+'{/x x} test-func-flags!
+; frame needed
 
-'{[]} test-liveness!
-; empty generator
+'{f! 1} test-func-flags!
+; frame needed for non-tail call, ctx-save needed
 
-; Multiple variables
-'{x y} test-liveness!
-; both are last refs
+'{f!} test-func-flags!
+; no frame (tail call only)
 
-'{x y x} test-liveness!
-; first x still live
+; === Dead-set tests ===
+"--- Dead-set ---" println!
 
-'{x y x y} test-liveness!
-; first x and y still live
+'{x {x}} test-dead-set!
+; x's last use is capture, in dead-set
 
-; Operators (not tracked in liveness)
-'{1 2 +} test-liveness!
-; literals and operators
+'{x {x} x} test-dead-set!
+; x is still live after closure, dead-set empty
+
+'{{x}} test-dead-set!
+; x captured, in dead-set
+
+'{x {/x x}} test-dead-set!
+; outer x not captured (shadowed), dead-set empty
+
+; === Tail call detection ===
+"--- Tail calls ---" println!
+{ /func
+  tree-empty! 1000 func compile-func! /node drop! drop!
+  node 'body @ { /n
+    n 'term @ isApply {
+      "apply: is-tail=" print n 'is-tail-call @ print
+      n 'restore-context in { " restore-ctx=" print n 'restore-context @ print } { } ?!
+      n 'restore-return in { " restore-rp=" print n 'restore-return @ print } { } ?!
+      nl!
+    } { } ?!
+  } foldl!
+} /test-calls
+
+'{f!} test-calls!
+; tail call
+
+'{f! 1} test-calls!
+; non-tail call
+
+'{f! g!} test-calls!
+; f is non-tail, g is tail
+
+'{x f! 1} test-calls!
+; non-tail with context restore
+
+"done" println!

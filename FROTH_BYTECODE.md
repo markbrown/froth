@@ -4,52 +4,7 @@
 
 A bytecode compiler for Froth! to improve execution performance by eliminating tree-walking overhead.
 
-## Compiler Pipeline
-
-The `compile-func` function orchestrates bottom-up compilation:
-
-1. Build node tree (recurses into nested functions first)
-2. **Boundness**: Classifies identifiers as bound or free, assigns context slots
-3. **Liveness**: Marks last references, dead binders, register save/restore points
-4. **Slots**: Allocates frame slots with reuse
-5. **Codegen**: Emits bytecode, stores `'func-addr` in node
-
-Nested functions are compiled before their containing function. This means each pass operates on a function where nested func-nodes are already complete.
-
-See FROTH_COMPILER.md for detailed pass documentation.
-
-## Node Structure
-
-Nodes are the single source of truth for a function and its metadata. Each node contains:
-
-- `'term`: The original syntax term (required for all nodes)
-- Type-specific keys from analysis passes
-
-**Function nodes** additionally contain:
-
-- `'body`: Array of child nodes (one per term in function body)
-- `'free-vars-map`: Map from identifier to context slot number
-- `'free-vars-array`: Array of identifiers indexed by context slot
-- `'bound-set`: Map of bound identifiers
-- `'dead-set`: Map of identifiers whose last use is capture
-- `'max-slots`: Frame slots needed
-- `'needs-frame`: 0 if frame needed, 1 if not
-- `'func-addr`: Bytecode entry point (added by codegen)
-
-**Generator nodes** contain:
-
-- `'body`: Array of child nodes (generators share outer frame and context)
-- `'bound-set`: Map of identifiers bound inside the generator
-
-**Other nodes** (literal, identifier, binder, quote, apply) contain type-specific analysis keys as documented in FROTH_COMPILER.md.
-
-## Pass Signatures
-
-- `compile-func: (code-map addr func -- code-map addr func-node)` — orchestrates compilation
-- `boundness: (func-node -- func-node)` — classifies variables
-- `liveness: (func-node -- func-node)` — marks last references, tail calls
-- `slots: (func-node -- func-node)` — allocates frame slots
-- `codegen: (addr func-node -- next-addr func-node)` — emits bytecode, stores `'func-addr` in node
+See FROTH_COMPILER.md for detailed pass documentation, node structure, and API reference.
 
 ## Key Behaviors
 
@@ -59,7 +14,60 @@ Nodes are the single source of truth for a function and its metadata. Each node 
 
 **Codegen reads `'func-addr` from nested nodes**: For nested function terms, codegen emits code to build the context array and create a closure using the pre-computed `node 'func-addr @`. It does not recursively compile.
 
-**`'func-addr` stored in node**: After emitting bytecode, codegen updates the func-node with `addr 'func-addr :`. This allows outer functions to reference the nested function's bytecode address.
+## Liveness Pass
+
+Liveness reads node fields to mark last references and tail calls. All nodes have `'term` from node creation.
+
+| Field | Node Types | Source | Description |
+|-------|------------|--------|-------------|
+| `'bound-set` | function, generator | boundness | Set of bound identifiers |
+| `'free-vars-map` | function (nested) | boundness | Captured vars with context slots |
+| `'is-bound` | identifier | boundness | 0 = bound, 1 = free |
+| `'is-operator` | identifier | boundness | 0 = operator, 1 = variable |
+| `'body` | function, generator | node creation | Array of child nodes |
+
+## Slots Pass
+
+Slots reads node fields to allocate frame slots. All nodes have `'term` from node creation.
+
+| Field | Node Types | Source | Description |
+|-------|------------|--------|-------------|
+| `'is-bound` | identifier | boundness | 0 = bound, 1 = free |
+| `'is-operator` | identifier | boundness | 0 = operator, 1 = variable |
+| `'dead-set` | function (nested) | liveness | Vars whose last use is capture |
+| `'is-live` | identifier | liveness | 0 = still live, 1 = last reference |
+| `'is-tail-call` | apply | liveness | 0 = tail call |
+| `'is-used` | binder | liveness | 0 = used, 1 = dead |
+| `'needs-ctx-save` | function | liveness | 0 = needs context save before first call |
+| `'restore-context` | apply | liveness | 0 = needs context restore |
+| `'restore-return` | apply | liveness | 0 = last non-tail call |
+| `'body` | function, generator | node creation | Array of child nodes |
+
+## Codegen Pass
+
+Codegen reads node fields computed by earlier passes to emit bytecode. All nodes have `'term` from node creation.
+
+| Field | Node Types | Source | Description |
+|-------|------------|--------|-------------|
+| `'free-vars-array` | function (nested) | boundness | Captured vars in slot order |
+| `'is-bound` | identifier | boundness | 0 = bound, 1 = free |
+| `'is-operator` | identifier | boundness | 0 = operator, 1 = variable |
+| `'parent-free-vars-map` | function (nested) | boundness | Outer's free-vars-map |
+| `'slot` | binder, identifier | boundness or slots | Context slot (free) or frame slot (bound) |
+| `'func-addr` | function (nested) | codegen | Bytecode entry point |
+| `'is-tail-call` | apply | liveness | 0 = tail call |
+| `'is-used` | binder | liveness | 0 = used, 1 = dead |
+| `'leave-frame` | identifier, function, apply | liveness | 0 = last frame access |
+| `'needs-frame` | function | liveness | 0 = frame needed |
+| `'restore-context` | apply | liveness | 0 = needs context restore |
+| `'restore-return` | apply | liveness | 0 = last non-tail call |
+| `'body` | function, generator | node creation | Array of child nodes |
+| `'ctx-save-slot` | apply | slots | Slot for context pointer |
+| `'max-slots` | function | slots | Frame slots needed |
+| `'parent-bound-vars-map` | function (nested) | slots | Outer's slot-map |
+| `'rp-save-slot` | apply | slots | Slot for return pointer |
+| `'save-context` | apply | slots | 0 = first call needing context save |
+| `'save-return` | apply | slots | 0 = first non-tail call |
 
 ## Limitations
 

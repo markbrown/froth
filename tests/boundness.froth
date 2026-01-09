@@ -1,63 +1,119 @@
 ; Test boundness analysis via compile-func
-; compile-func returns (code-map addr func-node) where node has 'term, 'body, 'free-vars-map, 'bound-set
+; Tests specific boundness fields rather than full node structure
 
 ; Safety check: ensure compiled library code doesn't overlap with test addresses
 froth-bytecode-top 1000 < { } { "ERROR: froth-bytecode-top >= 1000, test addresses may conflict" println! } ?!
 
-; Helper to compile and show result
+; Helper to show boundness info for identifiers in body
 { /func
   tree-empty! 1000 func compile-func! /node drop! drop!
-  "free=" print node 'free-vars-map @ write
-  " bound=" print node 'bound-set @ write
-  " body=" print node 'body @ writeln!
-} /test
+  node 'body @ { /n
+    n 'term @ isIdent {
+      n 'term @ write " " print
+      "bound=" print n 'is-bound @ print " " print
+      "op=" print n 'is-operator @ print
+      n 'is-bound @ { } { " slot=" print n 'slot @ print } ?!  ; slot only for free vars
+      " | " print
+    } { } ?!
+  } foldl!
+  nl!
+} /test-idents
 
-; Test 1: {x /x x}
-'{x /x x} test!
+; Helper to show func-level boundness info
+{ /func
+  tree-empty! 1000 func compile-func! /node drop! drop!
+  "free=" print node 'free-vars-map @ write " " print
+  "bound=" print node 'bound-set @ keys writeln!
+} /test-func
 
-; Test 2: {/x [x] x}
-'{/x [x] x} test!
+; Helper to show nested closure info
+{ /func
+  tree-empty! 1000 func compile-func! /node drop! drop!
+  node 'body @ { /n
+    n 'term @ isFunc {
+      "nested: free=" print n 'free-vars-map @ write " " print
+      "bound=" print n 'bound-set @ keys writeln!
+    } { } ?!
+  } foldl!
+} /test-nested
 
-; Test 3: {/x {x} x}
-'{/x {x} x} test!
+; === Identifier classification ===
+"--- Identifier classification ---" println!
 
-; Test 4: {x /x [/y x y] x y}
-'{x /x [/y x y] x y} test!
+'{x} test-idents!
+; x is free (bound=1), variable (op=1)
 
-; Test 5: {x /x {/y x y} x y}
-'{x /x {/y x y} x y} test!
+'{x y} test-idents!
+; both free
 
-; Additional edge cases
+'{/x x} test-idents!
+; x is bound (bound=0)
 
-; Empty function
-'{} test!
+'{x /x x} test-idents!
+; outer x free, inner x bound
 
-; Single binder
-'{/x} test!
+'{1 2 +} test-idents!
+; + is operator (op=0)
 
-; Deeply nested
-'{/x {/y {x y}}} test!
+'{/+ x + y} test-idents!
+; + is bound (shadowed operator)
 
-; Multiple uses of same variable
-'{/x x x x} test!
+; === Function-level info ===
+"--- Function-level ---" println!
 
-; Shadowing within generator
-'{/x [/x x] x} test!
+'{x} test-func!
+; free={x:0}, bound=[]
 
-; Free before bound, closure after
-'{x /x {x} x} test!
+'{/x x} test-func!
+; free={}, bound=[x]
 
-; Generator with free var
-'{/x x {x} x} test!
+'{x y} test-func!
+; free={x:0, y:1}, bound=[]
 
-; Generator shadows outer
-'{x [/x x] x} test!
+'{x /x x} test-func!
+; free={x:0}, bound=[x]
 
-; Operators are not free variables (looked up in op-table)
-'{x 10 *} test!
+'{} test-func!
+; empty
 
-; Shadowed operator IS a bound variable
-'{/+ x + y} test!
+; === Nested closures ===
+"--- Nested closures ---" println!
 
-; Generator with different free var - y inside generator should use outer slot 1
-'{x [y]} test!
+'{x {x}} test-nested!
+; inner captures x
+
+'{/x {x} x} test-nested!
+; inner captures x from outer's bound set
+
+'{{x}} test-nested!
+; inner captures x from outer's free
+
+'{/x {/y x y}} test-nested!
+; inner captures x, binds y
+
+'{x {/x x}} test-nested!
+; inner shadows x, no capture
+
+; === Generators (share scope) ===
+"--- Generators ---" println!
+{ /func
+  tree-empty! 1000 func compile-func! /node drop! drop!
+  "outer bound=" print node 'bound-set @ keys print " " print
+  node 'body @ { /n
+    n 'term @ isGen {
+      "gen bound=" print n 'bound-set @ keys print " " print
+    } { } ?!
+  } foldl!
+  nl!
+} /test-gen
+
+'{/x [x]} test-gen!
+; generator uses outer's x
+
+'{/x [/y y] x} test-gen!
+; generator binds y locally
+
+'{x [/x x] x} test-gen!
+; generator shadows x
+
+"done" println!

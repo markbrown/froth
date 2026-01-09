@@ -11,7 +11,7 @@ This document describes the compiler infrastructure for Froth!, including byteco
 | `cache-get` | cache | Look up key under identifier |
 | `cache-set` | cache | Store key-value pair under identifier |
 | `compile` | compile | Compile a binding in an env-map |
-| `compile-func` | compile | Build node tree and run all analysis passes |
+| `compile-func` | compile | Build node tree, run analysis passes, and generate bytecode |
 | `compile-named-closure` | compile | Compile a closure to bytecode with caching |
 | `emit-all-at` | bytecode | Write array to bytecode store |
 | `emit-at` | bytecode | Write value to bytecode store |
@@ -212,6 +212,11 @@ The `'is-operator` key is set by the boundness pass. Operators that are shadowed
 - `'dead-set`: map: identifier -> nil (vars whose last use is capture)
 - `'max-slots`: maximum frame slots needed
 - `'needs-frame`: 0 = function needs a frame
+- `'needs-ctx-save`: 0 = needs context save before first call
+- `'func-addr`: bytecode entry point (set by codegen)
+- `'leave-frame`: 0 = last term using the frame (set on closure nodes by liveness)
+- `'parent-free-vars-map`: outer scope's free-vars-map (set by boundness on nested functions)
+- `'parent-bound-vars-map`: outer scope's slot-map (set by slots on nested functions)
 
 **Generator node keys:**
 
@@ -241,6 +246,7 @@ Updates child nodes with:
 - `'is-operator`: 0 = operator, 1 = variable (for identifiers not shadowed by binders)
 - `'is-bound`: 0 = bound variable, 1 = free variable (for variable identifiers)
 - `'slot`: context slot number (for free identifiers)
+- `'parent-free-vars-map`: outer scope's free-vars-map (for nested functions)
 
 Context slot numbers are assigned in order of first occurrence (0, 1, 2, ...).
 
@@ -276,6 +282,7 @@ Takes a function-node (from `compile-func` after `boundness`) and adds liveness 
 **Function-level keys:**
 
 - `'needs-frame`: `0` if function uses a frame (bound vars or register saves)
+- `'needs-ctx-save`: `0` if any call needs context restored (requires save before first call)
 
 The analysis traverses right-to-left to determine which references are "last" in each scope. Key behaviors:
 
@@ -303,6 +310,7 @@ Takes the function-node from `liveness` and adds slot allocation information.
 - `'ctx-save-slot`: frame slot for saving context pointer (for calls needing context restore)
 - `'rp-save-slot`: frame slot for saving return pointer (for non-tail calls)
 - `'max-slots`: maximum number of slots needed (for closures only)
+- `'parent-bound-vars-map`: outer scope's slot-map (for nested functions)
 
 Slots are allocated on-demand and reused when freed. Binder slots are freed at the variable's last use. Register save slots are allocated once at the first call that needs them and reused by subsequent calls. Closures get their own frame (slots start at 0), while generators share the outer frame.
 
@@ -393,6 +401,7 @@ The compilation pipeline for each function:
 2. Run `boundness` (classify variables as bound/free, assign context slots)
 3. Run `liveness` (mark last references, tail calls, register save/restore points)
 4. Run `slots` (allocate frame slots with reuse)
+5. Run `codegen` (emit bytecode, store entry point in node)
 
 Nested functions are compiled bottom-up: when processing a nested function term, `compile-func` recursively compiles it before continuing with the outer function. This means the analysis passes don't need to recurse into nested functions - they just read the already-computed results.
 

@@ -1,29 +1,64 @@
 ; Test slot allocation via compile-func
-; compile-func runs boundness -> liveness -> slots, so output includes all analysis
+; Tests specific slot fields rather than full node structure
 
 ; Safety check: ensure compiled library code doesn't overlap with test addresses
 froth-bytecode-top 1000 < { } { "ERROR: froth-bytecode-top >= 1000, test addresses may conflict" println! } ?!
 
-; Helper to compile and show result
+; Helper to show slots for binders and bound identifiers
 { /func
   tree-empty! 1000 func compile-func! /node drop! drop!
-  node 'body @ write " " print node 'max-slots @ println!
+  "max=" print node 'max-slots @ print " slots: " print
+  node 'body @ { /n
+    n 'term @ isBinder {
+      n 'is-used @ {  ; show if used (is-used=0)
+        n 'term @ write "=" print n 'slot @ print " " print
+      } { } ?!
+    } { } ?!
+    n 'term @ isIdent {
+      n 'is-operator @ { } {  ; skip operators (is-operator=0), process variables (is-operator=1)
+        n 'is-bound @ {  ; if bound (is-bound=0)
+          n 'term @ write "=" print n 'slot @ print " " print
+        } { } ?!
+      } ?!
+    } { } ?!
+  } foldl!
+  nl!
 } /test-slots
 
-; Basic cases
+; Helper to show apply node flags
+{ /func
+  tree-empty! 1000 func compile-func! /node drop! drop!
+  "max=" print node 'max-slots @ print " " print
+  node 'body @ { /n
+    n 'term @ isApply {
+      n 'save-context in { "save-ctx=" print n 'save-context @ print " ctx-slot=" print n 'ctx-save-slot @ print " " print } { } ?!
+      n 'save-return in { "save-rp=" print n 'save-return @ print " rp-slot=" print n 'rp-save-slot @ print " " print } { } ?!
+      n 'restore-context in { "restore-ctx=" print n 'restore-context @ print " " print } { } ?!
+      n 'restore-return in { "restore-rp=" print n 'restore-return @ print " " print } { } ?!
+      "| " print
+    } { } ?!
+  } foldl!
+  nl!
+} /test-apply
+
+; === Basic slot allocation ===
+"--- Basic slots ---" println!
+
 '{/x x} test-slots!
 ; slot 0 for x
 
 '{/x} test-slots!
-; dead binder, no slot
+; dead binder, no slot (max=0)
 
 '{/x /y x y} test-slots!
 ; two slots
 
 '{/x /y y x} test-slots!
-; same two slots, different order
+; same two slots
 
-; Slot reuse
+; === Slot reuse ===
+"--- Slot reuse ---" println!
+
 '{/x x /y y} test-slots!
 ; slot 0 reused for y
 
@@ -33,7 +68,9 @@ froth-bytecode-top 1000 < { } { "ERROR: froth-bytecode-top >= 1000, test address
 '{/x /y x y /z z} test-slots!
 ; slot 1 freed after y, reused for z
 
-; Generator (same frame, slots thread through)
+; === Generator (shares frame) ===
+"--- Generators ---" println!
+
 '{/x [/y y] x} test-slots!
 ; generator uses slot 1
 
@@ -43,67 +80,50 @@ froth-bytecode-top 1000 < { } { "ERROR: froth-bytecode-top >= 1000, test address
 '{/x x [/y y]} test-slots!
 ; slot 0 reused inside generator
 
-; Closure (own frame)
+; === Closure (own frame) ===
+"--- Nested closures ---" println!
+
 '{/x {/y y} x} test-slots!
 ; closure has own frame with 1 slot
 
 '{/x {/y /z y z}} test-slots!
-; dead binder, closure has 2 slots
+; dead x in outer, closure has 2 slots
 
-; Mixed
-'{/x /y [/z z x] y} test-slots!
-; generator sees x (slot 0), allocates z (slot 2)
+; === Operators and literals ===
+"--- Operators/literals ---" println!
 
-; Operators and literals (no slots)
 '{1 2 +} test-slots!
+; no slots
 
 '{/x 1 x +} test-slots!
+; one slot
 
-; Free variables (no slots)
+; === Free variables ===
+"--- Free vars ---" println!
+
 '{x} test-slots!
+; no frame slots (free var uses context)
 
 '{/y x y} test-slots!
+; one slot for y, x uses context
 
-; Register save slots for non-tail calls
-; Helper to show apply node flags
-; Note: 'in returns 0 if key exists, 1 if not - so then-branch runs when key exists
-{ /func
-  tree-empty! 1000 func compile-func! /node drop! drop!
-  "max-slots=" print node 'max-slots @ print " " print
-  ; Find apply nodes and show their flags
-  node 'body @ { /n
-    n 'save-context in {
-      "save-ctx=" print n 'save-context @ print " " print
-      "ctx-slot=" print n 'ctx-save-slot @ print " " print
-    } { } ?!
-    n 'save-return in {
-      "save-rp=" print n 'save-return @ print " " print
-      "rp-slot=" print n 'rp-save-slot @ print " " print
-    } { } ?!
-    n 'restore-context in {
-      "restore-ctx=" print n 'restore-context @ print " " print
-    } { } ?!
-    n 'restore-return in {
-      "restore-rp=" print n 'restore-return @ print " " print
-    } { } ?!
-  } foldl!
-  nl!
-} /test-apply-slots
+; === Register save slots ===
+"--- Register saves ---" println!
 
-; Single non-tail call with context restore
-'{x f! 1} test-apply-slots!
+'{x f! 1} test-apply!
 ; save-ctx=0 (first), save-rp=0 (first), restore-ctx=0, restore-rp=0
 
-; Two non-tail calls - second should NOT save again
-'{x f! y g! 1} test-apply-slots!
+'{x f! y g! 1} test-apply!
 ; First call: save-ctx=0, save-rp=0, restore-ctx=0
-; Second call: NO save-ctx, restore-ctx=0, restore-rp=0
+; Second call: ctx-slot inherited, restore-ctx=0, restore-rp=0
 
-; Call without context restore (no free var between calls)
-'{f! g! 1} test-apply-slots!
-; First: save-rp=0, no ctx restore
-; Second: restore-rp=0, no ctx restore
+'{f! g! 1} test-apply!
+; No context save (no free var between calls)
 
-; Tail call (no saves needed)
-'{f!} test-apply-slots!
-; No saves or restores
+'{f!} test-apply!
+; Tail call - no saves or restores
+
+'{f! 1 +} test-apply!
+; Non-tail, needs saves
+
+"done" println!

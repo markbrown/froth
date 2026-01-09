@@ -1,6 +1,6 @@
 ; slots.froth - Frame slot allocation for compiler
 
-; slots-term-impl: (live-map slot-map free max ctx-slot rp-slot seq-fn term-fn -- result-map new-slot-map new-free new-max new-ctx-slot new-rp-slot)
+; slots-term-impl: (live-map slot-map free max ctx-slot rp-slot needs-ctx-save seq-fn term-fn -- result-map new-slot-map new-free new-max new-ctx-slot new-rp-slot new-needs-ctx-save)
 ; Allocate a slot for a single term.
 ; live-map: node for this term (has 'term, 'is-used, 'is-live, 'body, 'dead-set, etc.)
 ; slot-map: identifier -> slot mapping
@@ -8,25 +8,26 @@
 ; max: next slot number to allocate if free list is empty
 ; ctx-slot: allocated context save slot (nil if not yet allocated)
 ; rp-slot: allocated return pointer save slot (nil if not yet allocated)
-['delete-keys 'reduce 'swap 'and 'not 'or 'lfoldl] { /term-fn /seq-fn /rp-slot /ctx-slot /max /free /slot-map /live-map
+; needs-ctx-save: 0 if context save needed and not yet allocated, 1 otherwise
+['delete-keys 'reduce 'swap 'and 'not 'or 'lfoldl] { /term-fn /seq-fn /needs-ctx-save /rp-slot /ctx-slot /max /free /slot-map /live-map
   live-map 'term @ /term
   term isBinder {
     ; Binder: allocate slot if used (is-used=0), else no slot
     term intern idToIdent /ident
-    live-map 'is-used @ 0 = {
-      ; Used binder: allocate slot
+    live-map 'is-used @ {
+      ; Used binder (is-used=0): allocate slot
       free isNil {
         ; No free slots, allocate new one
-        live-map max 'slot : slot-map max ident : free max 1 + ctx-slot rp-slot
+        live-map max 'slot : slot-map max ident : free max 1 + ctx-slot rp-slot needs-ctx-save
       } {
         ; Pop from free list (cons cell)
         free fst /slot
         free snd /new-free
-        live-map slot 'slot : slot-map slot ident : new-free max ctx-slot rp-slot
+        live-map slot 'slot : slot-map slot ident : new-free max ctx-slot rp-slot needs-ctx-save
       } ?!
     } {
-      ; Dead binder: no slot needed
-      live-map slot-map free max ctx-slot rp-slot
+      ; Dead binder (is-used=1): no slot needed
+      live-map slot-map free max ctx-slot rp-slot needs-ctx-save
     } ?!
   } {
   term isFunc {
@@ -45,129 +46,119 @@
       } ?!
     } reduce! /new-free
     ; Store outer's slot-map on this node for use by codegen
-    live-map slot-map 'parent-bound-vars-map : slot-map new-free max ctx-slot rp-slot
+    live-map slot-map 'parent-bound-vars-map : slot-map new-free max ctx-slot rp-slot needs-ctx-save
   } {
   term isGen {
     ; Generator: same frame, but binders are locally scoped
-    ; Shares ctx-slot and rp-slot with outer scope
+    ; Shares ctx-slot, rp-slot, and needs-ctx-save with outer scope
     live-map 'body @ /inner-body
     ; Save outer slot-map to restore after generator (inner binders may shadow outer)
     slot-map /outer-slot-map
-    ; Thread state through generator (including ctx-slot and rp-slot)
-    inner-body slot-map free max ctx-slot rp-slot 0 seq-fn term-fn seq-fn!
-    /after-rp /after-ctx /after-max /after-free /after-slot-map /new-body-list
+    ; Thread state through generator
+    inner-body slot-map free max ctx-slot rp-slot needs-ctx-save 0 seq-fn term-fn seq-fn!
+    /after-needs-ctx /after-rp /after-ctx /after-max /after-free /after-slot-map /new-body-list
     ; Convert list to array
     [ new-body-list { } lfoldl! ] /new-body
     ; Restore outer slot-map (inner binders are now out of scope)
-    live-map new-body 'body : outer-slot-map after-free after-max after-ctx after-rp
+    live-map new-body 'body : outer-slot-map after-free after-max after-ctx after-rp after-needs-ctx
   } {
   ; Check for variable (not an operator)
   term isIdent {
     live-map 'is-operator @ 1 = {
-      live-map 'is-bound @ 0 = {
-        ; Bound identifier: lookup slot
+      live-map 'is-bound @ {
+        ; Bound identifier (is-bound=0): lookup slot
         slot-map term @ /slot
         live-map 'is-live @ 1 = {
-          ; Last use: add slot to free list
-          live-map slot 'slot : slot-map free slot , max ctx-slot rp-slot
+          ; Last use (is-live=1): add slot to free list
+          live-map slot 'slot : slot-map free slot , max ctx-slot rp-slot needs-ctx-save
         } {
-          ; Still live
-          live-map slot 'slot : slot-map free max ctx-slot rp-slot
+          ; Still live (is-live=0)
+          live-map slot 'slot : slot-map free max ctx-slot rp-slot needs-ctx-save
         } ?!
       } {
-        ; Free identifier (is-bound = 1): no frame slot
-        live-map slot-map free max ctx-slot rp-slot
+        ; Free identifier (is-bound=1): no frame slot
+        live-map slot-map free max ctx-slot rp-slot needs-ctx-save
       } ?!
     } {
       ; Operator: no slot tracking
-      live-map slot-map free max ctx-slot rp-slot
+      live-map slot-map free max ctx-slot rp-slot needs-ctx-save
     } ?!
   } {
   term isApply {
     ; Apply: allocate slots for register saves if needed
-    ; Save flags are only set on the FIRST call that needs each register saved
     ; Slots persist (not freed) for reuse by later calls
 
-    ; Check if this is a non-tail call
-    live-map 'is-tail-call in { live-map 'is-tail-call @ } { 1 } ?! /is-tail
-    is-tail not! /is-nontail
-
     ; Check if context restore is needed (restore-context=0 means needs restore)
-    live-map 'restore-context in { live-map 'restore-context @ 0 = } { 1 } ?! /needs-ctx-restore
+    live-map 'restore-context in { live-map 'restore-context @ } { 1 } ?! /restore-ctx
 
     ; Check if return restore is needed (restore-return=0 means needs restore)
-    live-map 'restore-return in { live-map 'restore-return @ 0 = } { 1 } ?! /needs-rp-restore
+    live-map 'restore-return in { live-map 'restore-return @ } { 1 } ?! /restore-rp
 
     ; Handle context save slot
-    ; If needs-ctx-restore AND ctx-slot is nil: allocate and set save-context=0
-    ; If needs-ctx-restore AND ctx-slot exists: reuse, don't set save flag
-    needs-ctx-restore {
-      ctx-slot isNil {
-        ; First call needing context restore: allocate slot and set save flag
-        free isNil {
-          live-map max 'ctx-save-slot : 0 'save-context : free max 1 + max
-        } {
-          free fst /slot
-          live-map slot 'ctx-save-slot : 0 'save-context : free snd max slot
-        } ?!
+    ; If needs-ctx-save=0: allocate and set save-context=0, then set needs-ctx-save=1
+    ; If restore-ctx=0: set ctx-save-slot for the restore
+    needs-ctx-save {
+      ; First call needing context save: allocate slot and set save flag
+      free isNil {
+        live-map max 'ctx-save-slot : 0 'save-context : free max 1 + max 1
       } {
-        ; Later call: reuse existing slot, no save flag
-        live-map ctx-slot 'ctx-save-slot : free max ctx-slot
+        free fst /slot
+        live-map slot 'ctx-save-slot : 0 'save-context : free snd max slot 1
       } ?!
     } {
-      ; No context restore needed
-      live-map free max ctx-slot
-    } ?! /new-ctx-slot /cur-max /cur-free /result-map
+      ; Already allocated or not needed
+      live-map free max ctx-slot needs-ctx-save
+    } ?! /new-needs-ctx /new-ctx-slot /cur-max /cur-free /result-map
+
+    ; Set ctx-save-slot on calls that need restore (restore-ctx=0 means needs restore)
+    restore-ctx { result-map new-ctx-slot 'ctx-save-slot : } { result-map } ?! /result-map2
 
     ; Handle return pointer save slot
     ; If non-tail call AND rp-slot is nil: allocate and set save-return=0
-    ; If restore-return=0: set rp-save-slot for the restore
-    is-nontail {
+    ; If restore-rp=0: set rp-save-slot for the restore
+    live-map 'is-tail-call in { live-map 'is-tail-call @ } { 1 } ?! {
+      ; Tail call (is-tail-call=0): no return pointer handling
+      result-map2 cur-free cur-max rp-slot
+    } {
+      ; Non-tail call (is-tail-call=1)
       rp-slot isNil {
         ; First non-tail call: allocate slot and set save flag
         cur-free isNil {
-          result-map cur-max 'rp-save-slot : 0 'save-return : cur-free cur-max 1 + cur-max
+          result-map2 cur-max 'rp-save-slot : 0 'save-return : cur-free cur-max 1 + cur-max
         } {
           cur-free fst /slot
-          result-map slot 'rp-save-slot : 0 'save-return : cur-free snd cur-max slot
+          result-map2 slot 'rp-save-slot : 0 'save-return : cur-free snd cur-max slot
         } ?!
       } {
-        ; Later non-tail call: if restore needed, set the slot
-        needs-rp-restore {
-          result-map rp-slot 'rp-save-slot : cur-free cur-max rp-slot
-        } {
-          result-map cur-free cur-max rp-slot
-        } ?!
+        ; Later non-tail call: if restore needed, set the slot (restore-rp=0 means needs restore)
+        restore-rp { result-map2 rp-slot 'rp-save-slot : cur-free cur-max rp-slot } { result-map2 cur-free cur-max rp-slot } ?!
       } ?!
-    } {
-      ; Tail call: no return pointer handling
-      result-map cur-free cur-max rp-slot
     } ?! /new-rp-slot /final-max /final-free /final-map
 
     ; Don't free the register save slots - they persist for later calls
-    final-map slot-map final-free final-max new-ctx-slot new-rp-slot
+    final-map slot-map final-free final-max new-ctx-slot new-rp-slot new-needs-ctx
   } {
-    ; Not an identifier, or operator: no slot
-    live-map slot-map free max ctx-slot rp-slot
+    ; Literal or other: no slot
+    live-map slot-map free max ctx-slot rp-slot needs-ctx-save
   } ?! } ?! } ?! } ?! } ?!
 } def-fn! /slots-term-impl
 
-; slots-seq-impl: (body-arr slot-map free max ctx-slot rp-slot idx seq-fn term-fn -- new-body-list new-slot-map new-free new-max new-ctx-slot new-rp-slot)
+; slots-seq-impl: (body-arr slot-map free max ctx-slot rp-slot needs-ctx-save idx seq-fn term-fn -- new-body-list new-slot-map new-free new-max new-ctx-slot new-rp-slot new-needs-ctx-save)
 ; Process terms from idx to end (left-to-right).
 ; Returns a list in correct order.
-['slots-term-impl] { /term-fn /seq-fn /idx /rp-slot /ctx-slot /max /free /slot-map /body-arr
+['slots-term-impl] { /term-fn /seq-fn /idx /needs-ctx-save /rp-slot /ctx-slot /max /free /slot-map /body-arr
   idx body-arr # = {
     ; Done: return empty list
-    . slot-map free max ctx-slot rp-slot
+    . slot-map free max ctx-slot rp-slot needs-ctx-save
   } {
     ; Process current term
-    body-arr idx @ slot-map free max ctx-slot rp-slot seq-fn term-fn term-fn!
-    /after-rp /after-ctx /after-max /after-free /after-slot-map /term-map
+    body-arr idx @ slot-map free max ctx-slot rp-slot needs-ctx-save seq-fn term-fn term-fn!
+    /after-needs-ctx /after-rp /after-ctx /after-max /after-free /after-slot-map /term-map
     ; Recurse for rest
-    body-arr after-slot-map after-free after-max after-ctx after-rp idx 1 + seq-fn term-fn seq-fn!
-    /final-rp /final-ctx /final-max /final-free /final-slot-map /rest-body
+    body-arr after-slot-map after-free after-max after-ctx after-rp after-needs-ctx idx 1 + seq-fn term-fn seq-fn!
+    /final-needs-ctx /final-rp /final-ctx /final-max /final-free /final-slot-map /rest-body
     ; Cons current node onto rest (builds list in correct order)
-    rest-body term-map , final-slot-map final-free final-max final-ctx final-rp
+    rest-body term-map , final-slot-map final-free final-max final-ctx final-rp final-needs-ctx
   } ?!
 } def-fn! /slots-seq-impl
 
@@ -180,8 +171,10 @@
 ;   'max-slots: maximum frame slots needed (function-level)
 ['slots-seq-impl 'slots-term-impl 'lfoldl] { /func-node
   func-node 'body @ /body
-  body $ . 0 . . 0 slots-seq-impl slots-term-impl slots-seq-impl!
-  /discard-rp /discard-ctx /max /free /slot-map /new-body-list
+  ; Read needs-ctx-save from liveness (0 = needs save, 1 = no save needed)
+  func-node 'needs-ctx-save in { func-node 'needs-ctx-save @ } { 1 } ?! /needs-ctx-save
+  body $ . 0 . . needs-ctx-save 0 slots-seq-impl slots-term-impl slots-seq-impl!
+  /discard-needs-ctx /discard-rp /discard-ctx /max /free /slot-map /new-body-list
   ; Convert list to array
   [ new-body-list { } lfoldl! ] /new-body
   func-node new-body 'body : max 'max-slots :
