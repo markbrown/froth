@@ -214,8 +214,8 @@ The `'is-operator` key is set by the boundness pass. Operators that are shadowed
 - `'needs-ctx-save`: 0 = needs context save before first call
 - `'func-addr`: bytecode entry point (set by codegen)
 - `'leave-frame`: 0 = last term using the frame (set on closure nodes by liveness)
-- `'parent-free-vars-map`: outer scope's free-vars-map (set by boundness on nested functions)
-- `'parent-bound-vars-map`: outer scope's slot-map (set by slots on nested functions)
+- `'outer-free-vars-map`: outer scope's free-vars-map (set by boundness on nested functions)
+- `'outer-bound-vars-map`: outer scope's slot-map (set by slots on nested functions)
 
 **Generator node keys:**
 
@@ -244,7 +244,7 @@ Updates child nodes with:
 - `'is-operator`: 0 = operator, 1 = variable (for identifiers not shadowed by binders)
 - `'is-bound`: 0 = bound variable, 1 = free variable (for variable identifiers)
 - `'slot`: context slot number (for free identifiers)
-- `'parent-free-vars-map`: outer scope's free-vars-map (for nested functions)
+- `'outer-free-vars-map`: outer scope's free-vars-map (for nested functions)
 
 Context slot numbers are assigned in order of first occurrence (0, 1, 2, ...).
 
@@ -307,7 +307,7 @@ Takes the function-node from `liveness` and adds slot allocation information.
 - `'ctx-save-slot`: frame slot for saving context pointer (for calls needing context restore)
 - `'rp-save-slot`: frame slot for saving return pointer (for non-tail calls)
 - `'max-slots`: maximum number of slots needed (for closures only)
-- `'parent-bound-vars-map`: outer scope's slot-map (for nested functions)
+- `'outer-bound-vars-map`: outer scope's slot-map (for nested functions)
 
 Slots are allocated on-demand and reused when freed. Binder slots are freed at the variable's last use. Register save slots are allocated once at the first call that needs them and reused by subsequent calls. Closures get their own frame (slots start at 0), while generators share the outer frame.
 
