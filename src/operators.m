@@ -132,6 +132,10 @@
     int::in, int::out, io::di, io::uo) is det.
 :- pred operator_wrap(array(value)::array_di, array(value)::array_uo,
     int::in, int::out) is det.
+:- pred operator_mk_func(array(value)::array_di, array(value)::array_uo,
+    int::in, int::out) is det.
+:- pred operator_mk_gen(array(value)::array_di, array(value)::array_uo,
+    int::in, int::out) is det.
 
 %-----------------------------------------------------------------------%
 
@@ -332,6 +336,12 @@ eval_operator(OpTable, ST, Op, Env, !Array, !Ptr, !IO) :-
     ;
         Op = op_wrap,
         operator_wrap(!Array, !Ptr)
+    ;
+        Op = op_mk_func,
+        operator_mk_func(!Array, !Ptr)
+    ;
+        Op = op_mk_gen,
+        operator_mk_gen(!Array, !Ptr)
     ).
 
 %-----------------------------------------------------------------------%
@@ -982,6 +992,51 @@ operator_wrap(!Array, !Ptr) :-
         datastack.push(termval(quoted(Term)), !Array, !Ptr)
     else
         throw(type_error("int, string, or quoted term", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% mkFunc: ( array -- 'function ) Create a function term from array of terms
+%-----------------------------------------------------------------------%
+
+operator_mk_func(!Array, !Ptr) :-
+    datastack.pop("mkFunc", V, !Array, !Ptr),
+    ( if V = arrayval(Arr) then
+        array_to_terms(Arr, Terms),
+        datastack.push(termval(function(Terms)), !Array, !Ptr)
+    else
+        throw(type_error("array", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% mkGen: ( array -- 'generator ) Create a generator term from array of terms
+%-----------------------------------------------------------------------%
+
+operator_mk_gen(!Array, !Ptr) :-
+    datastack.pop("mkGen", V, !Array, !Ptr),
+    ( if V = arrayval(Arr) then
+        array_to_terms(Arr, Terms),
+        datastack.push(termval(generator(Terms)), !Array, !Ptr)
+    else
+        throw(type_error("array", V))
+    ).
+
+    % array_to_terms(Array, Terms):
+    % Convert an array of termvals to a list of terms.
+    % Throws a type error if any element is not a termval.
+    %
+:- pred array_to_terms(array(value)::in, list(term)::out) is det.
+
+array_to_terms(Arr, Terms) :-
+    array.to_list(Arr, Values),
+    list.map(value_to_term, Values, Terms).
+
+:- pred value_to_term(value::in, term::out) is det.
+
+value_to_term(V, Term) :-
+    ( if V = termval(T) then
+        Term = T
+    else
+        throw(type_error("term", V))
     ).
 
 %-----------------------------------------------------------------------%

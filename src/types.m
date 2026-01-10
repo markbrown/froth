@@ -74,7 +74,9 @@
     ;       op_ref          % ref         ( value -- int )
     ;       op_deref        % deref       ( int -- value )
     ;       op_apply_operator  % applyOperator ( 'op -- ... )
-    ;       op_wrap.           % wrap          ( value -- 'value )
+    ;       op_wrap            % wrap          ( value -- 'value )
+    ;       op_mk_func         % mkFunc        ( array -- 'func )
+    ;       op_mk_gen.         % mkGen         ( array -- 'gen )
 
 :- type operator_info
     --->    operator_info(

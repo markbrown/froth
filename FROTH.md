@@ -176,6 +176,8 @@ Evaluation maintains three pieces of state:
 | `open` | `( closure -- env body )` | Decompose closureval to (map, function) or bytecodeval to (array, int) |
 | `unwrap` | `( 'x -- x )` | Extract inner from quoted value or quoted term |
 | `wrap` | `( x -- 'x )` | Wrap int, string, or quoted term as quoted value/quote |
+| `mkFunc` | `( array -- 'func )` | Create function term from array of terms |
+| `mkGen` | `( array -- 'gen )` | Create generator term from array of terms |
 | `intern` | `( a -- int )` | Get intern id from string, identifier, or binder |
 | `idToString` | `( int -- string )` | Create string from intern id |
 | `idToIdent` | `( int -- 'ident )` | Create quoted identifier from intern id |

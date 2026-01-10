@@ -112,6 +112,8 @@ operator("ref", op_ref).
 operator("deref", op_deref).
 operator("applyOperator", op_apply_operator).
 operator("wrap", op_wrap).
+operator("mkFunc", op_mk_func).
+operator("mkGen", op_mk_gen).
 
 %-----------------------------------------------------------------------%
 % Operator arity (number of values popped from stack)
@@ -174,12 +176,14 @@ operator_arity(op_ref) = 1.
 operator_arity(op_deref) = 1.
 operator_arity(op_apply_operator) = 1.
 operator_arity(op_wrap) = 1.
+operator_arity(op_mk_func) = 1.
+operator_arity(op_mk_gen) = 1.
 
 %-----------------------------------------------------------------------%
 % Operator to/from integer conversion for bytecode
 %-----------------------------------------------------------------------%
 
-num_operators = 57.
+num_operators = 59.
 
 operator_to_int(op_print) = 0.
 operator_to_int(op_env) = 1.
@@ -238,6 +242,8 @@ operator_to_int(op_ref) = 53.
 operator_to_int(op_deref) = 54.
 operator_to_int(op_apply_operator) = 55.
 operator_to_int(op_wrap) = 56.
+operator_to_int(op_mk_func) = 57.
+operator_to_int(op_mk_gen) = 58.
 
 int_to_operator(0, op_print).
 int_to_operator(1, op_env).
@@ -296,6 +302,8 @@ int_to_operator(53, op_ref).
 int_to_operator(54, op_deref).
 int_to_operator(55, op_apply_operator).
 int_to_operator(56, op_wrap).
+int_to_operator(57, op_mk_func).
+int_to_operator(58, op_mk_gen).
 
 %-----------------------------------------------------------------------%
 % init_operators: intern all operator names and build the operator table
@@ -316,7 +324,8 @@ init_operators(!ST, OpTable) :-
         "idToString", "idToIdent", "idToBinder", "isOperator", "arity",
         "stack", "import", "time", "restore",
         "close", "open", "isClosure",
-        "peek", "poke", "ref", "deref", "applyOperator", "wrap"
+        "peek", "poke", "ref", "deref", "applyOperator", "wrap",
+        "mkFunc", "mkGen"
     ],
     list.foldl2(intern_operator, OpNames, map.init, OpTable, !ST).
 
