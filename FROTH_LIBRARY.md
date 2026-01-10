@@ -108,6 +108,55 @@ This is definition-time optimization: later definitions that capture `c-lean` wi
 | `println` | `( a -- )` | Print a value followed by a newline |
 | `writeln` | `( a -- )` | Write in executable form followed by a newline |
 
+## Control (control.froth)
+
+Control flow utilities for loops and iteration. State is passed through the stack because Froth! closures capture their environment at creation time, and bindings don't escape closure boundaries.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `while-loop` | `( state cond body -- state' )` | Loop while condition is true, with state |
+| `until-loop` | `( state cond body -- state' )` | Loop until condition is true, with state |
+| `times-loop` | `( state n body -- state' )` | Execute body n times, with state |
+| `times` | `( n body -- )` | Execute body n times |
+| `while` | `( cond body -- )` | Execute body while condition is true |
+| `until` | `( cond body -- )` | Execute body until condition is true |
+
+The `-loop` variants pass state through the stack and are the recommended way to write loops:
+
+```
+; Count from 0 to 4
+0 { dup! 5 < } { dup! print " " print 1 + } while-loop! drop! nl!
+; Output: 0 1 2 3 4
+
+; Count until reaching 5
+0 { dup! 5 = } { dup! print " " print 1 + } until-loop! drop! nl!
+; Output: 0 1 2 3 4
+
+; Sum 1 to 5
+0 5 { 1 + } times-loop!    ; Result: 5
+
+; Print "x" five times
+5 { "x" print } times! nl! ; Output: xxxxx
+```
+
+For `-loop` variants:
+- `cond`: `( state -- state flag )` - examines state, returns flag (0 = continue for while-loop, 0 = stop for until-loop)
+- `body`: `( state -- state' )` - transforms state
+
+**Important**: The non-loop variants (`while`, `until`) do NOT update captured variables between iterations. Use the `-loop` variants for any loop that needs to track state.
+
+## Stack (stack.froth)
+
+Stack manipulation primitives.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `swap` | `( a b -- b a )` | Swap top two elements |
+| `dup` | `( a -- a a )` | Duplicate top element |
+| `over` | `( a b -- a b a )` | Copy second element to top |
+| `drop` | `( a -- )` | Drop top element |
+| `nip` | `( a b -- b )` | Remove second element |
+
 ## Array (array.froth)
 
 | Name | Stack Effect | Description |
@@ -166,41 +215,6 @@ Utilities for cons lists. Lists are built with `.` (nil) and `,` (cons):
 . 3 , 2 , 1 , {1 +} lmap!       ; produces [2, 3, 4]
 ```
 
-## Eval (eval.froth)
-
-A meta-interpreter that evaluates Froth! closures.
-
-| Name | Stack Effect | Description |
-|------|--------------|-------------|
-| `eval` | `( stack op-table closure -- result-stack 0 \| error-msg 1 )` | Evaluate closure with initial stack and operator table |
-
-The stack is represented as a cons list (nil-terminated). Push with `, `:
-
-```
-.                  ; empty stack (nil)
-. 3 ,              ; stack with just 3
-. 3 , 2 , 1 ,      ; stack [1, 2, 3] (1 on top)
-```
-
-The operator table is a map from quoted identifiers to closures. Custom operators are auto-applied (no `!` needed) when their name is encountered:
-
-```
-$ {2 *} 'double :              ; op-table with 'double' operator
-. ops { 5 double } eval!       ; returns (. 10 ,) 0
-```
-
-Returns two values: `result-stack` and `0` on success, or `error-message` and `1` on error.
-
-```
-. $ { 3 4 + } eval!            ; returns (. 7 ,) 0
-. $ { 10 /x x 1 + } eval!      ; returns (. 11 ,) 0
-. 10 , $ { 5 + } eval!         ; returns (. 15 ,) 0
-```
-
-Supported: all operators (dispatched by arity), variable binding, function literals, function application (closures and quoted operators), quoted terms, generators, `env`, `stack`, custom operators via op-table.
-
-Not yet supported: I/O operators.
-
 ## Map (map.froth)
 
 Map utilities.
@@ -220,6 +234,71 @@ m { 2 * } transform-values!    ; $ 2 'a : 4 'b : 6 'c :
 $ 1 'a : 2 'b : $ 3 'b : 4 'c : merge!  ; $ 1 'a : 3 'b : 4 'c :
 m ['a 'c] delete-keys!         ; $ 2 'b :
 $ ['x 'y] add-keys!            ; $ . 'x : . 'y :
+```
+
+## Boolean (bool.froth)
+
+Boolean operations where 0 represents true and non-zero represents false.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `not` | `( a -- int )` | 1 if a is 0, else 0 |
+| `and` | `( a b -- int )` | 0 if both a and b are 0, else 1 |
+| `or` | `( a b -- int )` | 0 if either a or b is 0, else 1 |
+
+```
+0 not!             ; 1 (not true = false)
+1 not!             ; 0 (not false = true)
+"x" not!           ; 0 (non-integer = true)
+0 0 and!           ; 0 (true and true)
+0 1 and!           ; 1 (true and false)
+0 1 or!            ; 0 (true or false)
+1 1 or!            ; 1 (false or false)
+```
+
+## Math (math.froth)
+
+Mathematical utilities.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `fact` | `( n -- n! )` | Compute factorial of n |
+| `fib` | `( a b n -- vals... )` | Generate Fibonacci sequence of length n |
+
+The `fact` function computes the factorial of n. Returns 1 for n <= 1.
+
+```
+0 fact!            ; 1
+5 fact!            ; 120
+10 fact!           ; 3628800
+```
+
+The `fib` function generates a Fibonacci sequence starting with the two given values, leaving n values on the stack.
+
+```
+[ 0 1 8 fib! ]     ; [ 0 1 1 2 3 5 8 13 ]
+[ 1 1 5 fib! ]     ; [ 1 1 2 3 5 ]
+[ 2 3 4 fib! ]     ; [ 2 3 5 8 ]
+```
+
+## Data (data.froth)
+
+Generic data structure utilities.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `transform` | `( data fn -- data )` | Recursively transform data structure |
+
+The `transform` function applies a function to all leaf values in a data structure, recursively traversing into maps, arrays, and cons cells. Nil values are left unchanged.
+
+```
+[ 1 2 3 ] { 2 * } transform!           ; [ 2 4 6 ]
+$ 1 'a : 2 'b : { 10 + } transform!    ; $ 11 'a : 12 'b :
+. 3 , 2 , 1 , { 2 * } transform!       ; . 6 , 4 , 2 ,
+
+; Works on nested structures
+[ [ 1 2 ] [ 3 4 ] ] { 2 * } transform! ; [ [ 2 4 ] [ 6 8 ] ]
+$ [ 1 2 ] 'arr : { 2 * } transform!    ; $ [ 2 4 ] 'arr :
 ```
 
 ## Alist (alist.froth)
@@ -315,120 +394,6 @@ t k2 200 tree-set! /t
 t k1 tree-get!                 ; 100 0
 ```
 
-## Stack (stack.froth)
-
-Stack manipulation primitives.
-
-| Name | Stack Effect | Description |
-|------|--------------|-------------|
-| `swap` | `( a b -- b a )` | Swap top two elements |
-| `dup` | `( a -- a a )` | Duplicate top element |
-| `over` | `( a b -- a b a )` | Copy second element to top |
-| `drop` | `( a -- )` | Drop top element |
-| `nip` | `( a b -- b )` | Remove second element |
-
-## Data (data.froth)
-
-Generic data structure utilities.
-
-| Name | Stack Effect | Description |
-|------|--------------|-------------|
-| `transform` | `( data fn -- data )` | Recursively transform data structure |
-
-The `transform` function applies a function to all leaf values in a data structure, recursively traversing into maps, arrays, and cons cells. Nil values are left unchanged.
-
-```
-[ 1 2 3 ] { 2 * } transform!           ; [ 2 4 6 ]
-$ 1 'a : 2 'b : { 10 + } transform!    ; $ 11 'a : 12 'b :
-. 3 , 2 , 1 , { 2 * } transform!       ; . 6 , 4 , 2 ,
-
-; Works on nested structures
-[ [ 1 2 ] [ 3 4 ] ] { 2 * } transform! ; [ [ 2 4 ] [ 6 8 ] ]
-$ [ 1 2 ] 'arr : { 2 * } transform!    ; $ [ 2 4 ] 'arr :
-```
-
-## Boolean (bool.froth)
-
-Boolean operations where 0 represents true and non-zero represents false.
-
-| Name | Stack Effect | Description |
-|------|--------------|-------------|
-| `not` | `( a -- int )` | 1 if a is 0, else 0 |
-| `and` | `( a b -- int )` | 0 if both a and b are 0, else 1 |
-| `or` | `( a b -- int )` | 0 if either a or b is 0, else 1 |
-
-```
-0 not!             ; 1 (not true = false)
-1 not!             ; 0 (not false = true)
-"x" not!           ; 0 (non-integer = true)
-0 0 and!           ; 0 (true and true)
-0 1 and!           ; 1 (true and false)
-0 1 or!            ; 0 (true or false)
-1 1 or!            ; 1 (false or false)
-```
-
-## Control (control.froth)
-
-Control flow utilities for loops and iteration. State is passed through the stack because Froth! closures capture their environment at creation time, and bindings don't escape closure boundaries.
-
-| Name | Stack Effect | Description |
-|------|--------------|-------------|
-| `while-loop` | `( state cond body -- state' )` | Loop while condition is true, with state |
-| `until-loop` | `( state cond body -- state' )` | Loop until condition is true, with state |
-| `times-loop` | `( state n body -- state' )` | Execute body n times, with state |
-| `times` | `( n body -- )` | Execute body n times |
-| `while` | `( cond body -- )` | Execute body while condition is true |
-| `until` | `( cond body -- )` | Execute body until condition is true |
-
-The `-loop` variants pass state through the stack and are the recommended way to write loops:
-
-```
-; Count from 0 to 4
-0 { dup! 5 < } { dup! print " " print 1 + } while-loop! drop! nl!
-; Output: 0 1 2 3 4
-
-; Count until reaching 5
-0 { dup! 5 = } { dup! print " " print 1 + } until-loop! drop! nl!
-; Output: 0 1 2 3 4
-
-; Sum 1 to 5
-0 5 { 1 + } times-loop!    ; Result: 5
-
-; Print "x" five times
-5 { "x" print } times! nl! ; Output: xxxxx
-```
-
-For `-loop` variants:
-- `cond`: `( state -- state flag )` - examines state, returns flag (0 = continue for while-loop, 0 = stop for until-loop)
-- `body`: `( state -- state' )` - transforms state
-
-**Important**: The non-loop variants (`while`, `until`) do NOT update captured variables between iterations. Use the `-loop` variants for any loop that needs to track state.
-
-## Math (math.froth)
-
-Mathematical utilities.
-
-| Name | Stack Effect | Description |
-|------|--------------|-------------|
-| `fact` | `( n -- n! )` | Compute factorial of n |
-| `fib` | `( a b n -- vals... )` | Generate Fibonacci sequence of length n |
-
-The `fact` function computes the factorial of n. Returns 1 for n <= 1.
-
-```
-0 fact!            ; 1
-5 fact!            ; 120
-10 fact!           ; 3628800
-```
-
-The `fib` function generates a Fibonacci sequence starting with the two given values, leaving n values on the stack.
-
-```
-[ 0 1 8 fib! ]     ; [ 0 1 1 2 3 5 8 13 ]
-[ 1 1 5 fib! ]     ; [ 1 1 2 3 5 ]
-[ 2 3 4 fib! ]     ; [ 2 3 5 8 ]
-```
-
 ## Bench (bench.froth)
 
 Benchmarking utilities.
@@ -444,3 +409,37 @@ Values produced by the closure are discarded after all iterations.
 { 0 1 20 fib! } 1000 bench! println!
 ```
 
+## Eval (eval.froth)
+
+A meta-interpreter that evaluates Froth! closures.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `eval` | `( stack op-table closure -- result-stack 0 \| error-msg 1 )` | Evaluate closure with initial stack and operator table |
+
+The stack is represented as a cons list (nil-terminated). Push with `, `:
+
+```
+.                  ; empty stack (nil)
+. 3 ,              ; stack with just 3
+. 3 , 2 , 1 ,      ; stack [1, 2, 3] (1 on top)
+```
+
+The operator table is a map from quoted identifiers to closures. Custom operators are auto-applied (no `!` needed) when their name is encountered:
+
+```
+$ {2 *} 'double :              ; op-table with 'double' operator
+. ops { 5 double } eval!       ; returns (. 10 ,) 0
+```
+
+Returns two values: `result-stack` and `0` on success, or `error-message` and `1` on error.
+
+```
+. $ { 3 4 + } eval!            ; returns (. 7 ,) 0
+. $ { 10 /x x 1 + } eval!      ; returns (. 11 ,) 0
+. 10 , $ { 5 + } eval!         ; returns (. 15 ,) 0
+```
+
+Supported: all operators (dispatched by arity), variable binding, function literals, function application (closures and quoted operators), quoted terms, generators, `env`, `stack`, custom operators via op-table.
+
+Not yet supported: I/O operators.

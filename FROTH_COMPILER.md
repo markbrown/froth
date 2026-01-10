@@ -13,6 +13,8 @@ This document describes the compiler infrastructure for Froth!, including byteco
 | `compile` | compile | Compile a binding in an env-map |
 | `compile-func` | compile | Build node tree, run analysis passes, and generate bytecode |
 | `compile-named-closure` | compile | Compile a closure to bytecode with caching |
+| `disasm` | disasm | Disassemble n instructions at address |
+| `disasm-one` | disasm | Disassemble one instruction at address |
 | `emit-all-at` | bytecode | Write array to bytecode store |
 | `emit-at` | bytecode | Write value to bytecode store |
 | `liveness` | liveness | Analyze last references in a node |
@@ -30,6 +32,29 @@ This document describes the compiler infrastructure for Froth!, including byteco
 | `preflight` | preflight | Check for env/import/applyOperator usage |
 | `slots` | slots | Allocate frame slots for function |
 | `codegen` | codegen | Generate bytecode for a function |
+
+## Ops (ops.froth)
+
+Operator table for bytecode generation.
+
+| Name | Type | Description |
+|------|------|-------------|
+| `operator-table` | map | Map from quoted operator identifiers to codes |
+
+The `operator-table` constant maps each operator identifier to its bytecode operator code. This is kept in sync with `src/operator_table.m`.
+
+```
+operator-table '+ @        ; 2 (code for addition)
+operator-table 'print @    ; 0 (code for print)
+operator-table 'close @    ; 48 (code for close)
+```
+
+Use with bytecode generation:
+
+```
+operator-table '+ @ /opAdd
+[ ocOp opAdd ocReturn ] 0 emit-all-at! drop!
+```
 
 ## Bytecode (bytecode.froth)
 
@@ -87,6 +112,26 @@ instruction-table 'op @ /ocOp
 [] 0 close !               ; returns 3
 ```
 
+## Disasm (disasm.froth)
+
+Bytecode disassembler for debugging compiled code.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `disasm` | `( addr n -- )` | Disassemble n instructions starting at addr |
+| `disasm-one` | `( addr -- addr' )` | Disassemble one instruction, return next addr |
+
+```
+; Compile a function and disassemble it
+tree-empty! 0 '{ 1 2 + } compile-func! /node /addr /code-map
+node 'func-addr @ 4 disasm!
+; Output:
+; 2000: push-int 1
+; 2002: push-int 2
+; 2004: op 2 (+)
+; 2006: return
+```
+
 ## Cache (cache.froth)
 
 Two-level cache mapping identifiers to alists of (key, value) pairs. Used by the compiler to cache compiled closures, avoiding recompilation when the same closure is encountered multiple times.
@@ -109,29 +154,6 @@ c 'my-func {2} cache-get!          ; 1 (not found - different closure)
 ```
 
 Note: Closures are compared by identity, not structural equality. Two `{1}` literals are different closures.
-
-## Ops (ops.froth)
-
-Operator table for bytecode generation.
-
-| Name | Type | Description |
-|------|------|-------------|
-| `operator-table` | map | Map from quoted operator identifiers to codes |
-
-The `operator-table` constant maps each operator identifier to its bytecode operator code. This is kept in sync with `src/operator_table.m`.
-
-```
-operator-table '+ @        ; 2 (code for addition)
-operator-table 'print @    ; 0 (code for print)
-operator-table 'close @    ; 48 (code for close)
-```
-
-Use with bytecode generation:
-
-```
-operator-table '+ @ /opAdd
-[ ocOp opAdd ocReturn ] 0 emit-all-at! drop!
-```
 
 ## Preflight (preflight.froth)
 
