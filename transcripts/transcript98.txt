@@ -1,0 +1,1483 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.76
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read lib/build.froth (97 lines)
+  ⎿  Read tests/vm.froth (136 lines)
+  ⎿  Read tests/slots.froth (130 lines)
+  ⎿  Read tests/save_slots.froth (66 lines)
+  ⎿  Read tests/liveness.froth (141 lines)
+
+> Let's try to add the functions from bytecode.froth to the build. Run the 
+tests and report on the outcome, but don't try to fix anything yet. 
+
+● Read(lib/bytecode.froth)
+  ⎿  Read 38 lines
+
+● I see bytecode.froth has:
+  1. instruction-table - a map constant (like operator-table, won't compile)
+  2. emit-at - a function
+  3. emit-all-at - a function
+
+  Let me add the two functions to build.froth and run the tests:
+
+● Update(lib/build.froth)
+  ⎿  Added 4 lines                                                       
+       91  
+       92    ; eval.froth - not compiled (meta-interpreter assumes closur
+           evals)
+       93  
+       94 +  ; bytecode.froth                                            
+       95 +  'emit-at compile!                                           
+       96 +  'emit-all-at compile!                                       
+       97 +                                                              
+       98  restore /froth-bytecode-top /froth-code-map /froth-cache
+       99  
+      100  { froth-cache froth-code-map froth-bytecode-top } /compiler-st
+           art
+
+● Bash(make test 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+     ./run_tests.sh
+     PASS: add
+     PASS: alist
+     PASS: apply_op
+     PASS: arithmetic
+     PASS: arity
+     … +174 lines (ctrl+o to see all)
+
+● Result: Failed
+
+  Both codegen and vm tests fail with:
+  Uncaught Mercury exception:
+  Software Error: predicate `operators.eval_operator'/10: Unexpected: poke should be handled in eval.m
+
+  The issue is that emit-at uses the poke operator:
+  { /addr /v v addr poke addr 1 + } /emit-at
+
+  The poke operator is a metaprogramming operator that writes to the bytecode store. It's handled specially in the interpreter (eval.m), but the bytecode VM doesn't support it - when compiled code tries to execute poke, the VM dispatches it to operators.eval_operator which doesn't know how to handle it.
+
+  This is similar to the eval situation - these are compiler infrastructure functions that manipulate the bytecode store itself, so they can't run as compiled bytecode.
+
+> remove it 
+
+● Update(lib/build.froth)
+  ⎿  Removed 4 lines                                                     
+       91  
+       92    ; eval.froth - not compiled (meta-interpreter assumes closur
+           evals)
+       93  
+       94 -  ; bytecode.froth                                            
+       95 -  'emit-at compile!                                           
+       96 -  'emit-all-at compile!                                       
+       97 -                                                              
+       94  restore /froth-bytecode-top /froth-code-map /froth-cache
+       95  
+       96  { froth-cache froth-code-map froth-bytecode-top } /compiler-st
+           art
+
+● Bash(make test 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● Done. Tests pass.
+
+> Can we handle this specially in vm.m, like we do in eval.m? Would 
+signatures need to change in order to support this? 
+
+● Search(pattern: "poke", path: "src")
+  ⎿  Found 5 files (ctrl+o to expand)
+
+● Search(pattern: "poke", path: "src/eval.m", output_mode: "content")
+  ⎿  Found 79 lines (ctrl+o to expand)
+
+● Read(src/vm.m)
+  ⎿  Read 349 lines
+
+● Looking at the code, no signature changes are needed. The VM already threads !Bytecode through (line 51):
+
+  array(int)::array_di, array(int)::array_uo,
+
+  The issue is that when the VM executes operators, it dispatches to operators.eval_operator which doesn't have access to Bytecode. But we can handle peek and poke specially, just like ref and deref are already handled (lines 140-147):
+
+  ( if Op = op_ref then
+      vm_ref(!Stack, !SP, !Pool, !HashTable),
+      run(...)
+  else if Op = op_deref then
+      vm_deref(!Stack, !SP, !.Pool),
+      run(...)
+  else
+      operators.eval_operator(...)
+  )
+
+  We'd just add:
+  else if Op = op_peek then
+      vm_peek(!Stack, !SP, !.Bytecode),
+      run(...)
+  else if Op = op_poke then
+      vm_poke(!Stack, !SP, !Bytecode),
+      run(...)
+
+  And implement vm_peek and vm_poke predicates similar to the ones in eval.m.
+
+  Want me to implement this?
+
+> yes 
+
+● Update(src/vm.m)
+  ⎿  Added 1 line                                                        
+      81  
+      82  :- implementation.
+      83  
+      84 +:- import_module bytecode.                                     
+      85  :- import_module datastack.
+      86  :- import_module eval.
+      87  :- import_module exception.
+
+● Update(src/vm.m)
+  ⎿  Added 8 lines                                                       
+      146                  vm_deref(!Stack, !SP, !.Pool),
+      147                  run(Ctx, Env, Context, GenStack, !Store, IP + 
+           2, RP, FP, !SP,
+      148                      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      149 +            else if Op = op_peek then                         
+      150 +                vm_peek(!Stack, !SP, !.Bytecode),             
+      151 +                run(Ctx, Env, Context, GenStack, !Store, IP + 
+          +2, RP, FP, !SP,                                               
+      152 +                    !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      153 +            else if Op = op_poke then                         
+      154 +                vm_poke(!Stack, !SP, !Bytecode),              
+      155 +                run(Ctx, Env, Context, GenStack, !Store, IP + 
+          +2, RP, FP, !SP,                                               
+      156 +                    !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      157              else
+      158                  operators.eval_operator(OpTable, !.Store ^ es_
+           string_table, Op, Env,
+      159                      !Stack, !SP, !IO),
+
+● Now I need to add the vm_peek and vm_poke predicates:
+
+● Update(src/vm.m)
+  ⎿  Added 38 lines                                                      
+      353      ).
+      354  
+      355  %-------------------------------------------------------------
+           ----------%
+      356 +% peek: ( addr -- int ) Read value from bytecode address      
+      357 +%-------------------------------------------------------------
+          +----------%                                                   
+      358 +                                                              
+      359 +:- pred vm_peek(                                              
+      360 +    array(value)::array_di, array(value)::array_uo,           
+      361 +    int::in, int::out,                                        
+      362 +    array(int)::in) is det.                                   
+      363 +                                                              
+      364 +vm_peek(!Stack, !SP, Bytecode) :-                             
+      365 +    datastack.pop("peek", V, !Stack, !SP),                    
+      366 +    ( if V = intval(Addr) then                                
+      367 +        Value = bytecode.peek(Addr, Bytecode),                
+      368 +        datastack.push(intval(Value), !Stack, !SP)            
+      369 +    else                                                      
+      370 +        throw(type_error("int", V))                           
+      371 +    ).                                                        
+      372 +                                                              
+      373 +%-------------------------------------------------------------
+          +----------%                                                   
+      374 +% poke: ( value addr -- ) Write value to bytecode address     
+      375 +%-------------------------------------------------------------
+          +----------%                                                   
+      376 +                                                              
+      377 +:- pred vm_poke(                                              
+      378 +    array(value)::array_di, array(value)::array_uo,           
+      379 +    int::in, int::out,                                        
+      380 +    array(int)::array_di, array(int)::array_uo) is det.       
+      381 +                                                              
+      382 +vm_poke(!Stack, !SP, !Bytecode) :-                            
+      383 +    datastack.pop("poke", AddrVal, !Stack, !SP),              
+      384 +    datastack.pop("poke", ValueVal, !Stack, !SP),             
+      385 +    ( if AddrVal = intval(Addr), ValueVal = intval(Value) then
+      386 +        bytecode.poke(Addr, Value, !Bytecode)                 
+      387 +    else if AddrVal = intval(_) then                          
+      388 +        throw(type_error("int", ValueVal))                    
+      389 +    else                                                      
+      390 +        throw(type_error("int", AddrVal))                     
+      391 +    ).                                                        
+      392 +                                                              
+      393 +%-------------------------------------------------------------
+          +----------%                                                   
+      394  :- end_module vm.
+      395  %-------------------------------------------------------------
+           ----------%
+
+● Now let me add the bytecode functions to build.froth and run the tests:
+
+● Update(lib/build.froth)
+  ⎿  Added 4 lines                                                       
+       91  
+       92    ; eval.froth - not compiled (meta-interpreter assumes closur
+           evals)
+       93  
+       94 +  ; bytecode.froth                                            
+       95 +  'emit-at compile!                                           
+       96 +  'emit-all-at compile!                                       
+       97 +                                                              
+       98  restore /froth-bytecode-top /froth-code-map /froth-cache
+       99  
+      100  { froth-cache froth-code-map froth-bytecode-top } /compiler-st
+           art
+
+● Bash(make test 2>&1)
+  ⎿  cd src && mmc --make froth    
+     Making Mercury/int3s/vm.int3
+     Making Mercury/ints/vm.int
+     … +73 lines (ctrl+o to expand)
+
+● All 65 tests pass. The VM now supports peek and poke operators, enabling emit-at and emit-all-at to be compiled.
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                     
+     Your branch is ahead of 'origin/master' by 7 commits.
+       (use "git push" to publish your local commits)
+     … +10 lines (ctrl+o to expand)
+
+● Bash(git diff)
+  ⎿  (No content)
+
+● Bash(git log --oneline -5)
+  ⎿  30fb414 add transcripts 96 and 97                  
+     32419b5 Note that eval cannot be compiled
+     fde5e1d Enable compilation for all stdlib functions
+     … +2 lines (ctrl+o to expand)
+
+● Bash(git diff --cached)
+  ⎿  diff --git a/lib/build.froth b/lib/build.froth
+     index 9f6fd9a..8180bbf 100644
+     --- a/lib/build.froth
+     … +95 lines (ctrl+o to expand)
+
+● Changes look good. Creating the commit:
+
+● Bash(git commit -m "Add peek/poke support to VM, enable bytecode function
+      compilation…)
+  ⎿  [master 0a6b7ee] Add peek/poke support to VM, enable bytecode function
+     compilation
+      2 files changed, 51 insertions(+)
+
+● Done. Committed as 0a6b7ee.
+
+> try adding disasm functions 
+
+● Read(lib/disasm.froth)
+  ⎿  Read 176 lines
+
+● I see disasm.froth has:
+  - 3 array constants (instr-names, op-names, has-data-array) - can't compile
+  - 4 functions (has-data, disasm-one, disasm-impl, disasm)
+
+  Let me add the functions:
+
+● Update(lib/build.froth)
+  ⎿  Added 6 lines                                                       
+       95    'emit-at compile!
+       96    'emit-all-at compile!
+       97  
+       98 +  ; disasm.froth                                              
+       99 +  'has-data compile!                                          
+      100 +  'disasm-one compile!                                        
+      101 +  'disasm-impl compile!                                       
+      102 +  'disasm compile!                                            
+      103 +                                                              
+      104  restore /froth-bytecode-top /froth-code-map /froth-cache
+      105  
+      106  { froth-cache froth-code-map froth-bytecode-top } /compiler-st
+           art
+
+● Bash(make test 2>&1 | tail -20)
+  ⎿  PASS: quote                   
+     PASS: ref
+     PASS: restore
+     … +17 lines (ctrl+o to expand)
+
+● All 65 tests pass. The disasm functions compile successfully (they use peek which we just added to the VM).
+
+> It seems that disasm leaves implementation details in the environment. Can
+ you remove them like the other files do? 
+
+● Looking at disasm.froth, the implementation details left in the environment are:
+  - instr-names, op-names, has-data-array (constants)
+  - has-data, disasm-impl (internal helpers)
+
+  The public API is just disasm-one and disasm. Let me add cleanup at the end:
+
+● Update(lib/disasm.froth)
+  ⎿  Added 2 lines                                                       
+      1  ; disasm.froth - Bytecode disassembler
+      2  
+      3 +env /pre-disasm                                                 
+      4 +                                                                
+      5  ; Build reverse instruction table (code -> name) as an array
+      6  ; Index is opcode, value is quoted identifier
+      7  [
+
+● Update(lib/disasm.froth)
+  ⎿  Added 7 lines                                                       
+      175  ; Disassemble n instructions starting at addr
+      176  ; disasm: (addr n --)
+      177  ['disasm-impl] { /n /addr addr n disasm-impl disasm-impl! } de
+           f-fn! /disasm
+      178 +                                                              
+      179 +; Clean up implementation details, keep only public API       
+      180 +disasm /disasm-save                                           
+      181 +disasm-one /disasm-one-save                                   
+      182 +pre-disasm restore                                            
+      183 +disasm-save /disasm                                           
+      184 +disasm-one-save /disasm-one                                   
+
+● Bash(make test 2>&1 | tail -10)
+  ⎿  15                           
+     111
+     Actual:
+     … +7 lines (ctrl+o to expand)
+
+● Bash(make test 2>&1 | grep -A 20 "FAIL:")
+  ⎿  FAIL: add                     
+     FAIL: alist
+     FAIL: apply_op
+     … +82 lines (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+> Look at the other library modules. Just use delete on the names that are 
+not needed. 
+
+● Update(lib/disasm.froth)
+  ⎿  Removed 2 lines                                                     
+      1  ; disasm.froth - Bytecode disassembler
+      2  
+      3 -env /pre-disasm                                                 
+      4 -                                                                
+      3  ; Build reverse instruction table (code -> name) as an array
+      4  ; Index is opcode, value is quoted identifier
+      5  [
+
+● Search(pattern: "env.*delete.*restore", path: "lib", output_mode: "content")
+  ⎿  Found 13 lines (ctrl+o to expand)
+
+● Update(lib/disasm.froth)
+  ⎿  Added 2 lines, removed 6 lines                                      
+      174  ; disasm: (addr n --)
+      175  ['disasm-impl] { /n /addr addr n disasm-impl disasm-impl! } de
+           f-fn! /disasm
+      176  
+      177 -; Clean up implementation details, keep only public API       
+      178 -disasm /disasm-save                                           
+      179 -disasm-one /disasm-one-save                                   
+      180 -pre-disasm restore                                            
+      181 -disasm-save /disasm                                           
+      182 -disasm-one-save /disasm-one                                   
+      177 +env 'instr-names delete 'op-names delete 'has-data-array delet
+          +e                                                             
+      178 +    'has-data delete 'disasm-impl delete restore              
+
+● Update(lib/build.froth)
+  ⎿  Removed 2 lines                                                     
+       96    'emit-all-at compile!
+       97  
+       98    ; disasm.froth
+       99 -  'has-data compile!                                          
+       99    'disasm-one compile!
+      101 -  'disasm-impl compile!                                       
+      100    'disasm compile!
+      101  
+      102  restore /froth-bytecode-top /froth-code-map /froth-cache
+
+● Bash(make test 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● All 65 tests pass. The disasm module now cleans up its implementation details (instr-names, op-names, has-data-array, has-data, disasm-impl) and only exports disasm-one and disasm.
+
+> commit this 
+
+● Bash(git status && git diff)
+  ⎿  On branch master                                     
+     Your branch is ahead of 'origin/master' by 8 commits.
+       (use "git push" to publish your local commits)
+     … +10 lines (ctrl+o to expand)
+
+● Bash(git diff --cached)
+  ⎿  diff --git a/lib/build.froth b/lib/build.froth
+     index 8180bbf..fe0a97e 100644
+     --- a/lib/build.froth
+     … +24 lines (ctrl+o to expand)
+
+● Bash(git commit -m "Enable disasm compilation, clean up implementation
+      details…)
+  ⎿ [master 826fd13] Enable disasm compilation, clean up implementation det
+    ails
+     2 files changed, 7 insertions(+)
+
+
+● Done. Committed as 826fd13.
+
+> try adding the compiler modules 
+
+● Let me check what functions the compiler modules export:
+
+● Bash(for f in lib/cache.froth lib/preflight.froth lib/node.froth
+      lib/boundness.froth lib/liveness.froth lib/slots.froth lib/codegen.froth
+      lib/compile.froth; do echo…)
+  ⎿  ===  ===                      
+     ===  ===
+     ===  ===
+     … +13 lines (ctrl+o to expand)
+
+● Bash(ls lib/*.froth | xargs -I{} sh -c 'echo "=== {} ==="; grep "} /[a-z]" {}
+      | tail -5')
+  ⎿  === lib/alist.froth ===       
+     === lib/array.froth ===
+     === lib/bench.froth ===
+     … +39 lines (ctrl+o to expand)
+
+● Let me check the quick reference in FROTH_COMPILER.md:
+
+● Search(pattern: "^\| `[a-z]", path: "FROTH_COMPILER.md", output_mode:
+        "content")
+  ⎿  Found 52 lines (ctrl+o to expand)
+
+● Based on FROTH_COMPILER.md, the compiler modules export:
+
+  - cache: cache-empty, cache-get, cache-set
+  - preflight: preflight
+  - node: new-node, new-literal-node, new-quote-node, new-identifier-node, new-binder-node, new-apply-node, new-function-node, new-generator-node, make-node
+  - boundness: boundness
+  - liveness: liveness
+  - slots: slots
+  - codegen: codegen
+  - compile: compile, compile-func, compile-named-closure
+
+  Let me add them:
+
+● Update(lib/build.froth)
+  ⎿  Added 36 lines                                                      
+       99    'disasm-one compile!
+      100    'disasm compile!
+      101  
+      102 +  ; cache.froth                                               
+      103 +  'cache-empty compile!                                       
+      104 +  'cache-get compile!                                         
+      105 +  'cache-set compile!                                         
+      106 +                                                              
+      107 +  ; preflight.froth                                           
+      108 +  'preflight compile!                                         
+      109 +                                                              
+      110 +  ; node.froth                                                
+      111 +  'new-node compile!                                          
+      112 +  'new-literal-node compile!                                  
+      113 +  'new-quote-node compile!                                    
+      114 +  'new-identifier-node compile!                               
+      115 +  'new-binder-node compile!                                   
+      116 +  'new-apply-node compile!                                    
+      117 +  'new-function-node compile!                                 
+      118 +  'new-generator-node compile!                                
+      119 +  'make-node compile!                                         
+      120 +                                                              
+      121 +  ; boundness.froth                                           
+      122 +  'boundness compile!                                         
+      123 +                                                              
+      124 +  ; liveness.froth                                            
+      125 +  'liveness compile!                                          
+      126 +                                                              
+      127 +  ; slots.froth                                               
+      128 +  'slots compile!                                             
+      129 +                                                              
+      130 +  ; codegen.froth                                             
+      131 +  'codegen compile!                                           
+      132 +                                                              
+      133 +  ; compile.froth                                             
+      134 +  'compile compile!                                           
+      135 +  'compile-func compile!                                      
+      136 +  'compile-named-closure compile!                             
+      137 +                                                              
+      138  restore /froth-bytecode-top /froth-code-map /froth-cache
+      139  
+      140  { froth-cache froth-code-map froth-bytecode-top } /compiler-st
+           art
+
+● Bash(make test 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+     ./run_tests.sh
+     PASS: add
+     PASS: alist
+     PASS: apply_op
+     PASS: arithmetic
+     PASS: arity
+     … +295 lines (ctrl+o to see all)
+
+● The bytecode top has exceeded 16000. The tests use hardcoded addresses starting at 16000. Let me check the current bytecode top:
+
+● Bash(echo 'froth-bytecode-top println!' | ./bin/froth -n lib/stdlib.froth -)
+  ⎿  Error: Exit code 1
+     Error: unknown option: -
+     Try 'froth --help' for usage.
+
+● Bash(echo 'froth-bytecode-top println!' | ./bin/froth)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +127 lines (ctrl+o to expand)
+
+● Bash(./bin/froth -e 'froth-bytecode-top println!')
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +125 lines (ctrl+o to expand)
+
+● The bytecode top is 17278. I need to increase the test threshold. Let me update all test files:
+
+● Bash(grep -l "16000" tests/*.froth)
+  ⎿  tests/boundness.froth        
+     tests/codegen.froth
+     tests/compile_closure.froth
+     … +4 lines (ctrl+o to expand)
+
+● Bash(for f in tests/boundness.froth tests/codegen.froth
+      tests/compile_closure.froth tests/liveness.froth tests/save_slots.froth
+      tests/slots.froth tests/vm.froth; do…)
+  ⎿  Tool use rejected with user message: change to 24000
+
+● Bash(for f in tests/boundness.froth tests/codegen.froth
+      tests/compile_closure.froth tests/liveness.froth tests/save_slots.froth
+      tests/slots.froth tests/vm.froth; do…)
+  ⎿  (No content)
+
+● Bash(make test 2>&1 | tail -30)
+  ⎿  bytecode9 (outer func area): 11 12 1 24072 2 48 3
+     nested no-capture test: 42
+     bytecode10 (nested area): 5 0 3
+     … +27 lines (ctrl+o to expand)
+
+● Bash(make test 2>&1 | grep "FAIL\|PASS" | head -20)
+  ⎿  PASS: add                     
+     PASS: alist
+     PASS: apply_op
+     … +17 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 | head -50)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +47 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/codegen.froth 2>/dev/null)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +170 lines (ctrl+o to expand)
+
+● Bash(head -20 run_tests.sh)
+  ⎿  #!/bin/sh                               
+     # Test runner for Froth regression tests
+     … +17 lines (ctrl+o to expand)
+
+● Bash(grep -A 5 "actual=" run_tests.sh)
+  ⎿         actual=$("$FROTH" $opts "$test_file" 2>&1 | grep -v '^FROTH: ')
+     || true
+        else
+    … +7 lines (ctrl+o to expand)
+
+
+● I see the test runner filters out "FROTH:" messages. I need to update the expected file:
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 | grep -v '^FROTH: ' >
+      tests/codegen.expected)
+  ⎿  (No content)
+
+● Bash(make test 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● All 65 tests pass. The compiler modules are now compiled successfully.
+
+> I've added code to lib/build.froth to print the number of words compiled, 
+but it causes a problem with the codegen test. Can you investigate? 
+
+● Bash(make test 2>&1 | grep -A 20 "=== codegen ===")
+  ⎿  === codegen ===                
+     Expected:
+     func-addr=24000 next-addr=24007
+     … +18 lines (ctrl+o to expand)
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 | grep -v '^FROTH: ' | head -5)
+  ⎿  func-addr=24000 next-addr=24007  
+     bytecode: 1 1 1 2 1 3 3
+     func-addr2=24007 next-addr2=24012
+     … +2 lines (ctrl+o to expand)
+
+● I see the issue. Looking at bytecode2:
+  - Expected: 1 42 4 570 3
+  - Actual: 1 42 4 571 3
+
+  The string intern ID changed from 570 to 571. The new print statement adds the string " words" which gets interned before the test runs, shifting all subsequent string IDs by 1.
+
+● Bash(./bin/froth -e '"hello" intern println!')
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +126 lines (ctrl+o to expand)
+
+● The issue is that the new string " words" in build.froth gets interned, which shifts all subsequent string intern IDs by 1. The codegen test checks specific bytecode values including string IDs.
+
+  The fix is to regenerate the expected file:
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 | grep -v '^FROTH: ' >
+      tests/codegen.expected)
+  ⎿  (No content)
+
+● Bash(make test 2>&1 | tail -5)
+  ⎿  PASS: type_tests             
+     PASS: vm
+     PASS: write
+     … +2 lines (ctrl+o to expand)
+
+● All tests pass. The issue was that codegen.expected contains hardcoded string intern IDs (e.g., 4 570 for push-string), and adding the " words" string in build.froth shifted all subsequent IDs by 1.
+
+> commit this 
+
+● Bash(git status && git diff --stat)
+  ⎿  On branch master                                     
+     Your branch is ahead of 'origin/master' by 9 commits.
+       (use "git push" to publish your local commits)
+     … +17 lines (ctrl+o to expand)
+
+● Bash(git diff --cached lib/build.froth)
+  ⎿  diff --git a/lib/build.froth b/lib/build.froth
+     index fe0a97e..c9977c5 100644
+     --- a/lib/build.froth
+     … +46 lines (ctrl+o to expand)
+
+● Bash(git diff --cached tests/boundness.froth | head -20)
+  ⎿  diff --git a/tests/boundness.froth b/tests/boundness.froth
+     index a5197bc..3af0903 100644
+     --- a/tests/boundness.froth
+     … +20 lines (ctrl+o to expand)
+
+● Changes look good - compiler modules added to build.froth and test thresholds updated to 24000.
+
+● Bash(git commit -m "Enable compilation for compiler modules…)
+  ⎿  [master afb4de6] Enable compilation for compiler modules
+      9 files changed, 72 insertions(+), 34 deletions(-)
+
+● Done. Committed as afb4de6.
+
+> Can we include the instruction pointer in runtime error messages from vm? 
+
+● Search(pattern: "throw\(", path: "src/vm.m", output_mode: "content")
+  ⎿  Found 14 lines (ctrl+o to expand)
+
+● Search(pattern: "vm_error|type_error", path: "src/types.m", output_mode:
+        "content")
+  ⎿  Found 4 lines (ctrl+o to expand)
+
+● Read(src/types.m)
+  ⎿  Read 30 lines
+
+● I'll add a new error type vm_error_at(int, string) that includes the instruction pointer:
+
+● Update(src/types.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      162      ;       undefined_name(string_id)
+      163      ;       index_out_of_bounds(int, int)   % Index, array siz
+           e
+      164      ;       io_error(string, string, string)  % Operation, fil
+           ename, message
+      165 -    ;       vm_error(string).               % VM execution err
+          -or                                                            
+      165 +    ;       vm_error(string)                % VM execution err
+          +or                                                            
+      166 +    ;       vm_error_at(int, string).       % VM error at inst
+          +ruction pointer                                               
+      167  
+      168      % format_error(StringTable, Error) = Message:
+      169      % Convert an eval_error to a human-readable message.
+
+● Search(pattern: "format_error.*vm_error", path: "src/types.m", output_mode:
+        "content")
+  ⎿  Found 3 lines (ctrl+o to expand)
+
+● Update(src/types.m)
+  ⎿  Added 2 lines                                                       
+      250      string.format("%s: %s: %s", [s(Op), s(Filename), s(Msg)]).
+      251  format_error(_, vm_error(Msg)) =
+      252      string.format("vm error: %s", [s(Msg)]).
+      253 +format_error(_, vm_error_at(IP, Msg)) =                       
+      254 +    string.format("vm error at %d: %s", [i(IP), s(Msg)]).     
+      255  
+      256  :- func value_type_name(value) = string.
+      257  
+
+● Now let me update vm.m to use vm_error_at:
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 2 lines                                       
+      126      array.lookup(!.Bytecode, IP, Opcode),
+      127      ( if Opcode = oc_abort then
+      128          % abort: throw an exception (useful for catching jumps
+            to uninitialized memory)
+      129 -        throw(vm_error("abort: execution reached uninitialized
+          - bytecode at address " ++                                     
+      130 -            string.from_int(IP)))                             
+      129 +        throw(vm_error_at(IP, "abort: execution reached uninit
+          +ialized bytecode"))                                           
+      130      else if Opcode = oc_pushInt then
+      131          % pushInt n: push integer n onto stack
+      132          array.lookup(!.Bytecode, IP + 1, N),
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      160                      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      161              )
+      162          else
+      163 -            throw(vm_error("invalid operator number"))        
+      163 +            throw(vm_error_at(IP, "invalid operator number")) 
+      164          )
+      165      else if Opcode = oc_return then
+      166          % return: if RP is -1, stop execution (return to calle
+           r)
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      208          array.lookup(!.Bytecode, IP + 1, N),
+      209          NewFP = FP - N,
+      210          ( if NewFP < !.SP then
+      211 -            throw(vm_error("stack overflow: frame collision"))
+      211 +            throw(vm_error_at(IP, "stack overflow: frame colli
+          +sion"))                                                       
+      212          else
+      213              run(Ctx, Env, Context, GenStack, !Store, IP + 2, R
+           P, NewFP, !SP,
+      214                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      234                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      235          ;
+      236              GenStack = [],
+      237 -            throw(vm_error("endArray without matching startArr
+          -ay"))                                                         
+      237 +            throw(vm_error_at(IP, "endArray without matching s
+          +tartArray"))                                                  
+      238          )
+      239      else if Opcode = oc_call then
+      240          % call: pop closure, set RP to return address, switch 
+           context, jump
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      304          run(Ctx, Env, Context, GenStack, !Store, IP + 1, RP, F
+           P, !SP,
+      305              !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      306      else
+      307 -        throw(vm_error("unknown opcode"))                     
+      307 +        throw(vm_error_at(IP, "unknown opcode"))              
+      308      ).
+      309  
+      310  %-------------------------------------------------------------
+           ----------%
+
+● Bash(make test 2>&1 | tail -10)
+  ⎿  Making Mercury/os/operator_table.o
+     Making Mercury/os/operators.o
+     Making Mercury/os/parser.o
+     … +7 lines (ctrl+o to expand)
+
+● Bash(pkill -f froth; sleep 1; make test 2>&1 | tail -10)
+  ⎿  Error: Exit code 144
+
+● Bash(make test 2>&1 | tail -10)
+  ⎿  PASS: term_convert           
+     PASS: time
+     PASS: transform-values
+     … +7 lines (ctrl+o to expand)
+
+● All tests pass. Let me verify the new error format:
+
+● Bash(./bin/froth -e '0 peek println!' 2>&1 | grep -v '^FROTH:')
+  ⎿  9
+
+● Bash(./bin/froth -e '[] 99999 close !' 2>&1 | grep -v '^FROTH:')
+  ⎿ Uncaught Mercury exception:                                            
+    index_out_of_bounds("array.lookup: index 99999 not in range [0, 32767]"
+    )
+    Stack dump not available in this grade.
+
+
+● Bash(./bin/froth -e '[] 100 close !' 2>&1 | grep -v '^FROTH:')
+  ⎿  Uncaught Mercury exception:                                      
+     index_out_of_bounds("array.lookup: index 0 not in range [0, -1]")
+     Stack dump not available in this grade.
+
+● Bash(./bin/froth -e '17280 peek println!' 2>&1 | grep -v '^FROTH:')
+  ⎿  0
+
+● Bash(./bin/froth -e '[] 17280 close !' 2>&1 | grep -v '^FROTH:')
+  ⎿ Runtime error: vm error at 17280: abort: execution reached uninitialize
+    d bytecode
+
+
+● The new error format is working:
+  Runtime error: vm error at 17280: abort: execution reached uninitialized bytecode
+
+> Can we include the address for type errors, or would that cause 
+difficulties? 
+
+● It's possible but requires some changes. The challenge is:
+
+  1. type_error is shared between the interpreter (eval.m) and VM - the interpreter has no IP concept
+  2. Helper predicates like vm_peek, vm_poke, vm_deref don't currently receive IP
+
+  We could add a new type_error_at(int, string, value) variant (like vm_error_at), and pass IP to the helper predicates. Want me to implement that?
+
+> Perhaps we can define a `froth_error` type that could by either an 
+eval_error or a vm_error? It would be useful to distinguish those, and we 
+could include an address value only for the latter cases. What do you think?
+ 
+
+● That's a cleaner design. The structure would be:
+
+  :- type froth_error
+      --->    interp_error(eval_error)    % Interpreter error (no IP)
+      ;       vm_error(int, vm_err).      % VM error with IP
+
+  :- type vm_err
+      --->    vm_type_error(string, value)
+      ;       vm_stack_underflow(string)
+      ;       vm_index_out_of_bounds(int, int)
+      ;       vm_abort
+      ;       vm_invalid_opcode
+      ;       vm_unknown_opcode
+      ;       vm_frame_collision
+      ;       vm_unmatched_end_array.
+
+  Benefits:
+  - Clear separation between interpreter and VM error domains
+  - All VM errors naturally include IP
+  - Can add VM-specific errors without polluting eval_error
+  - Pattern matching distinguishes error source
+
+  The refactor would touch:
+  - types.m - add new types
+  - vm.m - throw vm_error instead of eval_error
+  - main.m or wherever errors are caught/formatted
+
+  It's a moderate refactor but results in a cleaner architecture. Want me to proceed?
+
+> I have restored the files to their previous state. Please proceed with the
+ refactor. 
+
+● I'll implement the refactor step by step. Let me start by updating types.m:
+
+● Read(src/types.m)
+  ⎿  Read 50 lines
+
+● Read(src/types.m)
+  ⎿  Read 39 lines
+
+● Search(pattern: "eval_error|format_error", path: "src/main.m", output_mode:
+        "content")
+  ⎿  Error searching files
+
+● Search(pattern: "format_error", path: "src", output_mode: "content")
+  ⎿  Found 13 lines (ctrl+o to expand)
+
+● Search(pattern: "catch.*eval_error", path: "src/froth.m", output_mode:
+        "content")
+  ⎿  Found 0 lines 
+
+● Search(pattern: "EvalError"", path: "src/froth.m", output_mode: "content")
+  ⎿  Found 0 lines 
+
+● Read(src/froth.m)
+  ⎿  Read 20 lines
+
+● Now I understand the structure. Let me implement the refactor:
+
+● Update(src/types.m)
+  ⎿  Added 23 lines, removed 2 lines                                     
+      156  % Runtime errors
+      157  %-------------------------------------------------------------
+           ----------%
+      158  
+      159 +    % Interpreter errors (no instruction pointer)             
+      160  :- type eval_error
+      161      --->    stack_underflow(string)         % Operation that c
+           aused it
+      162      ;       type_error(string, value)       % Expected type, a
+           ctual value
+      163      ;       undefined_name(string_id)
+      164      ;       index_out_of_bounds(int, int)   % Index, array siz
+           e
+      164 -    ;       io_error(string, string, string)  % Operation, fil
+          -ename, message                                                
+      165 -    ;       vm_error(string).               % VM execution err
+          -or                                                            
+      165 +    ;       io_error(string, string, string).  % Operation, fi
+          +lename, message                                               
+      166  
+      167 +    % VM-specific errors (always have instruction pointer)    
+      168 +:- type vm_err                                                
+      169 +    --->    vm_type_error(string, value)    % Expected type, a
+          +ctual value                                                   
+      170 +    ;       vm_stack_underflow(string)      % Operation that c
+          +aused it                                                      
+      171 +    ;       vm_index_out_of_bounds(int, int) % Index, array si
+          +ze                                                            
+      172 +    ;       vm_abort                        % Executed abort i
+          +nstruction                                                    
+      173 +    ;       vm_invalid_opcode               % Invalid operator
+          + number                                                       
+      174 +    ;       vm_unknown_opcode               % Unknown instruct
+          +ion opcode                                                    
+      175 +    ;       vm_frame_collision              % Stack overflow  
+      176 +    ;       vm_unmatched_end_array.         % endArray without
+          + startArray                                                   
+      177 +                                                              
+      178 +    % Top-level error type distinguishing interpreter and VM e
+          +rrors                                                         
+      179 +:- type froth_error                                           
+      180 +    --->    interp_error(eval_error)        % Interpreter erro
+          +r (no IP)                                                     
+      181 +    ;       vm_error(int, vm_err).          % VM error at inst
+          +ruction pointer                                               
+      182 +                                                              
+      183      % format_error(StringTable, Error) = Message:
+      184      % Convert an eval_error to a human-readable message.
+      185      %
+      186  :- func format_error(string_table, eval_error) = string.
+      187  
+      188 +    % format_froth_error(StringTable, Error) = Message:       
+      189 +    % Convert a froth_error to a human-readable message.      
+      190 +    %                                                         
+      191 +:- func format_froth_error(string_table, froth_error) = string
+          +.                                                             
+      192 +                                                              
+      193  %-------------------------------------------------------------
+           ----------%
+      194  
+      195  :- implementation.
+
+● Update(src/types.m)
+  ⎿  Added 20 lines, removed 2 lines                                     
+      268      string.format("index out of bounds: %d (array size: %d)", 
+           [i(Index), i(Size)]).
+      269  format_error(_, io_error(Op, Filename, Msg)) =
+      270      string.format("%s: %s: %s", [s(Op), s(Filename), s(Msg)]).
+      271 -format_error(_, vm_error(Msg)) =                              
+      272 -    string.format("vm error: %s", [s(Msg)]).                  
+      271  
+      272 +format_froth_error(ST, interp_error(EvalError)) =             
+      273 +    format_error(ST, EvalError).                              
+      274 +format_froth_error(ST, vm_error(IP, VmErr)) =                 
+      275 +    string.format("vm error at %d: %s", [i(IP), s(format_vm_er
+          +r(ST, VmErr))]).                                              
+      276 +                                                              
+      277 +:- func format_vm_err(string_table, vm_err) = string.         
+      278 +                                                              
+      279 +format_vm_err(_, vm_type_error(Expected, Actual)) =           
+      280 +    string.format("expected %s, got %s",                      
+      281 +        [s(Expected), s(value_type_name(Actual))]).           
+      282 +format_vm_err(_, vm_stack_underflow(Op)) =                    
+      283 +    string.format("stack underflow in '%s'", [s(Op)]).        
+      284 +format_vm_err(_, vm_index_out_of_bounds(Index, Size)) =       
+      285 +    string.format("index out of bounds: %d (array size: %d)", 
+          +[i(Index), i(Size)]).                                         
+      286 +format_vm_err(_, vm_abort) = "execution reached uninitialized 
+          +bytecode".                                                    
+      287 +format_vm_err(_, vm_invalid_opcode) = "invalid operator number
+          +".                                                            
+      288 +format_vm_err(_, vm_unknown_opcode) = "unknown opcode".       
+      289 +format_vm_err(_, vm_frame_collision) = "stack overflow: frame 
+          +collision".                                                   
+      290 +format_vm_err(_, vm_unmatched_end_array) = "endArray without m
+          +atching startArray".                                          
+      291 +                                                              
+      292  :- func value_type_name(value) = string.
+      293  
+      294  value_type_name(intval(_)) = "int".
+
+● Now let me update vm.m to use the new error types:
+
+● Read(src/vm.m)
+  ⎿  Read 200 lines
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 2 lines                                       
+      126      array.lookup(!.Bytecode, IP, Opcode),
+      127      ( if Opcode = oc_abort then
+      128          % abort: throw an exception (useful for catching jumps
+            to uninitialized memory)
+      129 -        throw(vm_error("abort: execution reached uninitialized
+          - bytecode at address " ++                                     
+      130 -            string.from_int(IP)))                             
+      129 +        throw(vm_error(IP, vm_abort))                         
+      130      else if Opcode = oc_pushInt then
+      131          % pushInt n: push integer n onto stack
+      132          array.lookup(!.Bytecode, IP + 1, N),
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      160                      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      161              )
+      162          else
+      163 -            throw(vm_error("invalid operator number"))        
+      163 +            throw(vm_error(IP, vm_invalid_opcode))            
+      164          )
+      165      else if Opcode = oc_return then
+      166          % return: if RP is -1, stop execution (return to calle
+           r)
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      208          array.lookup(!.Bytecode, IP + 1, N),
+      209          NewFP = FP - N,
+      210          ( if NewFP < !.SP then
+      211 -            throw(vm_error("stack overflow: frame collision"))
+      211 +            throw(vm_error(IP, vm_frame_collision))           
+      212          else
+      213              run(Ctx, Env, Context, GenStack, !Store, IP + 2, R
+           P, NewFP, !SP,
+      214                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      234                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      235          ;
+      236              GenStack = [],
+      237 -            throw(vm_error("endArray without matching startArr
+          -ay"))                                                         
+      237 +            throw(vm_error(IP, vm_unmatched_end_array))       
+      238          )
+      239      else if Opcode = oc_call then
+      240          % call: pop closure, set RP to return address, switch 
+           context, jump
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      249              run(Ctx, Env, Context, GenStack, !Store, IP + 1, R
+           P, FP, !SP,
+      250                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      251          else
+      252 -            throw(type_error("closure", V))                   
+      252 +            throw(vm_error(IP, vm_type_error("closure", V)))  
+      253          )
+      254      else if Opcode = oc_tailCall then
+      255          % tail-call: pop closure, preserve RP, switch context,
+            jump
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      268                      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      269              )
+      270          else
+      271 -            throw(type_error("closure", V))                   
+      271 +            throw(vm_error(IP, vm_type_error("closure", V)))  
+      272          )
+      273      else if Opcode = oc_saveReturnPtr then
+      274          % saveReturnPtr: push current RP onto data stack
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      282              run(Ctx, Env, Context, GenStack, !Store, IP + 1, N
+           ewRP, FP, !SP,
+      283                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      284          else
+      285 -            throw(type_error("int", V))                       
+      285 +            throw(vm_error(IP, vm_type_error("int", V)))      
+      286          )
+      287      else if Opcode = oc_saveContextPtr then
+      288          % saveContextPtr: push current context array onto data
+            stack
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      296              run(Ctx, Env, NewContext, GenStack, !Store, IP + 1
+           , RP, FP, !SP,
+      297                  !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      298          else
+      299 -            throw(type_error("array", V))                     
+      299 +            throw(vm_error(IP, vm_type_error("array", V)))    
+      300          )
+      301      else if Opcode = oc_pushQuotedApply then
+      302          % pushQuotedApply: push quoted apply term ('!)
+
+● Update(src/vm.m)
+  ⎿  Added 1 line, removed 1 line                                        
+      304          run(Ctx, Env, Context, GenStack, !Store, IP + 1, RP, F
+           P, !SP,
+      305              !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      306      else
+      307 -        throw(vm_error("unknown opcode"))                     
+      307 +        throw(vm_error(IP, vm_unknown_opcode))                
+      308      ).
+      309  
+      310  %-------------------------------------------------------------
+           ----------%
+
+● Now I need to update the helper predicates to take IP. Let me read them:
+
+● Read(src/vm.m)
+  ⎿  Read 86 lines
+
+● Update(src/vm.m)
+  ⎿  Added 4 lines, removed 4 lines                                      
+      333  % deref: ( int -- value ) Retrieve value from constant pool
+      334  %-------------------------------------------------------------
+           ----------%
+      335  
+      336 -:- pred vm_deref(                                             
+      336 +:- pred vm_deref(int::in,                                     
+      337      array(value)::array_di, array(value)::array_uo,
+      338      int::in, int::out,
+      339      array(value)::in) is det.
+      340  
+      341 -vm_deref(!Stack, !SP, Pool) :-                                
+      341 +vm_deref(IP, !Stack, !SP, Pool) :-                            
+      342      datastack.pop("deref", V, !Stack, !SP),
+      343      ( if V = intval(Idx) then
+      344          ( if Idx >= 0, Idx < array.size(Pool) then
+      345              array.lookup(Pool, Idx, Value),
+      346              datastack.push(Value, !Stack, !SP)
+      347          else
+      348 -            throw(index_out_of_bounds(Idx, array.size(Pool))) 
+      348 +            throw(vm_error(IP, vm_index_out_of_bounds(Idx, arr
+          +ay.size(Pool))))                                              
+      349          )
+      350      else
+      351 -        throw(type_error("int", V))                           
+      351 +        throw(vm_error(IP, vm_type_error("int", V)))          
+      352      ).
+      353  
+      354  %-------------------------------------------------------------
+           ----------%
+
+● Update(src/vm.m)
+  ⎿  Added 7 lines, removed 7 lines                                      
+      355  % peek: ( addr -- int ) Read value from bytecode address
+      356  %-------------------------------------------------------------
+           ----------%
+      357  
+      358 -:- pred vm_peek(                                              
+      358 +:- pred vm_peek(int::in,                                      
+      359      array(value)::array_di, array(value)::array_uo,
+      360      int::in, int::out,
+      361      array(int)::in) is det.
+      362  
+      363 -vm_peek(!Stack, !SP, Bytecode) :-                             
+      363 +vm_peek(IP, !Stack, !SP, Bytecode) :-                         
+      364      datastack.pop("peek", V, !Stack, !SP),
+      365      ( if V = intval(Addr) then
+      366          Value = bytecode.peek(Addr, Bytecode),
+      367          datastack.push(intval(Value), !Stack, !SP)
+      368      else
+      369 -        throw(type_error("int", V))                           
+      369 +        throw(vm_error(IP, vm_type_error("int", V)))          
+      370      ).
+      371  
+      372  %-------------------------------------------------------------
+           ----------%
+      373  % poke: ( value addr -- ) Write value to bytecode address
+      374  %-------------------------------------------------------------
+           ----------%
+      375  
+      376 -:- pred vm_poke(                                              
+      376 +:- pred vm_poke(int::in,                                      
+      377      array(value)::array_di, array(value)::array_uo,
+      378      int::in, int::out,
+      379      array(int)::array_di, array(int)::array_uo) is det.
+      380  
+      381 -vm_poke(!Stack, !SP, !Bytecode) :-                            
+      381 +vm_poke(IP, !Stack, !SP, !Bytecode) :-                        
+      382      datastack.pop("poke", AddrVal, !Stack, !SP),
+      383      datastack.pop("poke", ValueVal, !Stack, !SP),
+      384      ( if AddrVal = intval(Addr), ValueVal = intval(Value) then
+      385          bytecode.poke(Addr, Value, !Bytecode)
+      386      else if AddrVal = intval(_) then
+      387 -        throw(type_error("int", ValueVal))                    
+      387 +        throw(vm_error(IP, vm_type_error("int", ValueVal)))   
+      388      else
+      389 -        throw(type_error("int", AddrVal))                     
+      389 +        throw(vm_error(IP, vm_type_error("int", AddrVal)))    
+      390      ).
+      391  
+      392  %-------------------------------------------------------------
+           ----------%
+
+● Now I need to update the call sites to pass IP:
+
+● Update(src/vm.m)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      142                  run(Ctx, Env, Context, GenStack, !Store, IP + 
+           2, RP, FP, !SP,
+      143                      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      144              else if Op = op_deref then
+      145 -                vm_deref(!Stack, !SP, !.Pool),                
+      145 +                vm_deref(IP, !Stack, !SP, !.Pool),            
+      146                  run(Ctx, Env, Context, GenStack, !Store, IP + 
+           2, RP, FP, !SP,
+      147                      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      148              else if Op = op_peek then
+      149 -                vm_peek(!Stack, !SP, !.Bytecode),             
+      149 +                vm_peek(IP, !Stack, !SP, !.Bytecode),         
+      150                  run(Ctx, Env, Context, GenStack, !Store, IP + 
+           2, RP, FP, !SP,
+      151                      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      152              else if Op = op_poke then
+      153 -                vm_poke(!Stack, !SP, !Bytecode),              
+      153 +                vm_poke(IP, !Stack, !SP, !Bytecode),          
+      154                  run(Ctx, Env, Context, GenStack, !Store, IP + 
+           2, RP, FP, !SP,
+      155                      !Stack, !Pool, !Bytecode, !HashTable, !IO)
+      156              else
+
+● Now I need to update froth.m to catch froth_error:
+
+● Search(pattern: "univ_to_type.*EvalError", path: "src/froth.m", output_mode:
+        "content")
+  ⎿  Found 4 lines (ctrl+o to expand)
+
+● Read(src/froth.m)
+  ⎿  Read 20 lines
+
+● Update(src/froth.m)
+  ⎿  Added 5 lines                                                       
+      228                              [s(types.format_error(ST1, EvalErr
+           or))], !IO),
+      229                          init_pool(Pool, HT),
+      230                          Result = stdlib_error
+      231 +                    else if univ_to_type(Exn, FrothError) then
+      232 +                        io.format("Runtime error in stdlib: %s
+          +\n",                                                          
+      233 +                            [s(types.format_froth_error(ST1, F
+          +rothError))], !IO),                                           
+      234 +                        init_pool(Pool, HT),                  
+      235 +                        Result = stdlib_error                 
+      236                      else
+      237                          rethrow(EvalResult)
+      238                      )
+
+● Read(src/froth.m)
+  ⎿  Read 20 lines
+
+● Update(src/froth.m)
+  ⎿  Added 8 lines                                                       
+      402                      datastack.init(Array, Ptr),
+      403                      init_pool(Pool, HT),
+      404                      Success = no
+      405 +                else if univ_to_type(Exn, FrothError) then    
+      406 +                    io.format("Runtime error: %s\n",          
+      407 +                        [s(types.format_froth_error(ST1, Froth
+          +Error))], !IO),                                               
+      408 +                    ST = ST1, PP = PP0, Env = Env0,           
+      409 +                    bytecode.init(BC),                        
+      410 +                    datastack.init(Array, Ptr),               
+      411 +                    init_pool(Pool, HT),                      
+      412 +                    Success = no                              
+      413                  else
+      414                      rethrow(EvalResult)
+      415                  )
+
+● Search(pattern: "univ_to_type.*EvalError", path: "src/froth.m", output_mode:
+        "content")
+  ⎿  Found 87 lines (ctrl+o to expand)
+
+● Update(src/froth.m)
+  ⎿  Added 8 lines                                                       
+      470                          datastack.init(Array, Ptr),
+      471                          init_pool(Pool, HT),
+      472                          Success = no
+      473 +                    else if univ_to_type(Exn, FrothError) then
+      474 +                        io.format("Runtime error: %s\n",      
+      475 +                            [s(types.format_froth_error(ST1, F
+          +rothError))], !IO),                                           
+      476 +                        ST = ST1, PP = PP0, Env = Env0,       
+      477 +                        bytecode.init(BC),                    
+      478 +                        datastack.init(Array, Ptr),           
+      479 +                        init_pool(Pool, HT),                  
+      480 +                        Success = no                          
+      481                      else
+      482                          rethrow(EvalResult)
+      483                      )
+
+● Read(src/froth.m)
+  ⎿  Read 25 lines
+
+● Update(src/froth.m)
+  ⎿  Added 7 lines                                                       
+      583                      bytecode.init(BC),
+      584                      datastack.init(Array, Ptr),
+      585                      init_pool(Pool, HT)
+      586 +                else if univ_to_type(Exn, FrothError) then    
+      587 +                    io.format("Runtime error: %s\n",          
+      588 +                        [s(types.format_froth_error(ST1, Froth
+          +Error))], !IO),                                               
+      589 +                    ST = ST1, PP = PP0, Env = Env0,           
+      590 +                    bytecode.init(BC),                        
+      591 +                    datastack.init(Array, Ptr),               
+      592 +                    init_pool(Pool, HT)                       
+      593                  else
+      594                      rethrow(Result)
+      595                  )
+
+● Now let me update eval_test.m:
+
+● Read(src/unit_tests/eval_test.m)
+  ⎿  Read 20 lines
+
+● Update(src/unit_tests/eval_test.m)
+  ⎿  Added 3 lines                                                       
+      126                  ( if univ_to_type(Exn, EvalError) then
+      127                      io.format("  Error: %s\n",
+      128                          [s(types.format_error(IT, EvalError))]
+           , !IO)
+      129 +                else if univ_to_type(Exn, FrothError) then    
+      130 +                    io.format("  Error: %s\n",                
+      131 +                        [s(types.format_froth_error(IT, FrothE
+          +rror))], !IO)                                                 
+      132                  else
+      133                      io.format("  Exception: %s\n",
+      134                          [s(string.string(univ_value(Exn)))], !
+           IO)
+
+● Let me build and test:
+
+● Bash(make test 2>&1 | head -50)
+  ⎿  cd src && mmc --make froth     
+     Making Mercury/int3s/froth.int3
+     Making Mercury/int3s/types.int3
+     … +47 lines (ctrl+o to expand)
+
+● Bash(make test 2>&1 | tail -10)
+  ⎿  PASS: term_convert           
+     PASS: time
+     PASS: transform-values
+     … +7 lines (ctrl+o to expand)
+
+● All tests pass. Let me verify the new error format:
+
+● Bash(./bin/froth -e '[] 17280 close !' 2>&1 | grep -v '^FROTH:')
+  ⎿ Runtime error: vm error at 17280: execution reached uninitialized bytec
+    ode
+
+
+● Bash(./bin/froth -e '"not-a-closure" 0 close !' 2>&1 | grep -v '^FROTH:')
+  ⎿  Runtime error: type error: expected map or array, got string
+
+● Bash(./bin/froth -e '{ "not-int" deref } 0 close !' 2>&1 | grep -v '^FROTH:')
+  ⎿  Runtime error: type error: expected map or array, got closure
+
+● Bash(./bin/froth -e '"not-int" deref' 2>&1 | grep -v '^FROTH:')
+  ⎿  Runtime error: type error: expected int, got string
+
+● Bash(./bin/froth -e '"not-int" "also-not-int" emit-at!' 2>&1 | grep -v
+      '^FROTH:')
+  ⎿  Runtime error: vm error at 6114: expected int, got string
+
+● The refactor is complete. VM errors now include the instruction pointer:
+
+  Runtime error: vm error at 17280: execution reached uninitialized bytecode
+  Runtime error: vm error at 6114: expected int, got string
+
+  Interpreter errors remain unchanged:
+  Runtime error: type error: expected int, got string
+
+> update README.md 
+
+● Read(README.md)
+  ⎿  Read 66 lines
+
+● Update(README.md)
+  ⎿  Added 1 line                                                        
+      43  | `type error: expected T, got U` | Operation expected type T b
+          ut got type U |
+      44  | `undefined name: N` | Name N is not bound and is not an opera
+          tor |
+      45  | `index out of bounds: I (array size: S)` | Array index I is n
+          ot in range 0..S-1 |
+      46 +| `vm error at ADDR: message` | Error in compiled bytecode at i
+         +nstruction ADDR |                                              
+      47  
+      48  ## Language Comparison
+      49  
+
+● Done. Added the VM error format to the Runtime Errors table.
+
+> commit this 
+
+● Bash(git status && git diff --stat)
+  ⎿  On branch master                                      
+     Your branch is ahead of 'origin/master' by 10 commits.
+       (use "git push" to publish your local commits)
+     … +13 lines (ctrl+o to expand)
+
+● Bash(git diff --cached --stat)
+  ⎿  README.md                  |  1 +                                     
+     src/froth.m                | 28 +++++++++++++++++++++++++++
+     src/types.m                | 47 ++++++++++++++++++++++++++++++++++++++
+    … +5 lines (ctrl+o to expand)
+
+
+● Bash(git commit -m "Refactor error types to distinguish interpreter and VM
+      errors…)
+  ⎿ [master 78de7f8] Refactor error types to distinguish interpreter and VM
+     errors
+     5 files changed, 98 insertions(+), 28 deletions(-)
+
+
+● Done. Committed as 78de7f8.
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 193k/200k tokens (96%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 16.7k tokens (8.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 113.0k tokens (56.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 7k (3.7%)
+     ⛁ ⛁ ⛁ ⛀ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 129 tokens
+     └ MERCURY.md: 68 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.1k tokens
+     └ FROTH_COMPILER.md: 6.6k tokens
+     └ FROTH_BYTECODE.md: 272 tokens
+     └ FROTH_GUIDE.md: 793 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
