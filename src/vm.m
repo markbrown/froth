@@ -81,6 +81,7 @@
 
 :- implementation.
 
+:- import_module bytecode.
 :- import_module datastack.
 :- import_module eval.
 :- import_module exception.
@@ -143,6 +144,14 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
                     !Stack, !Pool, !Bytecode, !HashTable, !IO)
             else if Op = op_deref then
                 vm_deref(!Stack, !SP, !.Pool),
+                run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, FP, !SP,
+                    !Stack, !Pool, !Bytecode, !HashTable, !IO)
+            else if Op = op_peek then
+                vm_peek(!Stack, !SP, !.Bytecode),
+                run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, FP, !SP,
+                    !Stack, !Pool, !Bytecode, !HashTable, !IO)
+            else if Op = op_poke then
+                vm_poke(!Stack, !SP, !Bytecode),
                 run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, FP, !SP,
                     !Stack, !Pool, !Bytecode, !HashTable, !IO)
             else
@@ -341,6 +350,44 @@ vm_deref(!Stack, !SP, Pool) :-
         )
     else
         throw(type_error("int", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% peek: ( addr -- int ) Read value from bytecode address
+%-----------------------------------------------------------------------%
+
+:- pred vm_peek(
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out,
+    array(int)::in) is det.
+
+vm_peek(!Stack, !SP, Bytecode) :-
+    datastack.pop("peek", V, !Stack, !SP),
+    ( if V = intval(Addr) then
+        Value = bytecode.peek(Addr, Bytecode),
+        datastack.push(intval(Value), !Stack, !SP)
+    else
+        throw(type_error("int", V))
+    ).
+
+%-----------------------------------------------------------------------%
+% poke: ( value addr -- ) Write value to bytecode address
+%-----------------------------------------------------------------------%
+
+:- pred vm_poke(
+    array(value)::array_di, array(value)::array_uo,
+    int::in, int::out,
+    array(int)::array_di, array(int)::array_uo) is det.
+
+vm_poke(!Stack, !SP, !Bytecode) :-
+    datastack.pop("poke", AddrVal, !Stack, !SP),
+    datastack.pop("poke", ValueVal, !Stack, !SP),
+    ( if AddrVal = intval(Addr), ValueVal = intval(Value) then
+        bytecode.poke(Addr, Value, !Bytecode)
+    else if AddrVal = intval(_) then
+        throw(type_error("int", ValueVal))
+    else
+        throw(type_error("int", AddrVal))
     ).
 
 %-----------------------------------------------------------------------%
