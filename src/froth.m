@@ -645,7 +645,9 @@ print_usage(!IO) :-
 eval_terms_wrapper(Ctx, ST0, PP0, BC0, Terms, Env0, Array0, Ptr0,
         Pool0, HT0, {ST, PP, BC, Env, Array, Ptr, Pool, HT}, !IO) :-
     Store0 = eval_store(PP0, ST0),
-    eval.eval_terms(Ctx, Terms, Env0, Env, Store0, Store,
+    % FP starts at top of stack array (no outer VM frames at top level)
+    FP0 = array.size(Array0),
+    eval.eval_terms(Ctx, Terms, Env0, Env, Store0, Store, FP0,
         Ptr0, Ptr, Array0, Array, Pool0, Pool, BC0, BC, HT0, HT, !IO),
     PP = Store ^ es_pool_count,
     ST = Store ^ es_string_table.

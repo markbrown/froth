@@ -244,7 +244,8 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
                 !Stack, !Pool, !Bytecode, !HashTable, !IO)
         else if V = closureval(ClosureEnv, Terms) then
             % Call interpreter closure, then continue at return address
-            eval.eval_terms(Ctx, Terms, ClosureEnv, _, !Store, !SP, !Stack, !Pool,
+            % Pass current FP so nested VM calls don't overlap with our frame
+            eval.eval_terms(Ctx, Terms, ClosureEnv, _, !Store, FP, !SP, !Stack, !Pool,
                 !Bytecode, !HashTable, !IO),
             run(Ctx, Env, Context, GenStack, !Store, IP + 1, RP, FP, !SP,
                 !Stack, !Pool, !Bytecode, !HashTable, !IO)
@@ -259,7 +260,8 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
                 !Stack, !Pool, !Bytecode, !HashTable, !IO)
         else if V = closureval(ClosureEnv, Terms) then
             % Tail-call interpreter closure, then return
-            eval.eval_terms(Ctx, Terms, ClosureEnv, _, !Store, !SP, !Stack, !Pool,
+            % Pass current FP so nested VM calls don't overlap with our frame
+            eval.eval_terms(Ctx, Terms, ClosureEnv, _, !Store, FP, !SP, !Stack, !Pool,
                 !Bytecode, !HashTable, !IO),
             ( if RP = -1 then
                 true

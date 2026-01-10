@@ -14,7 +14,7 @@
 
 %-----------------------------------------------------------------------%
 
-    % eval_terms(Ctx, Terms, !Env, !Store,
+    % eval_terms(Ctx, Terms, !Env, !Store, FP,
     %            !SP, !Stack, !Pool, !Bytecode, !HashTable, !IO):
     %
     % Evaluate a list of terms, updating the environment and stack.
@@ -27,7 +27,8 @@
     %   Env - environment map
     %   Store - bundled PP (pool count) and ST (string table)
     %
-    % Machine register:
+    % Machine registers:
+    %   FP - frame pointer (read-only, for nested VM calls)
     %   SP - stack pointer
     %
     % Threaded memory:
@@ -42,6 +43,7 @@
 :- pred eval_terms(exec_context::in, list(term)::in,
     env::in, env::out,
     eval_store::in, eval_store::out,
+    int::in,
     int::in, int::out,
     array(value)::array_di, array(value)::array_uo,
     array(value)::array_di, array(value)::array_uo,
@@ -85,16 +87,17 @@ set_env(Name, Value, !Env) :-
 % Main evaluation
 %-----------------------------------------------------------------------%
 
-eval_terms(_, [], !Env, !Store, !SP, !Stack, !Pool, !Bytecode, !HashTable, !IO).
-eval_terms(Ctx, [Term | Terms], !Env, !Store, !SP, !Stack, !Pool,
+eval_terms(_, [], !Env, !Store, _, !SP, !Stack, !Pool, !Bytecode, !HashTable, !IO).
+eval_terms(Ctx, [Term | Terms], !Env, !Store, FP, !SP, !Stack, !Pool,
         !Bytecode, !HashTable, !IO) :-
-    eval_term(Ctx, Term, !Env, !Store, !SP, !Stack, !Pool,
+    eval_term(Ctx, Term, !Env, !Store, FP, !SP, !Stack, !Pool,
         !Bytecode, !HashTable, !IO),
-    eval_terms(Ctx, Terms, !Env, !Store, !SP, !Stack, !Pool,
+    eval_terms(Ctx, Terms, !Env, !Store, FP, !SP, !Stack, !Pool,
         !Bytecode, !HashTable, !IO).
 
 :- pred eval_term(exec_context::in, term::in, env::in, env::out,
     eval_store::in, eval_store::out,
+    int::in,
     int::in, int::out,
     array(value)::array_di, array(value)::array_uo,
     array(value)::array_di, array(value)::array_uo,
@@ -102,11 +105,11 @@ eval_terms(Ctx, [Term | Terms], !Env, !Store, !SP, !Stack, !Pool,
     hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     io::di, io::uo) is det.
 
-eval_term(Ctx, Term, !Env, !Store, !SP, !Stack, !Pool,
+eval_term(Ctx, Term, !Env, !Store, FP, !SP, !Stack, !Pool,
         !Bytecode, !HashTable, !IO) :-
     (
         Term = identifier(NameId),
-        eval_identifier(Ctx, NameId, !Env, !Store, !SP, !Stack, !Pool,
+        eval_identifier(Ctx, NameId, !Env, !Store, FP, !SP, !Stack, !Pool,
             !Bytecode, !HashTable, !IO)
     ;
         Term = binder(NameId),
@@ -116,7 +119,7 @@ eval_term(Ctx, Term, !Env, !Store, !SP, !Stack, !Pool,
         eval_function(Terms, !.Env, !Stack, !SP)
     ;
         Term = generator(Terms),
-        eval_generator(Ctx, Terms, !Env, !Store, !SP, !Stack, !Pool,
+        eval_generator(Ctx, Terms, !Env, !Store, FP, !SP, !Stack, !Pool,
             !Bytecode, !HashTable, !IO)
     ;
         Term = quoted(T),
@@ -126,7 +129,7 @@ eval_term(Ctx, Term, !Env, !Store, !SP, !Stack, !Pool,
         datastack.push(V, !Stack, !SP)
     ;
         Term = apply_term,
-        eval_apply(Ctx, !Env, !Store, !SP, !Stack, !Pool,
+        eval_apply(Ctx, !Env, !Store, FP, !SP, !Stack, !Pool,
             !Bytecode, !HashTable, !IO)
     ).
 
@@ -137,6 +140,7 @@ eval_term(Ctx, Term, !Env, !Store, !SP, !Stack, !Pool,
 :- pred eval_identifier(exec_context::in, string_id::in,
     env::in, env::out,
     eval_store::in, eval_store::out,
+    int::in,
     int::in, int::out,
     array(value)::array_di, array(value)::array_uo,
     array(value)::array_di, array(value)::array_uo,
@@ -144,7 +148,7 @@ eval_term(Ctx, Term, !Env, !Store, !SP, !Stack, !Pool,
     hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     io::di, io::uo) is det.
 
-eval_identifier(Ctx, NameId, !Env, !Store, !SP, !Stack, !Pool,
+eval_identifier(Ctx, NameId, !Env, !Store, FP, !SP, !Stack, !Pool,
         !Bytecode, !HashTable, !IO) :-
     OpTable = Ctx ^ ec_op_table,
     ( if get_env(NameId, V, !.Env) then
@@ -152,7 +156,7 @@ eval_identifier(Ctx, NameId, !Env, !Store, !SP, !Stack, !Pool,
     else if map.search(OpTable, NameId, Info) then
         ( if Info ^ oi_operator = op_import then
             % import is special: it can modify Env and Store
-            eval_import(Ctx, !Env, !Store, !SP, !Stack, !Pool,
+            eval_import(Ctx, !Env, !Store, FP, !SP, !Stack, !Pool,
                 !Bytecode, !HashTable, !IO)
         else if Info ^ oi_operator = op_restore then
             % restore is special: it replaces the current Env
@@ -209,6 +213,7 @@ eval_function(Terms, Env, !Stack, !SP) :-
 :- pred eval_generator(exec_context::in, list(term)::in,
     env::in, env::out,
     eval_store::in, eval_store::out,
+    int::in,
     int::in, int::out,
     array(value)::array_di, array(value)::array_uo,
     array(value)::array_di, array(value)::array_uo,
@@ -216,12 +221,12 @@ eval_function(Terms, Env, !Stack, !SP) :-
     hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     io::di, io::uo) is det.
 
-eval_generator(Ctx, Terms, !Env, !Store, !SP, !Stack, !Pool,
+eval_generator(Ctx, Terms, !Env, !Store, FP, !SP, !Stack, !Pool,
         !Bytecode, !HashTable, !IO) :-
     % Save current stack pointer
     SavedSP = !.SP,
     % Evaluate generator terms (they push values onto the stack)
-    eval_terms(Ctx, Terms, !Env, !Store, !SP, !Stack, !Pool,
+    eval_terms(Ctx, Terms, !Env, !Store, FP, !SP, !Stack, !Pool,
         !Bytecode, !HashTable, !IO),
     % Extract values pushed by the generator as an array
     datastack.extract_range(!.Stack, SavedSP, !.SP, ResultArray),
@@ -235,6 +240,7 @@ eval_generator(Ctx, Terms, !Env, !Store, !SP, !Stack, !Pool,
 
 :- pred eval_apply(exec_context::in, env::in, env::out,
     eval_store::in, eval_store::out,
+    int::in,
     int::in, int::out,
     array(value)::array_di, array(value)::array_uo,
     array(value)::array_di, array(value)::array_uo,
@@ -242,19 +248,18 @@ eval_generator(Ctx, Terms, !Env, !Store, !SP, !Stack, !Pool,
     hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     io::di, io::uo) is det.
 
-eval_apply(Ctx, Env, Env, !Store, !SP, !Stack, !Pool,
+eval_apply(Ctx, Env, Env, !Store, FP, !SP, !Stack, !Pool,
         !Bytecode, !HashTable, !IO) :-
     datastack.pop("!", V, !Stack, !SP),
     ( if V = closureval(ClosureEnv, Terms) then
         % Evaluate with closure's env, then discard env changes (lexical scoping)
-        eval_terms(Ctx, Terms, ClosureEnv, _, !Store, !SP, !Stack, !Pool,
+        eval_terms(Ctx, Terms, ClosureEnv, _, !Store, FP, !SP, !Stack, !Pool,
             !Bytecode, !HashTable, !IO)
     else if V = bytecodeval(Context, CodeAddr) then
         % Execute bytecode closure via VM
         % RP=-1 means return to eval_apply (sentinel value)
-        % FP starts at top of stack array (frame grows downward)
+        % FP is passed through from caller (set at top level or by outer VM)
         % GenStack starts empty (no active generators)
-        FP = array.size(!.Stack),
         vm.run(Ctx, Env, Context, [], !Store, CodeAddr, -1, FP, !SP,
             !Stack, !Pool, !Bytecode, !HashTable, !IO)
     else
@@ -267,6 +272,7 @@ eval_apply(Ctx, Env, Env, !Store, !SP, !Stack, !Pool,
 
 :- pred eval_import(exec_context::in, env::in, env::out,
     eval_store::in, eval_store::out,
+    int::in,
     int::in, int::out,
     array(value)::array_di, array(value)::array_uo,
     array(value)::array_di, array(value)::array_uo,
@@ -274,7 +280,7 @@ eval_apply(Ctx, Env, Env, !Store, !SP, !Stack, !Pool,
     hash_table(value, int)::hash_table_di, hash_table(value, int)::hash_table_uo,
     io::di, io::uo) is det.
 
-eval_import(Ctx, !Env, !Store, !SP, !Stack, !Pool,
+eval_import(Ctx, !Env, !Store, FP, !SP, !Stack, !Pool,
         !Bytecode, !HashTable, !IO) :-
     BaseDir = Ctx ^ ec_base_dir,
     OpTable = Ctx ^ ec_op_table,
@@ -299,7 +305,7 @@ eval_import(Ctx, !Env, !Store, !SP, !Stack, !Pool,
             parser.parse(Tokens, ParseResult),
             (
                 ParseResult = ok(Terms),
-                eval_terms(NewCtx, Terms, !Env, !Store, !SP, !Stack, !Pool,
+                eval_terms(NewCtx, Terms, !Env, !Store, FP, !SP, !Stack, !Pool,
                     !Bytecode, !HashTable, !IO)
             ;
                 ParseResult = error(ParseError),
