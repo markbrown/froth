@@ -56,6 +56,7 @@
 % Opcode constants
 %-----------------------------------------------------------------------%
 
+:- func oc_abort = int.
 :- func oc_pushInt = int.
 :- func oc_op = int.
 :- func oc_return = int.
@@ -86,31 +87,33 @@
 :- import_module int.
 :- import_module operator_table.
 :- import_module operators.
+:- import_module string.
 
 %-----------------------------------------------------------------------%
 % Opcodes
 % NOTE: These numbers must be kept in sync with lib/bytecode.froth
 %-----------------------------------------------------------------------%
 
-oc_pushInt = 0.
-oc_op = 1.
-oc_return = 2.
-oc_pushString = 3.
-oc_pushContext = 4.
-oc_popUnused = 5.
-oc_pushLocal = 6.
-oc_popLocal = 7.
-oc_enterFrame = 8.
-oc_leaveFrame = 9.
-oc_startArray = 10.
-oc_endArray = 11.
-oc_call = 12.
-oc_tailCall = 17.
-oc_saveReturnPtr = 13.
-oc_restoreReturnPtr = 14.
-oc_saveContextPtr = 15.
-oc_restoreContextPtr = 16.
-oc_pushQuotedApply = 18.
+oc_abort = 0.
+oc_pushInt = 1.
+oc_op = 2.
+oc_return = 3.
+oc_pushString = 4.
+oc_pushContext = 5.
+oc_popUnused = 6.
+oc_pushLocal = 7.
+oc_popLocal = 8.
+oc_enterFrame = 9.
+oc_leaveFrame = 10.
+oc_startArray = 11.
+oc_endArray = 12.
+oc_call = 13.
+oc_tailCall = 18.
+oc_saveReturnPtr = 14.
+oc_restoreReturnPtr = 15.
+oc_saveContextPtr = 16.
+oc_restoreContextPtr = 17.
+oc_pushQuotedApply = 19.
 
 %-----------------------------------------------------------------------%
 % VM execution
@@ -120,7 +123,11 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
         !Stack, !Pool, !Bytecode, !HashTable, !IO) :-
     OpTable = Ctx ^ ec_op_table,
     array.lookup(!.Bytecode, IP, Opcode),
-    ( if Opcode = oc_pushInt then
+    ( if Opcode = oc_abort then
+        % abort: throw an exception (useful for catching jumps to uninitialized memory)
+        throw(vm_error("abort: execution reached uninitialized bytecode at address " ++
+            string.from_int(IP)))
+    else if Opcode = oc_pushInt then
         % pushInt n: push integer n onto stack
         array.lookup(!.Bytecode, IP + 1, N),
         datastack.push(intval(N), !Stack, !SP),

@@ -45,25 +45,26 @@ The `instruction-table` constant maps symbols to VM instruction codes. Available
 
 | Symbol | Code | Description |
 |--------|------|-------------|
-| `'push-int` | 0 | Push next value as integer |
-| `'op` | 1 | Execute operator (next value is opcode) |
-| `'return` | 2 | Return from function |
-| `'push-string` | 3 | Push string from context |
-| `'push-context` | 4 | Push value from context slot |
-| `'pop-unused` | 5 | Discard top of stack |
-| `'push-local` | 6 | Push value from frame slot |
-| `'pop-local` | 7 | Pop value to frame slot |
-| `'enter-frame` | 8 | Allocate frame with n slots |
-| `'leave-frame` | 9 | Deallocate frame |
-| `'start-array` | 10 | Begin array generator |
-| `'end-array` | 11 | End array generator |
-| `'call` | 12 | Call bytecodeval (sets RP) |
-| `'tail-call` | 17 | Tail call bytecodeval (preserves RP) |
-| `'save-return-ptr` | 13 | Push return pointer to stack |
-| `'restore-return-ptr` | 14 | Pop return pointer from stack |
-| `'save-context-ptr` | 15 | Push context pointer to stack |
-| `'restore-context-ptr` | 16 | Pop context pointer from stack |
-| `'push-quoted-apply` | 18 | Push quoted apply term (`'!`) |
+| `'abort` | 0 | Abort execution (catches jumps to uninitialized memory) |
+| `'push-int` | 1 | Push next value as integer |
+| `'op` | 2 | Execute operator (next value is opcode) |
+| `'return` | 3 | Return from function |
+| `'push-string` | 4 | Push string from context |
+| `'push-context` | 5 | Push value from context slot |
+| `'pop-unused` | 6 | Discard top of stack |
+| `'push-local` | 7 | Push value from frame slot |
+| `'pop-local` | 8 | Pop value to frame slot |
+| `'enter-frame` | 9 | Allocate frame with n slots |
+| `'leave-frame` | 10 | Deallocate frame |
+| `'start-array` | 11 | Begin array generator |
+| `'end-array` | 12 | End array generator |
+| `'call` | 13 | Call bytecodeval (sets RP) |
+| `'save-return-ptr` | 14 | Push return pointer to stack |
+| `'restore-return-ptr` | 15 | Pop return pointer from stack |
+| `'save-context-ptr` | 16 | Push context pointer to stack |
+| `'restore-context-ptr` | 17 | Pop context pointer from stack |
+| `'tail-call` | 18 | Tail call bytecodeval (preserves RP) |
+| `'push-quoted-apply` | 19 | Push quoted apply term (`'!`) |
 
 Track the current address manually:
 
