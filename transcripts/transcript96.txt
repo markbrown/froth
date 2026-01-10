@@ -1,0 +1,1407 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.76
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read FROTH_BYTECODE.md (37 lines)
+  ⎿  Read lib/build.froth (29 lines)
+  ⎿  Read lib/compile.froth (143 lines)
+  ⎿  Referenced file FROTH_COMPILER.md
+  ⎿  Read lib/liveness.froth (187 lines)
+
+> Read the bug anaylsis in FROTH_BYTECODE and the code in liveness in you 
+need to, and tell me if there is anything you need to know before proceeding
+ with this fix? 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 37 lines
+
+● Read(lib/liveness.froth)
+  ⎿  Read 187 lines
+
+● I understand the bug and the fix needed. Here's my understanding:
+
+  Current behavior (line 91):
+  bnd-map3 new-seen-free new-seen-bound need-ctx seen-nontail seen-restore-ctx new-seen-frame
+  The need-ctx flag is passed through unchanged.
+
+  Fix needed:
+  When captured-free is non-empty, we need to set need-ctx = 0 to signal that context access is needed (to build the closure's context array). This will cause preceding non-tail calls to save/restore the context pointer.
+
+  The fix pattern mirrors line 21 for free variable identifiers:
+  captured-free # 0 > { 0 } { need-ctx } ?!
+
+  One question: Looking at lines 84-89, there's similar logic for captured-bound:
+  captured-bound # 0 > /has-bound-captures
+  This is used to set leave-frame but not to update need-ctx.
+
+  Should we only set need-ctx = 0 for captured-free (variables that are free in the outer scope), or should we also consider captured-bound (variables that are bound in the outer scope)?
+
+  My understanding is that only captured-free matters because:
+  - Captured free vars come from the context pointer (need context restore)
+  - Captured bound vars come from the frame (need frame, but not context restore)
+
+  Is that correct?
+
+> yes, captured-free only 
+
+● Good. Let me implement the fix.
+
+● Update(lib/liveness.froth)
+  ⎿  Added 3 lines, removed 2 lines                                      
+      87      has-bound-captures seen-frame 1 = and! /needs-leave-frame
+      88      needs-leave-frame { bnd-map2 0 'leave-frame : } { bnd-map2 
+          } ?! /bnd-map3
+      89      has-bound-captures { 0 } { seen-frame } ?! /new-seen-frame
+      90 -    ; Return result                                            
+      91 -    bnd-map3 new-seen-free new-seen-bound need-ctx seen-nontail
+         - seen-restore-ctx new-seen-frame                               
+      90 +    ; Return result - set need-ctx=0 if captured-free is non-em
+         +pty (need context for closure)                                 
+      91 +    captured-free # 0 > { 0 } { need-ctx } ?! /new-need-ctx    
+      92 +    bnd-map3 new-seen-free new-seen-bound new-need-ctx seen-non
+         +tail seen-restore-ctx new-seen-frame                           
+      93    } {
+      94    term isGen {
+      95      ; Generator: shares scope for free vars, but binders are lo
+          cal
+
+● Now let me enable contains in build.froth and run the tests:
+
+● Read(lib/build.froth)
+  ⎿  Read 29 lines
+
+● contains is already enabled. Let me run the tests:
+
+● Bash(make test 2>&1)
+  ⎿  cd src && mmc --make froth        
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+     … +69 lines (ctrl+o to expand)
+
+● All 65 tests pass. Let me update FROTH_BYTECODE.md to remove the bug documentation since it's now fixed:
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Removed 17 lines                                                    
+      14  
+      15  **Codegen reads `'func-addr` from nested nodes**: For nested fu
+          nction terms, codegen emits code to build the context array and
+           create a closure using the pre-computed `node 'func-addr @`. I
+          t does not recursively compile.
+      16  
+      17 -## Known Bug: Missing Context Restore After Non-Tail Calls     
+      18 -                                                               
+      19 -When a non-tail call is followed by a nested function that capt
+         -ures free variables, the liveness pass fails to mark that the c
+         -ontext needs to be restored after the call.                    
+      20 -                                                               
+      21 -**Example:** `scanl-impl` contains:                            
+      22 -```froth                                                       
+      23 -arr idx @ fn! { 0 } { idx 1 + arr fn self self! } ?!           
+      24 -```                                                            
+      25 -                                                               
+      26 -The call `fn!` is a non-tail call (there's a `?!` after it). Th
+         -e inner else branch `{ idx 1 + arr fn self self! }` captures `i
+         -dx`, `arr`, `fn`, and `self` from the outer scope's context.   
+      27 -                                                               
+      28 -**Bug:** When liveness processes the nested function, it correc
+         -tly adds captured free variables to `seen-free`, but it does NO
+         -T set `need-ctx = 0`. This means when the preceding `fn!` call 
+         -is processed, liveness doesn't know that context access is need
+         -ed afterward, so it doesn't set `restore-context`.             
+      29 -                                                               
+      30 -**Result:** After `fn!` returns, the context pointer still poin
+         -ts to `fn`'s context (e.g., `[2]` for `{x =}`). When codegen tr
+         -ies to build the inner else's context array with `push-context 
+         -1`, it accesses index 1 of a single-element array, causing "ind
+         -ex 1 not in range [0, 0]".                                     
+      31 -                                                               
+      32 -**Fix needed:** In `liveness.froth`, when processing a nested f
+         -unction (isFunc case), if `captured-free` is non-empty, set `ne
+         -ed-ctx = 0` before returning. This signals that context access 
+         -is needed to build the closure, so preceding non-tail calls wil
+         -l save/restore the context pointer.                            
+      33 -                                                               
+      17  ## Limitations
+      18  
+      19  Compilation can fail for functions using dynamic constructs (`e
+          nv`, `import`, `applyOperator`) that prevent static analysis.
+
+● Fix complete. Summary:
+
+  1. lib/liveness.froth: Added captured-free # 0 > { 0 } { need-ctx } ?! /new-need-ctx before returning from the isFunc case - this signals that context access is needed when a nested function captures free variables
+  2. FROTH_BYTECODE.md: Removed the bug documentation
+  3. All 65 tests pass, including contains which was already enabled in build.froth
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                      
+     Your branch is ahead of 'origin/master' by 17 commits.
+       (use "git push" to publish your local commits)
+     … +11 lines (ctrl+o to expand)
+
+● Bash(git diff)
+  ⎿  (No content)
+
+● Bash(git log --oneline -5)
+  ⎿  277199b add transcripts 93-95                                        
+     b639920 Fix context array ordering, rename parent-* to outer-* fields
+     87d2472 update CLAUDE.md
+     … +2 lines (ctrl+o to expand)
+
+● Bash(git diff --staged)
+  ⎿  diff --git a/FROTH_BYTECODE.md b/FROTH_BYTECODE.md
+     index e8eb51b..481db03 100644
+     --- a/FROTH_BYTECODE.md
+     … +77 lines (ctrl+o to expand)
+
+● Changes look good:
+  - liveness.froth: Sets need-ctx=0 when nested functions capture free variables
+  - build.froth: Enables contains compilation
+  - FROTH_BYTECODE.md: Removes fixed bug documentation
+
+● Bash(git commit -m "Fix context restore for nested closures capturing free
+      variables…)
+  ⎿ [master 97973a4] Fix context restore for nested closures capturing free
+     variables
+     3 files changed, 4 insertions(+), 25 deletions(-)
+
+
+● Bash(git status)
+  ⎿  On branch master                                      
+     Your branch is ahead of 'origin/master' by 18 commits.
+       (use "git push" to publish your local commits)
+     … +8 lines (ctrl+o to expand)
+
+● Done. Committed as 97973a4.
+
+> Let's review all documentation files for consistency. 
+
+● Read(FROTH.md)
+  ⎿  Read 191 lines
+
+● Read(FROTH_LIBRARY.md)
+  ⎿  Read 447 lines
+
+● Read(FROTH_COMPILER.md)
+  ⎿  Read 476 lines
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 20 lines
+
+● Read(FROTH_GUIDE.md)
+  ⎿  Read 315 lines
+
+● Here's my review of the documentation files:
+
+  Consistency Issues Found:
+
+  1. FROTH_BYTECODE.md is very sparse - After removing the bug documentation, it's only 20 lines. It mostly just points to FROTH_COMPILER.md. Consider either:
+    - Expanding it with more design rationale/overview
+    - Merging its content into FROTH_COMPILER.md
+  2. FROTH_LIBRARY.md not description could be clearer (line 356):
+  not | ( a -- int ) | 0 if a is non-zero or non-integer, else 1
+
+  2. This is technically correct but confusing. Simpler wording: "1 if a is 0, else 0"
+
+  Things that look good:
+
+  - outer- naming* is consistent across FROTH_COMPILER.md (lines 217-218, 247, 310)
+  - Boolean convention (0=true) is consistently documented in FROTH.md, FROTH_LIBRARY.md, and FROTH_GUIDE.md
+  - Operator vs closure distinction is clear (operators auto-execute, closures need !)
+  - Stack effect notation is consistent across all files
+  - Cross-references between docs are correct (FROTH_BYTECODE → FROTH_COMPILER)
+
+  Recommendations:
+
+  1. Simplify the not description in FROTH_LIBRARY.md
+  2. Either expand FROTH_BYTECODE.md or consider merging it
+
+  Would you like me to make either of these changes?
+
+> 1 
+
+● Update(FROTH_LIBRARY.md)
+  ⎿  Added 1 line, removed 1 line                                        
+      353  
+      354  | Name | Stack Effect | Description |
+      355  |------|--------------|-------------|
+      356 -| `not` | `( a -- int )` | 0 if a is non-zero or non-integer, 
+          -else 1 |                                                      
+      356 +| `not` | `( a -- int )` | 1 if a is 0, else 0 |              
+      357  | `and` | `( a b -- int )` | 0 if both a and b are 0, else 1 |
+      358  | `or` | `( a b -- int )` | 0 if either a or b is 0, else 1 |
+      359  
+
+● Done. The description is now clearer: "1 if a is 0, else 0".
+
+> Let's review FROTH_GUIDE.md for conciseness. It should convey the most 
+important information in a minimal way. Don't give examples unless they add 
+significant value. 
+
+● Read(FROTH_GUIDE.md)
+  ⎿  Read 315 lines
+
+● Here's my analysis of sections that could be trimmed:
+
+  Sections to simplify or remove:
+
+  1. Quote ' is a Prefix - Second code block (prime variable workaround) is redundant
+  2. Avoid Redundant 0 = - Could merge into Boolean Convention section
+  3. Conditional Syntax - Three code blocks; one is enough
+  4. Binder Order is LIFO - The subtract/subtract2 example is verbose; one example suffices
+  5. The ? Operator Consumes the Condition - The "Wrong/Right" example is confusing and uses undefined result
+  6. Bindings Are Lexically Scoped - Three examples in first block; one is enough
+
+  Common Patterns to cut:
+  - Checking Types Before Operations - Trivial pattern
+  - Iteration with foldl - Duplicates FROTH_LIBRARY.md
+  - Carrying State Through foldl - Second example uses undefined matches
+  - Recursive Functions - Tree traversal example is redundant after factorial
+  - Inspecting Closures - Documented under open in FROTH.md
+  - Using def-fn! - Final recursive example duplicates the Recursive Functions section
+
+  Estimated reduction: ~315 lines → ~150 lines
+
+  Would you like me to:
+  1. Make all these changes at once
+  2. Show you the proposed new version first
+  3. Make changes incrementally for review
+
+> 1 
+
+● Write(FROTH_GUIDE.md)
+  ⎿  Added 22 lines, removed 236 lines                                   
+        4  
+        5  ## Function Calls Require `!`
+        6  
+        7 -Standard library functions like `nl`, `println`, and `writeln`
+          - are closures, not operators. They must be called with `!`:   
+        7 +Standard library functions are closures, not operators. They m
+          +ust be called with `!`:                                       
+        8  
+        9  ```
+       10 -; Wrong                                                       
+       11 -"hello" println                                               
+       12 -                                                              
+       13 -; Correct                                                     
+       10  "hello" println!
+       11  ```
+       12  
+       17 -Without `!`, the closure is just pushed onto the stack instead
+          - of being executed.                                           
+       13 +Without `!`, the closure is pushed onto the stack instead of b
+          +eing executed.                                                
+       14  
+       15  ## Quote `'` is a Prefix
+       16  
+       21 -The quote token `'` comes before the term it quotes, not after
+          -. Names like `code'` or `x'` are not valid identifiers—they pa
+          -rse as two tokens:                                            
+       17 +The quote token `'` comes before the term it quotes. Names lik
+          +e `x'` parse as two tokens (`x` followed by `'`). Use suffixes
+          + like `x2` or prefixes like `new-x` instead.                  
+       18  
+       23 -```                                                           
+       24 -'x       ; quote + identifier = one quoted term               
+       25 -x'       ; identifier x followed by quote (two separate tokens
+          -!)                                                            
+       26 -                                                              
+       27 -code'    ; parses as: code '                                  
+       28 -new-code ; valid identifier with hyphen                       
+       29 -```                                                           
+       30 -                                                              
+       31 -If you want a "prime" variable name, use a suffix like `2` or 
+          -a prefix like `new-`:                                         
+       32 -                                                              
+       33 -```                                                           
+       34 -; Wrong - x' is two tokens                                    
+       35 -/x x 1 + /x'                                                  
+       36 -                                                              
+       37 -; Correct alternatives                                        
+       38 -/x x 1 + /x2                                                  
+       39 -/x x 1 + /new-x                                               
+       40 -```                                                           
+       41 -                                                              
+       19  ## Boolean Convention: 0 is True
+       20  
+       44 -Froth! uses 0 for true and non-zero for false. This matches th
+          -e Unix convention where 0 indicates success.                  
+       21 +Froth! uses 0 for true and non-zero for false (like Unix exit 
+          +codes).                                                       
+       22  
+       23  ```
+       24  3 3 =              ; 0 (equal, true)
+       25  3 4 =              ; 1 (not equal, false)
+       49 -5 3 >              ; 0 (5 > 3, true)                          
+       26  ```
+       27  
+       52 -## Avoid Redundant `0 =`                                      
+       28 +Since 0 already means true, avoid redundant `0 =` tests:      
+       29  
+       54 -Since 0 already means true, testing `0 =` is usually unnecessa
+          -ry:                                                           
+       55 -                                                              
+       30  ```
+       57 -; Redundant                                                   
+       58 -x y = 0 = { "equal" } { "not equal" } ?!                      
+       59 -                                                              
+       60 -; Better - just remove the 0 =                                
+       61 -x y = { "equal" } { "not equal" } ?!                          
+       31 +x y = { "equal" } { "not equal" } ?!   ; not: x y = 0 = { ... 
+          +} ...                                                         
+       32  ```
+       33  
+       64 -Both work because `=` returns 0 for equal, and `?` executes th
+          -e then-branch when condition is 0.                            
+       65 -                                                              
+       34  ## Conditional Syntax
+       35  
+       68 -The conditional operator `?` takes three values: condition, th
+          -en-branch, else-branch. Use `?!` to immediately execute the ch
+          -osen branch:                                                  
+       36 +The `?` operator takes condition, then-branch, else-branch. Th
+          +e then-branch executes when condition is 0:                   
+       37  
+       38  ```
+       71 -condition { then-branch } { else-branch } ?!                  
+       39 +x 0 > { "positive" } { "not positive" } ?!                    
+       40  ```
+       41  
+       74 -The then-branch executes when condition is 0 (true):          
+       75 -                                                              
+       76 -```                                                           
+       77 -x 0 > { "positive" } { "not positive" } ?! println!           
+       78 -```                                                           
+       79 -                                                              
+       80 -For simple values without execution, use `?` alone:           
+       81 -                                                              
+       82 -```                                                           
+       83 -flag "yes" "no" ?    ; pushes "yes" if flag is 0, else "no"   
+       84 -```                                                           
+       85 -                                                              
+       42  ## Binder Order is LIFO
+       43  
+       88 -Binders pop values in reverse order (last-in, first-out):     
+       44 +Binders pop values in reverse order. The first binder gets the
+          + top of stack:                                                
+       45  
+       46  ```
+       91 -1 2 3 /a /b /c    ; c=3, b=2, a=1                             
+       92 -```                                                           
+       93 -                                                              
+       94 -When defining a function, the first binder gets the top of sta
+          -ck (last argument pushed):                                    
+       95 -                                                              
+       96 -```                                                           
+       47  { /a /b a b - } /subtract
+       48  5 3 subtract!     ; a=3, b=5, computes 3 - 5 = -2
+       99 -                                                              
+      100 -{ /b /a a b - } /subtract2                                    
+      101 -5 3 subtract2!    ; a=5, b=3, computes 5 - 3 = 2              
+       49  ```
+       50  
+      104 -## The `?` Operator Consumes the Condition                    
+      105 -                                                              
+      106 -The conditional operator `?` pops and consumes the condition f
+          -rom the stack. After `?` executes, only the result remains:   
+      107 -                                                              
+      108 -```                                                           
+      109 -; Stack: value flag                                           
+      110 -; After ?: just value (if flag was 0) or just alternate       
+      111 -                                                              
+      112 -42 0 { } { 99 } ?!    ; leaves 42 (condition 0 = true, keeps v
+          -alue)                                                         
+      113 -42 1 { } { 99 } ?!    ; leaves 99 (condition 1 = false, runs e
+          -lse which pushes 99)                                          
+      114 -```                                                           
+      115 -                                                              
+      116 -This matters when branching based on a flag while preserving o
+          -ther values:                                                  
+      117 -                                                              
+      118 -```                                                           
+      119 -; Wrong - tries to drop when nothing to drop                  
+      120 -result 1 { drop! 1 } { 0 } ?!                                 
+      121 -                                                              
+      122 -; Right - else branch just returns the flag                   
+      123 -result 1 { 0 } { 1 } ?!                                       
+      124 -```                                                           
+      125 -                                                              
+       51  ## Bindings Are Lexically Scoped
+       52  
+      128 -Bindings created with `/name` do not escape their closure. Val
+          -ues must be returned via the stack:                           
+       53 +Bindings created with `/name` do not escape their closure. Ret
+          +urn values via the stack:                                     
+       54  
+       55  ```
+      131 -; Wrong - x is not visible outside                            
+      132 -{ 42 /x } !                                                   
+      133 -x println!           ; error: x not bound                     
+      134 -                                                              
+      135 -; Correct - return value on stack                             
+      136 -{ 42 } ! /x                                                   
+      137 -x println!           ; prints 42                              
+      138 -                                                              
+      139 -; Or just leave it on the stack                               
+      140 -{ 42 } !                                                      
+      141 -println!             ; prints 42                              
+       56 +{ 42 } ! /x       ; correct: value returned on stack, then bou
+          +nd                                                            
+       57 +{ 42 /x } ! x     ; wrong: x not visible outside closure      
+       58  ```
+       59  
+      144 -Closures communicate results by leaving values on the stack:  
+      145 -                                                              
+      146 -```                                                           
+      147 -{ /a /b a b + } /add                                          
+      148 -3 4 add! println!    ; prints 7                               
+      149 -```                                                           
+      150 -                                                              
+       60  ## Avoid Arrays as Accumulators
+       61  
+      153 -Arrays in Froth! are immutable—every modification creates a co
+          -py. Never use arrays as accumulators:                         
+       62 +Arrays are immutable—every modification copies. Use cons lists
+          + for O(1) accumulation:                                       
+       63  
+       64  ```
+      156 -; WRONG: O(n²) - each concat copies the entire array          
+      157 -result [item] concat! /result                                 
+       65 +result item , /result              ; O(1) cons                
+       66 +[ result { } lfoldl! ]             ; convert to array at end  
+       67  ```
+       68  
+      160 -Instead, use lists or maps which support O(1) updates:        
+      161 -                                                              
+      162 -```                                                           
+      163 -; RIGHT: O(1) - cons just creates a new cell                  
+      164 -result item , /result                                         
+      165 -```                                                           
+      166 -                                                              
+      167 -Convert to an array at the end if needed: `[ list { } lfoldl! 
+          -]`                                                            
+      168 -                                                              
+       69  ## Common Patterns
+       70  
+      171 -### Early Return via Conditional                              
+      172 -                                                              
+      173 -```                                                           
+      174 -{ /n                                                          
+      175 -  n 0 < { "negative" } {                                      
+      176 -    n 0 = { "zero" } { "positive" } ?!                        
+      177 -  } ?!                                                        
+      178 -} /classify                                                   
+      179 -```                                                           
+      180 -                                                              
+      181 -### Iteration with foldl                                      
+      182 -                                                              
+      183 -```                                                           
+      184 -[1 2 3 4 5] { println! } foldl!    ; prints each element      
+      185 -[1 2 3 4 5] { + } reduce!          ; sums to 15               
+      186 -```                                                           
+      187 -                                                              
+      188 -### Building Results in a Generator                           
+      189 -                                                              
+      190 -```                                                           
+      191 -[ [1 2 3] { 2 * } foldl! ]         ; produces [2 4 6]         
+      192 -```                                                           
+      193 -                                                              
+      194 -### Checking Types Before Operations                          
+      195 -                                                              
+      196 -```                                                           
+      197 -{ /x                                                          
+      198 -  x isInt { x 1 + } { 0 } ?!                                  
+      199 -} /safe-increment                                             
+      200 -```                                                           
+      201 -                                                              
+       71  ### Return Value with Success/Failure Flag
+       72  
+      204 -Many functions return a value plus a flag (0 = success, 1 = fa
+          -ilure):                                                       
+       73 +Many functions return `(value 0)` on success, `(1)` on failure
+          +:                                                             
+       74  
+       75  ```
+      207 -; alist-get returns (value 0) on success, (1) on failure      
+      208 -alist key alist-get!                                          
+      209 -{ /value                                                      
+      210 -  ; use value                                                 
+      211 -} {                                                           
+      212 -  ; handle not found                                          
+      213 -} ?!                                                          
+       76 +alist key alist-get! { /value ... } { ; not found } ?!        
+       77  ```
+       78  
+      216 -### Carrying State Through foldl                              
+      217 -                                                              
+      218 -Use the stack to carry accumulator state through iterations:  
+      219 -                                                              
+      220 -```                                                           
+      221 -; Sum with running state                                      
+      222 -0                           ; initial accumulator             
+      223 -[1 2 3 4 5] { + } foldl!    ; adds each element               
+      224 -; leaves 15                                                   
+      225 -                                                              
+      226 -; Track multiple values: (result found-flag)                  
+      227 -. 1                         ; nil result, not-found flag      
+      228 -array {                                                       
+      229 -  /elem /found /result                                        
+      230 -  found {                                                     
+      231 -    result 0                ; already found, pass through     
+      232 -  } {                                                         
+      233 -    ; check elem, update result and flag                      
+      234 -    elem matches { elem 0 } { result 1 } ?!                   
+      235 -  } ?!                                                        
+      236 -} foldl!                                                      
+      237 -```                                                           
+      238 -                                                              
+       79  ### Recursive Functions
+       80  
+      241 -Closures capture the environment at definition time. This mean
+          -s a function can't directly call itself because it isn't bound
+          - yet when the closure is created:                             
+       81 +Closures capture the environment at definition time, so a func
+          +tion can't call itself directly. Pass the function to itself: 
+       82  
+       83  ```
+      244 -; This doesn't work - factorial isn't bound when closure is cr
+          -eated                                                         
+      245 -{ /n                                                          
+      246 -  n 0 = { 1 } { n 1 - factorial! n * } ?!                     
+      247 -} /factorial                                                  
+      248 -5 factorial!             ; error: undefined name: factorial   
+      249 -```                                                           
+      250 -                                                              
+      251 -Use Y-combinator style: pass the function to itself as an argu
+          -ment:                                                         
+      252 -                                                              
+      253 -```                                                           
+      254 -; Define with /self as FIRST binder (it will be popped last)  
+       84  { /self /n
+      256 -  n 0 = { 1 } {                                               
+      257 -    n 1 - self self! n *                                      
+      258 -  } ?!                                                        
+       85 +  n 0 = { 1 } { n 1 - self self! n * } ?!                     
+       86  } /fact-impl
+       87  
+      261 -; Wrapper: push impl, args, impl again, then call             
+       88  { /n fact-impl n fact-impl! } /factorial
+       89  5 factorial!             ; 120
+       90  ```
+       91  
+      266 -The pattern is: `{ /self /args body }` with recursive calls `a
+          -rgs self self!`. The first `self` becomes `/self` in the next 
+          -call (passed through the stack), and `self!` makes the call.  
+      267 -                                                              
+      268 -For tree traversal with multiple recursive calls:             
+      269 -                                                              
+      270 -```                                                           
+      271 -{ /self /tree                                                 
+      272 -  tree isNil { 0 } {                                          
+      273 -    tree 2 @ self self!    ; left subtree                     
+      274 -    tree 3 @ self self!    ; right subtree                    
+      275 -    + 1 +                   ; count this node                 
+      276 -  } ?!                                                        
+      277 -} /count-impl                                                 
+      278 -                                                              
+      279 -{ /tree count-impl tree count-impl! } /tree-count             
+      280 -```                                                           
+      281 -                                                              
+      282 -### Inspecting Closures                                       
+      283 -                                                              
+      284 -Use `open` to decompose a closure into its environment and bod
+          -y:                                                            
+      285 -                                                              
+      286 -```                                                           
+      287 -{ 1 2 + } /f                                                  
+      288 -f open /body /env                                             
+      289 -env #              ; number of bindings captured              
+      290 -body               ; the quoted function body                 
+      291 -```                                                           
+      292 -                                                              
+       92  ### Using def-fn! for Minimal Environments
+       93  
+      295 -When defining library functions, use `def-fn!` to capture only
+          - needed dependencies:                                         
+       94 +Use `def-fn!` to capture only needed dependencies (required fo
+          +r compilation):                                               
+       95  
+       96  ```
+      298 -; List all stdlib functions used in the closure               
+      299 -['foldl 'map 'concat] {                                       
+      300 -  ; function body using foldl!, map!, concat!                 
+      301 -} def-fn! /my-function                                        
+       97 +['foldl 'map] { ; body using foldl!, map! } def-fn! /my-functi
+          +on                                                            
+       98  ```
+       99  
+      304 -This prevents environment bloat and is required for compilatio
+          -n. Note: operators like `+`, `=`, `?` don't need to be listed—
+          -only closures from the standard library.                      
+      305 -                                                              
+      306 -For recursive functions with `def-fn!`, include the impl funct
+          -ion in the dependencies of the wrapper:                       
+      307 -                                                              
+      308 -```                                                           
+      309 -{ /self /n                                                    
+      310 -  n 0 = { 1 } { n 1 - self self! n * } ?!                     
+      311 -} /fact-impl                                                  
+      312 -                                                              
+      313 -['fact-impl] { /n fact-impl n fact-impl! } def-fn! /factorial 
+      314 -```                                                           
+      100 +Operators like `+`, `=`, `?` don't need to be listed—only clos
+          +ures.                                                         
+
+● Reduced from 315 lines to 101 lines (~68% reduction). Key changes:
+
+  - Merged "Avoid Redundant 0 =" into Boolean Convention
+  - One example per section instead of multiple
+  - Removed redundant patterns (iteration, type checking, inspecting closures)
+  - Cut tree traversal and duplicate def-fn! examples
+  - Tightened prose throughout
+
+> commit these changes 
+
+● Bash(git status && git diff)
+  ⎿  On branch master                               
+     Your branch is up to date with 'origin/master'.
+     … +9 lines (ctrl+o to expand)
+
+● Bash(git diff --staged --stat)
+  ⎿  FROTH_GUIDE.md   | 258 +++++------------------------------------------
+    --------
+     FROTH_LIBRARY.md |   2 +-
+     2 files changed, 23 insertions(+), 237 deletions(-)
+
+
+● Bash(git log --oneline -3)
+  ⎿ 97973a4 Fix context restore for nested closures capturing free variable
+    s
+    277199b add transcripts 93-95
+    b639920 Fix context array ordering, rename parent-* to outer-* fields
+
+
+● Bash(git commit -m "Streamline documentation…)
+  ⎿  [master b55b7a6] Streamline documentation           
+      2 files changed, 23 insertions(+), 237 deletions(-)
+
+● Done. Committed as b55b7a6.
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 139k/200k tokens (70%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛶ ⛶ ⛶   ⛁ Memory files: 18.5k tokens (9.2%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Messages: 58.0k tokens (29.0%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 61k (30.3%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 129 tokens
+     └ MERCURY.md: 68 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.1k tokens
+     └ FROTH_COMPILER.md: 6.4k tokens
+     └ FROTH_BYTECODE.md: 664 tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> Let's try adding list functions to lib/build.froth. Run the tests and 
+report on any failures, but don't try to fix anything yet. 
+
+● Read(lib/build.froth)
+  ⎿  Read 29 lines
+
+● Read(lib/list.froth)
+  ⎿  Read 84 lines
+
+● Update(lib/build.froth)
+  ⎿  Added 7 lines                                                       
+      23    'scanr compile!
+      24    'contains compile!
+      25  
+      26 +  ; list.froth                                                 
+      27 +  'lfoldl compile!                                             
+      28 +  'lfoldr compile!                                             
+      29 +  'lreverse compile!                                           
+      30 +  'lconcat compile!                                            
+      31 +  'lmap compile!                                               
+      32 +                                                               
+      33  restore /froth-bytecode-top /froth-code-map /froth-cache
+      34  
+      35  { froth-cache froth-code-map froth-bytecode-top } /compiler-sta
+          rt
+
+● Bash(make test 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+     ./run_tests.sh
+     PASS: add
+     PASS: alist
+     PASS: apply_op
+     PASS: arithmetic
+     PASS: arity
+     … +421 lines (ctrl+o to see all)
+
+● 6 tests failed, but all due to the same issue:
+
+  ERROR: froth-bytecode-top >= 1000, test addresses may conflict
+
+  The failures are:
+  - boundness
+  - codegen
+  - liveness
+  - save_slots
+  - slots
+  - vm
+
+  Root cause: These tests use hardcoded bytecode addresses starting at 1000. By compiling more stdlib functions, froth-bytecode-top has grown beyond 1000, triggering a conflict warning that gets printed to output.
+
+  Not a compiler bug - the actual test logic passes. The outputs are identical except for the ERROR line at the top.
+
+  Fix options:
+  1. Increase the test address threshold (e.g., to 2000)
+  2. Make tests dynamically allocate addresses starting from froth-bytecode-top
+  3. Have tests suppress/ignore the warning
+
+> 1 
+
+● Bash(grep -r "1000" tests/ --include="*.froth" | head -20)
+  ⎿ tests/boundness.froth:froth-bytecode-top 1000 < { } { "ERROR: froth-byt
+    ecode-top >= 1000, test addresses may conflict" println! } ?!
+    tests/boundness.froth:  tree-empty! 1000 func compile-func! /node drop!
+    … +36 lines (ctrl+o to expand)
+
+
+
+● Bash(for f in tests/boundness.froth tests/codegen.froth tests/liveness.froth
+      tests/slots.froth tests/vm.froth tests/compile_closure.froth
+      tests/save_slots.froth; do…)
+  ⎿  Updated tests/boundness.froth
+     Updated tests/codegen.froth
+     Updated tests/liveness.froth
+     … +4 lines (ctrl+o to expand)
+
+● Bash(for f in tests/boundness.expected tests/codegen.expected
+      tests/liveness.expected tests/slots.expected tests/vm.expected
+      tests/save_slots.expected; do
+        if [ -f…)
+  ⎿  Updated tests/boundness.expected
+     Updated tests/codegen.expected
+     Updated tests/liveness.expected
+     … +3 lines (ctrl+o to expand)
+
+● Bash(make test 2>&1)
+  ⎿  cd src && mmc --make froth        
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+     … +69 lines (ctrl+o to expand)
+
+● All 65 tests pass. List functions (lfoldl, lfoldr, lreverse, lconcat, lmap) are now compiled, and test address threshold increased to 2000.
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                    
+     Your branch is ahead of 'origin/master' by 1 commit.
+       (use "git push" to publish your local commits)
+     … +17 lines (ctrl+o to expand)
+
+● Bash(git diff --stat)
+  ⎿  (No content)
+
+● Bash(git diff)
+  ⎿  (No content)
+
+● Bash(git status --short)
+  ⎿  M  lib/build.froth           
+     M  tests/boundness.froth
+     M  tests/codegen.expected
+     … +8 lines (ctrl+o to expand)
+
+● Bash(git diff HEAD -- tests/*.expected)
+  ⎿  diff --git a/tests/codegen.expected b/tests/codegen.expected
+     index 6be96d3..c837717 100644
+     --- a/tests/codegen.expected
+     … +39 lines (ctrl+o to expand)
+
+● Bash(git log --oneline -3)
+  ⎿ b55b7a6 Streamline documentation                                       
+    97973a4 Fix context restore for nested closures capturing free variable
+    s
+    277199b add transcripts 93-95
+
+
+● Bash(ls -la tests/*.expected | head -10)
+  ⎿  -rw------- 1 mark mark    2 Dec 15 18:54 tests/add.expected     
+     -rw------- 1 mark mark   43 Jan  4 20:57 tests/alist.expected
+     -rw------- 1 mark mark   18 Dec 21 23:31 tests/apply_op.expected
+     … +7 lines (ctrl+o to expand)
+
+● Bash(git diff --cached tests/boundness.expected tests/liveness.expected
+      tests/slots.expected tests/save_slots.expected tests/vm.expected
+      2>/dev/null || echo "No chan…)
+  ⎿  (No content)
+
+● Bash(git status tests/*.expected)
+  ⎿  On branch master                                    
+     Your branch is ahead of 'origin/master' by 1 commit.
+       (use "git push" to publish your local commits)
+     … +4 lines (ctrl+o to expand)
+
+● Bash(git diff tests/boundness.expected tests/liveness.expected
+      tests/slots.expected tests/save_slots.expected tests/vm.expected)
+  ⎿  (No content)
+
+● Bash(grep -c "2000\|1000" tests/boundness.expected tests/liveness.expected
+      tests/slots.expected tests/vm.expected 2>/dev/null || true)
+  ⎿  tests/boundness.expected:0
+     tests/liveness.expected:0
+     tests/slots.expected:0
+     tests/vm.expected:0
+
+● All changes are staged. The other expected files didn't have address references to update.
+
+● Bash(git commit -m "Enable list function compilation, raise test address
+      threshold…)
+  ⎿ [master ee6aec5] Enable list function compilation, raise test address t
+    hreshold
+     9 files changed, 40 insertions(+), 33 deletions(-)
+
+
+● Done. Committed as ee6aec5.
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 155k/200k tokens (78%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 18.5k tokens (9.2%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Messages: 73.7k tokens (36.8%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 45k (22.5%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 129 tokens
+     └ MERCURY.md: 68 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.1k tokens
+     └ FROTH_COMPILER.md: 6.4k tokens
+     └ FROTH_BYTECODE.md: 664 tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> Let's add a new bytecode instruction to abort (the VM should throw an 
+exception). This instruction should be assigned opcode 0, so that if the VM 
+ever jumps to a location where there is no code then we will get a more 
+useful message. Does that make sense? 
+
+● Yes, that makes sense - it's a good defensive measure. If the VM jumps to uninitialized memory (which is zero-filled), it will immediately abort with a clear error instead of trying to interpret zeros as push-int.
+
+  This requires:
+  1. src/vm.m - Add abort case for opcode 0, shift existing opcodes up by 1
+  2. lib/bytecode.froth - Update instruction-table (abort=0, push-int=1, etc.)
+  3. tests/codegen.expected - Update hardcoded opcode values in expected output
+
+  Should I proceed with this change?
+
+> yes 
+
+● Read(src/vm.m)
+  ⎿  Read 342 lines
+
+● Read(lib/bytecode.froth)
+  ⎿  Read 37 lines
+
+● Read(tests/codegen.expected)
+  ⎿  Read 47 lines
+
+● Update(src/vm.m)
+  ⎿  Added 1 line                                                        
+      56  % Opcode constants
+      57  %--------------------------------------------------------------
+          ---------%
+      58  
+      59 +:- func oc_abort = int.                                        
+      60  :- func oc_pushInt = int.
+      61  :- func oc_op = int.
+      62  :- func oc_return = int.
+
+● Update(src/vm.m)
+  ⎿  Added 20 lines, removed 19 lines                                    
+       93  % NOTE: These numbers must be kept in sync with lib/bytecode.f
+           roth
+       94  %-------------------------------------------------------------
+           ----------%
+       95  
+       96 -oc_pushInt = 0.                                               
+       97 -oc_op = 1.                                                    
+       98 -oc_return = 2.                                                
+       99 -oc_pushString = 3.                                            
+      100 -oc_pushContext = 4.                                           
+      101 -oc_popUnused = 5.                                             
+      102 -oc_pushLocal = 6.                                             
+      103 -oc_popLocal = 7.                                              
+      104 -oc_enterFrame = 8.                                            
+      105 -oc_leaveFrame = 9.                                            
+      106 -oc_startArray = 10.                                           
+      107 -oc_endArray = 11.                                             
+      108 -oc_call = 12.                                                 
+      109 -oc_tailCall = 17.                                             
+      110 -oc_saveReturnPtr = 13.                                        
+      111 -oc_restoreReturnPtr = 14.                                     
+      112 -oc_saveContextPtr = 15.                                       
+      113 -oc_restoreContextPtr = 16.                                    
+      114 -oc_pushQuotedApply = 18.                                      
+       96 +oc_abort = 0.                                                 
+       97 +oc_pushInt = 1.                                               
+       98 +oc_op = 2.                                                    
+       99 +oc_return = 3.                                                
+      100 +oc_pushString = 4.                                            
+      101 +oc_pushContext = 5.                                           
+      102 +oc_popUnused = 6.                                             
+      103 +oc_pushLocal = 7.                                             
+      104 +oc_popLocal = 8.                                              
+      105 +oc_enterFrame = 9.                                            
+      106 +oc_leaveFrame = 10.                                           
+      107 +oc_startArray = 11.                                           
+      108 +oc_endArray = 12.                                             
+      109 +oc_call = 13.                                                 
+      110 +oc_tailCall = 18.                                             
+      111 +oc_saveReturnPtr = 14.                                        
+      112 +oc_restoreReturnPtr = 15.                                     
+      113 +oc_saveContextPtr = 16.                                       
+      114 +oc_restoreContextPtr = 17.                                    
+      115 +oc_pushQuotedApply = 19.                                      
+      116  
+      117  %-------------------------------------------------------------
+           ----------%
+      118  % VM execution
+
+● Update(src/vm.m)
+  ⎿  Added 5 lines, removed 1 line                                       
+      122          !Stack, !Pool, !Bytecode, !HashTable, !IO) :-
+      123      OpTable = Ctx ^ ec_op_table,
+      124      array.lookup(!.Bytecode, IP, Opcode),
+      125 -    ( if Opcode = oc_pushInt then                             
+      125 +    ( if Opcode = oc_abort then                               
+      126 +        % abort: throw an exception (useful for catching jumps
+          + to uninitialized memory)                                     
+      127 +        throw(vm_error("abort: execution reached uninitialized
+          + bytecode at address " ++                                     
+      128 +            string.from_int(IP)))                             
+      129 +    else if Opcode = oc_pushInt then                          
+      130          % pushInt n: push integer n onto stack
+      131          array.lookup(!.Bytecode, IP + 1, N),
+      132          datastack.push(intval(N), !Stack, !SP),
+
+● Read(src/vm.m)
+  ⎿  Read 15 lines
+
+● Update(src/vm.m)
+  ⎿  Added 1 line                                                        
+      87  :- import_module int.
+      88  :- import_module operator_table.
+      89  :- import_module operators.
+      90 +:- import_module string.                                       
+      91  
+      92  %--------------------------------------------------------------
+          ---------%
+      93  % Opcodes
+
+● Update(lib/bytecode.froth)
+  ⎿  Added 20 lines, removed 19 lines                                    
+       4  
+       5  ; Opcode table: map from symbols to VM instruction codes
+       6  $
+       7 -  0 'push-int :                                                
+       8 -  1 'op :                                                      
+       9 -  2 'return :                                                  
+      10 -  3 'push-string :                                             
+      11 -  4 'push-context :                                            
+      12 -  5 'pop-unused :                                              
+      13 -  6 'push-local :                                              
+      14 -  7 'pop-local :                                               
+      15 -  8 'enter-frame :                                             
+      16 -  9 'leave-frame :                                             
+      17 -  10 'start-array :                                            
+      18 -  11 'end-array :                                              
+      19 -  12 'call :                                                   
+      20 -  17 'tail-call :                                              
+      21 -  13 'save-return-ptr :                                        
+      22 -  14 'restore-return-ptr :                                     
+      23 -  15 'save-context-ptr :                                       
+      24 -  16 'restore-context-ptr :                                    
+      25 -  18 'push-quoted-apply :                                      
+       7 +  0 'abort :                                                   
+       8 +  1 'push-int :                                                
+       9 +  2 'op :                                                      
+      10 +  3 'return :                                                  
+      11 +  4 'push-string :                                             
+      12 +  5 'push-context :                                            
+      13 +  6 'pop-unused :                                              
+      14 +  7 'push-local :                                              
+      15 +  8 'pop-local :                                               
+      16 +  9 'enter-frame :                                             
+      17 +  10 'leave-frame :                                            
+      18 +  11 'start-array :                                            
+      19 +  12 'end-array :                                              
+      20 +  13 'call :                                                   
+      21 +  18 'tail-call :                                              
+      22 +  14 'save-return-ptr :                                        
+      23 +  15 'restore-return-ptr :                                     
+      24 +  16 'save-context-ptr :                                       
+      25 +  17 'restore-context-ptr :                                    
+      26 +  19 'push-quoted-apply :                                      
+      27  /instruction-table
+      28  
+      29  ; Bytecode emission helpers
+
+● Now I need to update the expected test output. Let me create the updated version:
+
+● Write(tests/codegen.expected)
+  ⎿  Added 14 lines, removed 14 lines                                    
+       1  func-addr=2000 next-addr=2007
+       2 -bytecode: 0 1 0 2 0 3 2                                        
+       2 +bytecode: 1 1 1 2 1 3 3                                        
+       3  func-addr2=2007 next-addr2=2012
+       4 -bytecode2: 0 42 3 569 2                                        
+       4 +bytecode2: 1 42 4 569 3                                        
+       5  func-addr3=2012 next-addr3=2019
+       6 -bytecode3: 0 1 0 2 1 2 2                                       
+       6 +bytecode3: 1 1 1 2 2 2 3                                       
+       7  quoted terms: 'x '/y '! '42 '"hi"
+       8  func-addr5=2037 next-addr5=2044
+       9 -bytecode5: 4 0 4 1 1 2 2                                       
+       9 +bytecode5: 5 0 5 1 2 2 3                                       
+      10  context test: 30
+      11 -bytecode6: 8 1 7 0 6 0 9 1 2                                   
+      11 +bytecode6: 9 1 8 0 7 0 10 1 3                                  
+      12  bound test: 42
+      13 -bytecode7: 5 0 99 2                                            
+      13 +bytecode7: 6 1 99 3                                            
+      14  dead binder test: 99
+      15 -bytecode8: 8 2 7 0 7 1 6 0 6 1 9 2 1 2 2                       
+      15 +bytecode8: 9 2 8 0 8 1 7 0 7 1 10 2 2 2 3                      
+      16  multi-binder test: 13
+      17 -bytecode9 (nested func area): 0 42 2                           
+      18 -bytecode9 (outer func area): 10 11 0 2072 1 48 2               
+      17 +bytecode9 (nested func area): 1 42 3                           
+      18 +bytecode9 (outer func area): 11 12 1 2072 2 48 3               
+      19  nested no-capture test: 42
+      20 -bytecode10 (nested area): 4 0 2                                
+      21 -bytecode10 (outer area): 8 1 7 0 10 6 0 11 0 2082 1 48 9 1 2   
+      20 +bytecode10 (nested area): 5 0 3                                
+      21 +bytecode10 (outer area): 9 1 8 0 11 7 0 12 1 2082 2 48 10 1 3  
+      22  nested capture-bound test: 99
+      23 -bytecode11 (nested area): 4 0 2                                
+      23 +bytecode11 (nested area): 5 0 3                                
+      24  nested capture-free test: 77
+      25  nested multi-capture test: 15
+      26  generator test: [ 1 2 3 ]
+     ...
+      28  generator free var test: [ 7 8 ]
+      29  generator with nested func test: 42
+      30  quoted complex terms test: ''{ 1 } ''[ 2 ] '''x
+      31 -tail call bytecode: 4 0 17                                     
+      31 +tail call bytecode: 5 0 18                                     
+      32  push-context ok
+      33  slot 0 ok
+      34  tail-call ok
+      35  length ok
+      36 -non-tail call bytecode: 4 0 8 1 13 7 0 12 6 0 14 9 1 0 1 2     
+      36 +non-tail call bytecode: 5 0 9 1 14 8 0 13 7 0 15 10 1 1 1 3    
+      37  push-context ok
+      38  call ok
+      39  inner-addr=2215 outer-addr=2218
+
+● Now let me update the documentation in FROTH_COMPILER.md:
+
+● Read(FROTH_COMPILER.md)
+  ⎿  Read 35 lines
+
+● Update(FROTH_COMPILER.md)
+  ⎿  Added 20 lines, removed 19 lines                                    
+      45  
+      46  | Symbol | Code | Description |
+      47  |--------|------|-------------|
+      48 -| `'push-int` | 0 | Push next value as integer |               
+      49 -| `'op` | 1 | Execute operator (next value is opcode) |        
+      50 -| `'return` | 2 | Return from function |                       
+      51 -| `'push-string` | 3 | Push string from context |              
+      52 -| `'push-context` | 4 | Push value from context slot |         
+      53 -| `'pop-unused` | 5 | Discard top of stack |                   
+      54 -| `'push-local` | 6 | Push value from frame slot |             
+      55 -| `'pop-local` | 7 | Pop value to frame slot |                 
+      56 -| `'enter-frame` | 8 | Allocate frame with n slots |           
+      57 -| `'leave-frame` | 9 | Deallocate frame |                      
+      58 -| `'start-array` | 10 | Begin array generator |                
+      59 -| `'end-array` | 11 | End array generator |                    
+      60 -| `'call` | 12 | Call bytecodeval (sets RP) |                  
+      61 -| `'tail-call` | 17 | Tail call bytecodeval (preserves RP) |   
+      62 -| `'save-return-ptr` | 13 | Push return pointer to stack |     
+      63 -| `'restore-return-ptr` | 14 | Pop return pointer from stack | 
+      64 -| `'save-context-ptr` | 15 | Push context pointer to stack |   
+      65 -| `'restore-context-ptr` | 16 | Pop context pointer from stack 
+         -|                                                              
+      66 -| `'push-quoted-apply` | 18 | Push quoted apply term (`'!`) |  
+      48 +| `'abort` | 0 | Abort execution (catches jumps to uninitialize
+         +d memory) |                                                    
+      49 +| `'push-int` | 1 | Push next value as integer |               
+      50 +| `'op` | 2 | Execute operator (next value is opcode) |        
+      51 +| `'return` | 3 | Return from function |                       
+      52 +| `'push-string` | 4 | Push string from context |              
+      53 +| `'push-context` | 5 | Push value from context slot |         
+      54 +| `'pop-unused` | 6 | Discard top of stack |                   
+      55 +| `'push-local` | 7 | Push value from frame slot |             
+      56 +| `'pop-local` | 8 | Pop value to frame slot |                 
+      57 +| `'enter-frame` | 9 | Allocate frame with n slots |           
+      58 +| `'leave-frame` | 10 | Deallocate frame |                     
+      59 +| `'start-array` | 11 | Begin array generator |                
+      60 +| `'end-array` | 12 | End array generator |                    
+      61 +| `'call` | 13 | Call bytecodeval (sets RP) |                  
+      62 +| `'save-return-ptr` | 14 | Push return pointer to stack |     
+      63 +| `'restore-return-ptr` | 15 | Pop return pointer from stack | 
+      64 +| `'save-context-ptr` | 16 | Push context pointer to stack |   
+      65 +| `'restore-context-ptr` | 17 | Pop context pointer from stack 
+         +|                                                              
+      66 +| `'tail-call` | 18 | Tail call bytecodeval (preserves RP) |   
+      67 +| `'push-quoted-apply` | 19 | Push quoted apply term (`'!`) |  
+      68  
+      69  Track the current address manually:
+      70  
+
+● Now let's build and run the tests:
+
+● Bash(make test 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     Making Mercury/int3s/vm.int3
+     Making Mercury/ints/vm.int
+     Making Mercury/cs/eval.c
+     Making Mercury/cs/vm.c
+     Making Mercury/os/eval.o
+     Making Mercury/os/vm.o
+     Making froth
+     cp src/froth bin/
+     … +166 lines (ctrl+o to see all)
+
+● Bash(grep -n "push-context\|tail-call\|expected" tests/codegen.froth | head
+      -30)
+  ⎿  64:; Bytecode should be: push-context 0, push-context 1, op +, return
+     65:; push-context=4, op=1, +=2, return=2
+     208:; Function { f! } should emit: push-context 0 (f), tail-call (17)
+     … +24 lines (ctrl+o to expand)
+
+● The test has hardcoded opcode values. Let me fix them:
+
+● Read(tests/codegen.froth)
+  ⎿  Read 35 lines
+
+● Update(tests/codegen.froth)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      214  func18-addr next-addr18 dump-bytecode!
+      215  nl!
+      216  
+      217 -; Verify: push-context=4, slot=0, tail-call=17                
+      218 -func18-addr peek 4 = { "push-context ok" } { "ERROR: expected 
+          -push-context" } ?! println!                                   
+      217 +; Verify: push-context=5, slot=0, tail-call=18                
+      218 +func18-addr peek 5 = { "push-context ok" } { "ERROR: expected 
+          +push-context" } ?! println!                                   
+      219  func18-addr 1 + peek 0 = { "slot 0 ok" } { "ERROR: expected sl
+           ot 0" } ?! println!
+      220 -func18-addr 2 + peek 17 = { "tail-call ok" } { "ERROR: expecte
+          -d tail-call" } ?! println!                                    
+      220 +func18-addr 2 + peek 18 = { "tail-call ok" } { "ERROR: expecte
+          +d tail-call" } ?! println!                                    
+      221  next-addr18 func18-addr - 3 = { "length ok" } { "ERROR: expect
+           ed length 3" } ?! println!
+      222  
+      223  ; Test 19: Non-tail call (middle of function)
+
+● Update(tests/codegen.froth)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      240  nl!
+      241  
+      242  ; Verify key instructions are present
+      243 -; push-context=4, call=12, save-return-ptr=13, restore-return-
+          -ptr=14                                                        
+      244 -func19-addr peek 4 = { "push-context ok" } { "ERROR: expected 
+          -push-context" } ?! println!                                   
+      243 +; push-context=5, call=13, save-return-ptr=14, restore-return-
+          +ptr=15                                                        
+      244 +func19-addr peek 5 = { "push-context ok" } { "ERROR: expected 
+          +push-context" } ?! println!                                   
+      245  ; call is at offset 7 (after push-context 0, enter-frame 1, sa
+           ve-return-ptr, pop-local 0)
+      246 -func19-addr 7 + peek 12 = { "call ok" } { "ERROR: expected cal
+          -l" } ?! println!                                              
+      246 +func19-addr 7 + peek 13 = { "call ok" } { "ERROR: expected cal
+          +l" } ?! println!                                              
+      247  
+      248  ; Test 20: Tail call execution test
+      249  ; Use the existing bytecode from earlier tests instead of code
+           gen
+
+● Update(tests/codegen.expected)
+  ⎿  Added 1 line, removed 1 line                                        
+      1  func-addr=2000 next-addr=2007
+      2  bytecode: 1 1 1 2 1 3 3
+      3  func-addr2=2007 next-addr2=2012
+      4 -bytecode2: 1 42 4 569 3                                         
+      4 +bytecode2: 1 42 4 570 3                                         
+      5  func-addr3=2012 next-addr3=2019
+      6  bytecode3: 1 1 1 2 2 2 3
+      7  quoted terms: 'x '/y '! '42 '"hi"
+
+● Bash(make test 2>&1)
+  ⎿  Error: Exit code 2
+     cd src && mmc --make froth
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+     ./run_tests.sh
+     PASS: add
+     PASS: alist
+     PASS: apply_op
+     PASS: arithmetic
+     PASS: arity
+     … +160 lines (ctrl+o to see all)
+
+● The only difference is trailing spaces. Let me update the expected file to match:
+
+● Bash(./bin/froth tests/codegen.froth > tests/codegen.expected 2>&1)
+  ⎿  (No content)
+
+● Bash(./bin/froth tests/codegen.froth 2>&1 | grep -v "^FROTH: compiled" >
+      tests/codegen.expected)
+  ⎿  (No content)
+
+● Bash(make test 2>&1)
+  ⎿  cd src && mmc --make froth        
+     ** Nothing to be done for `froth'.
+     cp src/froth bin/
+     … +69 lines (ctrl+o to expand)
+
+● All 65 tests pass. Let me verify the abort instruction works:
+
+● Bash(echo '[] 50000 close !' | ./bin/froth -n 2>&1 | head -5)
+  ⎿  Froth! REPL. Press Ctrl-D to exit.
+     > 1:16: invalid token: '\'
+     >
+
+● Bash(echo '[] 50000 close !' > /tmp/test_abort.froth && ./bin/froth -n
+      /tmp/test_abort.froth 2>&1)
+  ⎿  Error: Exit code 1
+     1:16: invalid token: '\'
+
+● Bash(printf '[] 50000 close !\n' > /tmp/test_abort.froth && ./bin/froth -n
+      /tmp/test_abort.froth 2>&1)
+  ⎿  Error: Exit code 1
+     1:16: invalid token: '\'
+
+● Bash(cat -A /tmp/test_abort.froth)
+  ⎿  [] 50000 close \!$
+
+● Write(/tmp/test_abort.froth)
+  ⎿  Added 1 line, removed 1 line                                        
+      1 -[] 50000 close \!                                               
+      1 +[] 50000 close !                                                
+
+● Bash(./bin/froth -n /tmp/test_abort.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Uncaught Mercury exception:
+     index_out_of_bounds("array.lookup: index 50000 not in range [0, 1023]")
+     Stack dump not available in this grade.
+
+● Write(/tmp/test_abort.froth)
+  ⎿  Added 2 lines, removed 1 line                                       
+      1 -[] 50000 close !                                                
+      1 +; Jump to address 500 which should be uninitialized (zero = abor
+        +t)                                                              
+      2 +[] 500 close !                                                  
+
+● Bash(./bin/froth -n /tmp/test_abort.froth 2>&1)
+  ⎿  Error: Exit code 1
+     Runtime error: vm error: abort: execution reached uninitialized bytecode at 
+     address 500
+
+
+● The abort instruction works correctly. When jumping to uninitialized memory (address 500), we get:
+  Runtime error: vm error: abort: execution reached uninitialized bytecode at address 500
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                                     
+     Your branch is ahead of 'origin/master' by 2 commits.
+       (use "git push" to publish your local commits)
+     … +13 lines (ctrl+o to expand)
+
+● Bash(git diff --stat)
+  ⎿  (No content)
+
+● Bash(git diff --staged --stat)
+  ⎿  FROTH_COMPILER.md      | 39 ++++++++++++++++++++-------------------   
+     lib/bytecode.froth     | 39 ++++++++++++++++++++-------------------
+     src/vm.m               | 47 +++++++++++++++++++++++++++---------------
+    … +4 lines (ctrl+o to expand)
+
+
+● Bash(git commit -m "Add abort bytecode instruction (opcode 0)…)
+  ⎿  [master 16083fd] Add abort bytecode instruction (opcode 0)
+      5 files changed, 87 insertions(+), 78 deletions(-)
+
+● Done. Committed as 16083fd.
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 188k/200k tokens (94%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 18.5k tokens (9.2%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 106.4k tokens (53.2%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 12k (6.1%)
+     ⛁ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 129 tokens
+     └ MERCURY.md: 68 tokens
+     └ FROTH.md: 2.7k tokens
+     └ FROTH_LIBRARY.md: 6.1k tokens
+     └ FROTH_COMPILER.md: 6.4k tokens
+     └ FROTH_BYTECODE.md: 664 tokens
+     └ FROTH_GUIDE.md: 2.4k tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
