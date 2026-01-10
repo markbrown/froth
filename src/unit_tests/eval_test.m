@@ -126,6 +126,9 @@ test(Name, Input, !IO) :-
                 ( if univ_to_type(Exn, EvalError) then
                     io.format("  Error: %s\n",
                         [s(types.format_error(IT, EvalError))], !IO)
+                else if univ_to_type(Exn, FrothError) then
+                    io.format("  Error: %s\n",
+                        [s(types.format_froth_error(IT, FrothError))], !IO)
                 else
                     io.format("  Exception: %s\n",
                         [s(string.string(univ_value(Exn)))], !IO)

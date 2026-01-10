@@ -126,8 +126,7 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
     array.lookup(!.Bytecode, IP, Opcode),
     ( if Opcode = oc_abort then
         % abort: throw an exception (useful for catching jumps to uninitialized memory)
-        throw(vm_error("abort: execution reached uninitialized bytecode at address " ++
-            string.from_int(IP)))
+        throw(vm_error(IP, vm_abort))
     else if Opcode = oc_pushInt then
         % pushInt n: push integer n onto stack
         array.lookup(!.Bytecode, IP + 1, N),
@@ -143,15 +142,15 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
                 run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, FP, !SP,
                     !Stack, !Pool, !Bytecode, !HashTable, !IO)
             else if Op = op_deref then
-                vm_deref(!Stack, !SP, !.Pool),
+                vm_deref(IP, !Stack, !SP, !.Pool),
                 run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, FP, !SP,
                     !Stack, !Pool, !Bytecode, !HashTable, !IO)
             else if Op = op_peek then
-                vm_peek(!Stack, !SP, !.Bytecode),
+                vm_peek(IP, !Stack, !SP, !.Bytecode),
                 run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, FP, !SP,
                     !Stack, !Pool, !Bytecode, !HashTable, !IO)
             else if Op = op_poke then
-                vm_poke(!Stack, !SP, !Bytecode),
+                vm_poke(IP, !Stack, !SP, !Bytecode),
                 run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, FP, !SP,
                     !Stack, !Pool, !Bytecode, !HashTable, !IO)
             else
@@ -161,7 +160,7 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
                     !Stack, !Pool, !Bytecode, !HashTable, !IO)
             )
         else
-            throw(vm_error("invalid operator number"))
+            throw(vm_error(IP, vm_invalid_opcode))
         )
     else if Opcode = oc_return then
         % return: if RP is -1, stop execution (return to caller)
@@ -209,7 +208,7 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
         array.lookup(!.Bytecode, IP + 1, N),
         NewFP = FP - N,
         ( if NewFP < !.SP then
-            throw(vm_error("stack overflow: frame collision"))
+            throw(vm_error(IP, vm_frame_collision))
         else
             run(Ctx, Env, Context, GenStack, !Store, IP + 2, RP, NewFP, !SP,
                 !Stack, !Pool, !Bytecode, !HashTable, !IO)
@@ -235,7 +234,7 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
                 !Stack, !Pool, !Bytecode, !HashTable, !IO)
         ;
             GenStack = [],
-            throw(vm_error("endArray without matching startArray"))
+            throw(vm_error(IP, vm_unmatched_end_array))
         )
     else if Opcode = oc_call then
         % call: pop closure, set RP to return address, switch context, jump
@@ -250,7 +249,7 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
             run(Ctx, Env, Context, GenStack, !Store, IP + 1, RP, FP, !SP,
                 !Stack, !Pool, !Bytecode, !HashTable, !IO)
         else
-            throw(type_error("closure", V))
+            throw(vm_error(IP, vm_type_error("closure", V)))
         )
     else if Opcode = oc_tailCall then
         % tail-call: pop closure, preserve RP, switch context, jump
@@ -269,7 +268,7 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
                     !Stack, !Pool, !Bytecode, !HashTable, !IO)
             )
         else
-            throw(type_error("closure", V))
+            throw(vm_error(IP, vm_type_error("closure", V)))
         )
     else if Opcode = oc_saveReturnPtr then
         % saveReturnPtr: push current RP onto data stack
@@ -283,7 +282,7 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
             run(Ctx, Env, Context, GenStack, !Store, IP + 1, NewRP, FP, !SP,
                 !Stack, !Pool, !Bytecode, !HashTable, !IO)
         else
-            throw(type_error("int", V))
+            throw(vm_error(IP, vm_type_error("int", V)))
         )
     else if Opcode = oc_saveContextPtr then
         % saveContextPtr: push current context array onto data stack
@@ -297,7 +296,7 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
             run(Ctx, Env, NewContext, GenStack, !Store, IP + 1, RP, FP, !SP,
                 !Stack, !Pool, !Bytecode, !HashTable, !IO)
         else
-            throw(type_error("array", V))
+            throw(vm_error(IP, vm_type_error("array", V)))
         )
     else if Opcode = oc_pushQuotedApply then
         % pushQuotedApply: push quoted apply term ('!)
@@ -305,7 +304,7 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
         run(Ctx, Env, Context, GenStack, !Store, IP + 1, RP, FP, !SP,
             !Stack, !Pool, !Bytecode, !HashTable, !IO)
     else
-        throw(vm_error("unknown opcode"))
+        throw(vm_error(IP, vm_unknown_opcode))
     ).
 
 %-----------------------------------------------------------------------%
@@ -334,60 +333,60 @@ vm_ref(!Stack, !SP, !Pool, !HashTable) :-
 % deref: ( int -- value ) Retrieve value from constant pool
 %-----------------------------------------------------------------------%
 
-:- pred vm_deref(
+:- pred vm_deref(int::in,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out,
     array(value)::in) is det.
 
-vm_deref(!Stack, !SP, Pool) :-
+vm_deref(IP, !Stack, !SP, Pool) :-
     datastack.pop("deref", V, !Stack, !SP),
     ( if V = intval(Idx) then
         ( if Idx >= 0, Idx < array.size(Pool) then
             array.lookup(Pool, Idx, Value),
             datastack.push(Value, !Stack, !SP)
         else
-            throw(index_out_of_bounds(Idx, array.size(Pool)))
+            throw(vm_error(IP, vm_index_out_of_bounds(Idx, array.size(Pool))))
         )
     else
-        throw(type_error("int", V))
+        throw(vm_error(IP, vm_type_error("int", V)))
     ).
 
 %-----------------------------------------------------------------------%
 % peek: ( addr -- int ) Read value from bytecode address
 %-----------------------------------------------------------------------%
 
-:- pred vm_peek(
+:- pred vm_peek(int::in,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out,
     array(int)::in) is det.
 
-vm_peek(!Stack, !SP, Bytecode) :-
+vm_peek(IP, !Stack, !SP, Bytecode) :-
     datastack.pop("peek", V, !Stack, !SP),
     ( if V = intval(Addr) then
         Value = bytecode.peek(Addr, Bytecode),
         datastack.push(intval(Value), !Stack, !SP)
     else
-        throw(type_error("int", V))
+        throw(vm_error(IP, vm_type_error("int", V)))
     ).
 
 %-----------------------------------------------------------------------%
 % poke: ( value addr -- ) Write value to bytecode address
 %-----------------------------------------------------------------------%
 
-:- pred vm_poke(
+:- pred vm_poke(int::in,
     array(value)::array_di, array(value)::array_uo,
     int::in, int::out,
     array(int)::array_di, array(int)::array_uo) is det.
 
-vm_poke(!Stack, !SP, !Bytecode) :-
+vm_poke(IP, !Stack, !SP, !Bytecode) :-
     datastack.pop("poke", AddrVal, !Stack, !SP),
     datastack.pop("poke", ValueVal, !Stack, !SP),
     ( if AddrVal = intval(Addr), ValueVal = intval(Value) then
         bytecode.poke(Addr, Value, !Bytecode)
     else if AddrVal = intval(_) then
-        throw(type_error("int", ValueVal))
+        throw(vm_error(IP, vm_type_error("int", ValueVal)))
     else
-        throw(type_error("int", AddrVal))
+        throw(vm_error(IP, vm_type_error("int", AddrVal)))
     ).
 
 %-----------------------------------------------------------------------%

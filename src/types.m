@@ -156,18 +156,39 @@
 % Runtime errors
 %-----------------------------------------------------------------------%
 
+    % Interpreter errors (no instruction pointer)
 :- type eval_error
     --->    stack_underflow(string)         % Operation that caused it
     ;       type_error(string, value)       % Expected type, actual value
     ;       undefined_name(string_id)
     ;       index_out_of_bounds(int, int)   % Index, array size
-    ;       io_error(string, string, string)  % Operation, filename, message
-    ;       vm_error(string).               % VM execution error
+    ;       io_error(string, string, string).  % Operation, filename, message
+
+    % VM-specific errors (always have instruction pointer)
+:- type vm_err
+    --->    vm_type_error(string, value)    % Expected type, actual value
+    ;       vm_stack_underflow(string)      % Operation that caused it
+    ;       vm_index_out_of_bounds(int, int) % Index, array size
+    ;       vm_abort                        % Executed abort instruction
+    ;       vm_invalid_opcode               % Invalid operator number
+    ;       vm_unknown_opcode               % Unknown instruction opcode
+    ;       vm_frame_collision              % Stack overflow
+    ;       vm_unmatched_end_array.         % endArray without startArray
+
+    % Top-level error type distinguishing interpreter and VM errors
+:- type froth_error
+    --->    interp_error(eval_error)        % Interpreter error (no IP)
+    ;       vm_error(int, vm_err).          % VM error at instruction pointer
 
     % format_error(StringTable, Error) = Message:
     % Convert an eval_error to a human-readable message.
     %
 :- func format_error(string_table, eval_error) = string.
+
+    % format_froth_error(StringTable, Error) = Message:
+    % Convert a froth_error to a human-readable message.
+    %
+:- func format_froth_error(string_table, froth_error) = string.
 
 %-----------------------------------------------------------------------%
 
@@ -247,8 +268,26 @@ format_error(_, index_out_of_bounds(Index, Size)) =
     string.format("index out of bounds: %d (array size: %d)", [i(Index), i(Size)]).
 format_error(_, io_error(Op, Filename, Msg)) =
     string.format("%s: %s: %s", [s(Op), s(Filename), s(Msg)]).
-format_error(_, vm_error(Msg)) =
-    string.format("vm error: %s", [s(Msg)]).
+
+format_froth_error(ST, interp_error(EvalError)) =
+    format_error(ST, EvalError).
+format_froth_error(ST, vm_error(IP, VmErr)) =
+    string.format("vm error at %d: %s", [i(IP), s(format_vm_err(ST, VmErr))]).
+
+:- func format_vm_err(string_table, vm_err) = string.
+
+format_vm_err(_, vm_type_error(Expected, Actual)) =
+    string.format("expected %s, got %s",
+        [s(Expected), s(value_type_name(Actual))]).
+format_vm_err(_, vm_stack_underflow(Op)) =
+    string.format("stack underflow in '%s'", [s(Op)]).
+format_vm_err(_, vm_index_out_of_bounds(Index, Size)) =
+    string.format("index out of bounds: %d (array size: %d)", [i(Index), i(Size)]).
+format_vm_err(_, vm_abort) = "execution reached uninitialized bytecode".
+format_vm_err(_, vm_invalid_opcode) = "invalid operator number".
+format_vm_err(_, vm_unknown_opcode) = "unknown opcode".
+format_vm_err(_, vm_frame_collision) = "stack overflow: frame collision".
+format_vm_err(_, vm_unmatched_end_array) = "endArray without matching startArray".
 
 :- func value_type_name(value) = string.
 

@@ -228,6 +228,11 @@ eval_stdlib(StdlibPath, Result, Pool, HT, !IO) :-
                             [s(types.format_error(ST1, EvalError))], !IO),
                         init_pool(Pool, HT),
                         Result = stdlib_error
+                    else if univ_to_type(Exn, FrothError) then
+                        io.format("Runtime error in stdlib: %s\n",
+                            [s(types.format_froth_error(ST1, FrothError))], !IO),
+                        init_pool(Pool, HT),
+                        Result = stdlib_error
                     else
                         rethrow(EvalResult)
                     )
@@ -397,6 +402,14 @@ execute_code(OpTable, Code, ST0, ST, PP0, PP, BC0, BC, Env0, Env,
                     datastack.init(Array, Ptr),
                     init_pool(Pool, HT),
                     Success = no
+                else if univ_to_type(Exn, FrothError) then
+                    io.format("Runtime error: %s\n",
+                        [s(types.format_froth_error(ST1, FrothError))], !IO),
+                    ST = ST1, PP = PP0, Env = Env0,
+                    bytecode.init(BC),
+                    datastack.init(Array, Ptr),
+                    init_pool(Pool, HT),
+                    Success = no
                 else
                     rethrow(EvalResult)
                 )
@@ -452,6 +465,14 @@ execute_file(OpTable, Filename, ST0, ST, PP0, PP, BC0, BC, Env0, Env,
                     ( if univ_to_type(Exn, EvalError) then
                         io.format("Runtime error: %s\n",
                             [s(types.format_error(ST1, EvalError))], !IO),
+                        ST = ST1, PP = PP0, Env = Env0,
+                        bytecode.init(BC),
+                        datastack.init(Array, Ptr),
+                        init_pool(Pool, HT),
+                        Success = no
+                    else if univ_to_type(Exn, FrothError) then
+                        io.format("Runtime error: %s\n",
+                            [s(types.format_froth_error(ST1, FrothError))], !IO),
                         ST = ST1, PP = PP0, Env = Env0,
                         bytecode.init(BC),
                         datastack.init(Array, Ptr),
@@ -558,6 +579,13 @@ repl_eval(OpTable, Input, ST0, ST, PP0, PP, BC0, BC, Env0, Env,
                 ( if univ_to_type(Exn, EvalError) then
                     io.format("Runtime error: %s\n",
                         [s(types.format_error(ST1, EvalError))], !IO),
+                    ST = ST1, PP = PP0, Env = Env0,
+                    bytecode.init(BC),
+                    datastack.init(Array, Ptr),
+                    init_pool(Pool, HT)
+                else if univ_to_type(Exn, FrothError) then
+                    io.format("Runtime error: %s\n",
+                        [s(types.format_froth_error(ST1, FrothError))], !IO),
                     ST = ST1, PP = PP0, Env = Env0,
                     bytecode.init(BC),
                     datastack.init(Array, Ptr),

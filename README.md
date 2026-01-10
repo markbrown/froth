@@ -43,6 +43,7 @@ The REPL maintains state across lines: stack and variable bindings persist. Pres
 | `type error: expected T, got U` | Operation expected type T but got type U |
 | `undefined name: N` | Name N is not bound and is not an operator |
 | `index out of bounds: I (array size: S)` | Array index I is not in range 0..S-1 |
+| `vm error at ADDR: message` | Error in compiled bytecode at instruction ADDR |
 
 ## Language Comparison
 
