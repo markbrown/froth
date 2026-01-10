@@ -353,7 +353,7 @@ Boolean operations where 0 represents true and non-zero represents false.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `not` | `( a -- int )` | 0 if a is non-zero or non-integer, else 1 |
+| `not` | `( a -- int )` | 1 if a is 0, else 0 |
 | `and` | `( a b -- int )` | 0 if both a and b are 0, else 1 |
 | `or` | `( a b -- int )` | 0 if either a or b is 0, else 1 |
 
