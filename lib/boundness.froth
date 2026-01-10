@@ -1,6 +1,6 @@
 ; boundness.froth - Boundness analysis for compiler
 
-; boundness-term-impl: (node bound acc-free-map acc-free-list seq-fn term-fn -- result-node term-bound-set updated-bound new-acc-free-map new-acc-free-list)
+; boundness-term-impl: (node bound outer-shadowed-ops acc-free-map acc-free-list seq-fn term-fn -- result-node term-bound-set updated-bound new-acc-free-map new-acc-free-list)
 ; Analyze a single node for boundness.
 ; result-node: input node with boundness info added
 ; term-bound-set: map (set) of bound identifiers (binders) found in this term
@@ -8,7 +8,8 @@
 ; For generators: recurse with current bound set (bindings don't escape)
 ; acc-free-map accumulates free variables with context slot numbers (slot = map size)
 ; acc-free-list accumulates free variable identifiers in reverse slot order
-['foldl] { /term-fn /seq-fn /acc-free-list /acc-free-map /bound /node
+; outer-shadowed-ops: set of operators that are shadowed by binders in outer scope
+['foldl] { /term-fn /seq-fn /acc-free-list /acc-free-map /outer-shadowed-ops /bound /node
   node 'term @ /term
   term isIdent {
     ; Identifier: check if bound
@@ -16,21 +17,36 @@
       ; Bound identifier: is-bound=0 (default from make-node)
       node $ bound acc-free-map acc-free-list
     } {
-      ; Not bound - check if it's an operator (no slot needed)
-      term isOperator {
-        ; Operator: mark as operator, looked up in operator-table at runtime
-        node 0 'is-operator : $ bound acc-free-map acc-free-list
-      } {
-        ; Free identifier - check if already seen
+      ; Not bound in this function - check if operator is shadowed from outer scope
+      outer-shadowed-ops term in {
+        ; Operator shadowed in outer scope - treat as free variable
         acc-free-map term in {
           ; Already seen free var
           node 1 'is-bound : acc-free-map term @ 'slot :
           $ bound acc-free-map acc-free-list
         } {
-          ; New free var: assign slot (slot number = current map size)
+          ; New free var: assign slot
           acc-free-map # /slot
           node 1 'is-bound : slot 'slot :
           $ bound acc-free-map slot term : acc-free-list term ,
+        } ?!
+      } {
+        ; Not shadowed - check if it's an operator (no slot needed)
+        term isOperator {
+          ; Operator: mark as operator, looked up in operator-table at runtime
+          node 0 'is-operator : $ bound acc-free-map acc-free-list
+        } {
+          ; Free identifier - check if already seen
+          acc-free-map term in {
+            ; Already seen free var
+            node 1 'is-bound : acc-free-map term @ 'slot :
+            $ bound acc-free-map acc-free-list
+          } {
+            ; New free var: assign slot (slot number = current map size)
+            acc-free-map # /slot
+            node 1 'is-bound : slot 'slot :
+            $ bound acc-free-map slot term : acc-free-list term ,
+          } ?!
         } ?!
       } ?!
     } ?!
@@ -64,7 +80,7 @@
   term isGen {
     ; Generator: shares outer scope's free variable tracking
     ; Recurse into node's body (array of child nodes)
-    node 'body @ bound 0 acc-free-map acc-free-list seq-fn term-fn seq-fn! /new-acc-free-list /inner-body /inner-bound-set /new-acc-free-map
+    node 'body @ bound 0 outer-shadowed-ops acc-free-map acc-free-list seq-fn term-fn seq-fn! /new-acc-free-list /inner-body /inner-bound-set /new-acc-free-map
     ; Update node with new body and bound-set
     node inner-body 'body : inner-bound-set 'bound-set :
     $ bound new-acc-free-map new-acc-free-list
@@ -78,20 +94,21 @@
   } ?! } ?! } ?! } ?! } ?!
 } def-fn! /boundness-term-impl
 
-; boundness-seq-impl: (body-nodes bound idx acc-free-map acc-free-list seq-fn term-fn -- free-set bound-set body-list free-list)
+; boundness-seq-impl: (body-nodes bound idx outer-shadowed-ops acc-free-map acc-free-list seq-fn term-fn -- free-set bound-set body-list free-list)
 ; Analyze a sequence of nodes for boundness.
 ; Returns free-set (map with slots), bound-set (map with nil), body list of node maps, and free-list.
 ; Converts body list to array at idx=0.
-['foldl 'lfoldl] { /term-fn /seq-fn /acc-free-list /acc-free-map /idx /bound /body-nodes
+; outer-shadowed-ops: set of operators shadowed by binders in outer scope
+['foldl 'lfoldl] { /term-fn /seq-fn /acc-free-list /acc-free-map /outer-shadowed-ops /idx /bound /body-nodes
   idx body-nodes # = {
     ; Done: return accumulated free-set, empty bound-set, empty body list, free-list
     acc-free-map $ . acc-free-list
   } {
     ; Process current node
     body-nodes idx @ /node
-    node bound acc-free-map acc-free-list seq-fn term-fn term-fn! /new-acc-free-list /new-acc-free-map /new-bound /term-bound-set /result-node
+    node bound outer-shadowed-ops acc-free-map acc-free-list seq-fn term-fn term-fn! /new-acc-free-list /new-acc-free-map /new-bound /term-bound-set /result-node
     ; Recurse for rest of sequence (with updated state)
-    body-nodes new-bound idx 1 + new-acc-free-map new-acc-free-list seq-fn term-fn seq-fn! /rest-free-list /rest-body /rest-bound-set /rest-free-set
+    body-nodes new-bound idx 1 + outer-shadowed-ops new-acc-free-map new-acc-free-list seq-fn term-fn seq-fn! /rest-free-list /rest-body /rest-bound-set /rest-free-set
     ; Combine results: free-set is already accumulated, merge bound-sets with nil
     rest-free-set
     rest-bound-set term-bound-set keys { /k . k : } foldl!
@@ -108,7 +125,7 @@
 
 ; boundness: (func-node -- func-node)
 ; Analyze a function node for boundness of each term.
-; Takes a func-node from compile-func (with 'term and 'body).
+; Takes a func-node from compile-func (with 'term, 'body, and 'outer-shadowed-ops).
 ; Returns updated func-node with:
 ;   'term: the original function
 ;   'body: array of node maps parallel to function body (updated with boundness info)
@@ -118,7 +135,9 @@
 ; Note: bound-set is computed internally but not stored on function nodes.
 ; Generators store bound-set for liveness to track shadowed variables.
 ['boundness-seq-impl 'boundness-term-impl 'lreverse 'lfoldl] { /func-node
-  func-node 'body @ $ 0 $ . boundness-seq-impl boundness-term-impl boundness-seq-impl!
+  ; Read outer-shadowed-ops from func-node (set by compile-func-impl)
+  func-node 'outer-shadowed-ops in { func-node 'outer-shadowed-ops @ } { $ } ?! /outer-shadowed-ops
+  func-node 'body @ $ 0 outer-shadowed-ops $ . boundness-seq-impl boundness-term-impl boundness-seq-impl!
   /free-list /body /bound-set /free-set
   ; Convert free-list to array (reverse to get slot order, then collect into array)
   [ free-list lreverse! { } lfoldl! ] /free-array
