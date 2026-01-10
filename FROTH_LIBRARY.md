@@ -45,6 +45,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `over` | stack | Copy second element to top |
 | `println` | io | Print value with newline |
 | `reduce` | array | Reduce with binary function |
+| `reify` | reify | Convert value to executable term array |
 | `restrict` | map | Restrict map to specified keys |
 | `reverse` | array | Reverse an array |
 | `scanl` | array | Iterate left-to-right until predicate returns 0 |
@@ -443,3 +444,35 @@ Returns two values: `result-stack` and `0` on success, or `error-message` and `1
 Supported: all operators (dispatched by arity), variable binding, function literals, function application (closures and quoted operators), quoted terms, generators, `env`, `stack`, custom operators via op-table.
 
 Not yet supported: I/O operators.
+
+## Reify (reify.froth)
+
+Convert values to executable term arrays.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `reify` | `( value -- array )` | Convert value to array of terms that reproduce it |
+
+The returned array contains terms that, when executed as a function body, reproduce the original value:
+
+```
+42 reify!                      ; [ '42 ]
+"hello" reify!                 ; [ '"hello" ]
+[1 2 3] reify!                 ; [ '[ 1 2 3 ] ]
+$ 10 'x : reify!               ; [ '$ '10 ''x ': ]
+```
+
+To execute the reified terms and reproduce the value:
+
+```
+[1 2 3] reify! mkFunc $ swap! close ! !   ; [ 1 2 3 ]
+```
+
+Closures with minimal environments (created via `def-fn`) can be reified:
+
+```
+[] { 1 2 + } def-fn! reify!              ; [ '$ ''{ 1 2 + } 'close ]
+5 /x ['x] { x 2 * } def-fn! reify!       ; [ '$ '5 ''x ': ''{ x 2 * } 'close ]
+```
+
+Bytecode closures (compiled stdlib functions) cannot be meaningfully reified and produce a warning.

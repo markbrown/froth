@@ -954,8 +954,10 @@ operator_open(!Array, !Ptr) :-
 
 operator_is_closure(!Array, !Ptr) :-
     datastack.pop("isClosure", V, !Array, !Ptr),
-    ( if V = closureval(_, _) then datastack.push(intval(0), !Array, !Ptr)
-    else datastack.push(intval(1), !Array, !Ptr)
+    ( if ( V = closureval(_, _) ; V = bytecodeval(_, _) ) then
+        datastack.push(intval(0), !Array, !Ptr)
+    else
+        datastack.push(intval(1), !Array, !Ptr)
     ).
 
 %-----------------------------------------------------------------------%

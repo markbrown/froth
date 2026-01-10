@@ -1,0 +1,88 @@
+; reify.froth - Convert values to executable term arrays
+;
+; reify: ( value -- array )
+;   Returns an array of terms that, when executed, reproduce the value.
+;
+; Usage:
+;   42 reify!                    ; [ '42 ]
+;   42 reify! mkFunc             ; '{ 42 }
+;   $ 42 reify! mkFunc close !   ; 42
+
+; Cache operator identifiers
+"." intern idToIdent /op-nil
+"," intern idToIdent /op-cons
+"$" intern idToIdent /op-empty
+":" intern idToIdent /op-store
+
+{ /self /v
+  ; Integer - wrap to get quoted value
+  v isInt 0 = { [ v wrap ] } {
+  ; String - wrap to get quoted value
+  v isString 0 = { [ v wrap ] } {
+  ; Nil - produce . operator
+  v isNil 0 = { [ op-nil ] } {
+  ; Cons - reify tail, reify head, then ,
+  v isCons 0 = {
+    v snd self self!
+    v fst self self!
+    concat!
+    [ op-cons ] concat!
+  } {
+  ; Array - reify elements into a generator term
+  v isArray 0 = {
+    ; Collect all terms into a flat array using generator
+    ; Each element reifies to an array of terms; we flatten them
+    [
+      0 v # { /i
+        v i @ self self! /terms  ; reify element → array of terms
+        0 terms # { /j terms j @ j 1 + } times-loop! drop!  ; spread terms
+        i 1 +
+      } times-loop! drop!
+    ] mkGen
+    /g [ g ]  ; wrap generator term in single-element array
+  } {
+  ; Map - produce $ val1 'key1 : val2 'key2 : ...
+  v isMap 0 = {
+    [ op-empty ]
+    v keys { /k
+      v k @ self self! concat!   ; value terms
+      [ k wrap ] concat!         ; quoted key (double-quoted)
+      [ op-store ] concat!       ; : operator
+    } foldl!
+  } {
+  ; Quoted identifier - double-quote it
+  v isIdent 0 = { [ v wrap ] } {
+  ; Quoted binder - double-quote it
+  v isBinder 0 = { [ v wrap ] } {
+  ; Quoted function - double-quote it
+  v isFunc 0 = { [ v wrap ] } {
+  ; Quoted generator - double-quote it
+  v isGen 0 = { [ v wrap ] } {
+  ; Quoted quote - double-quote it
+  v isQuote 0 = { [ v wrap ] } {
+  ; Quoted apply - double-quote it
+  v isApply 0 = { [ v wrap ] } {
+  ; Quoted value - double-quote it
+  v isValue 0 = { [ v wrap ] } {
+  ; Closure - decompose and reconstruct with close
+  v isClosure 0 = {
+    v open /body /env
+    body isFunc 0 = {
+      ; closureval: env is map, body is quoted function
+      env self self!                     ; terms to produce env map
+      [ body wrap ] concat!              ; double-quote the function body
+      [ "close" intern idToIdent ] concat!  ; close operator
+    } {
+      ; bytecodeval: env is array, body is int (address)
+      ; Cannot meaningfully reify - return empty with warning
+      "warning: cannot reify bytecode closure\n" print
+      [ ]
+    } ?!
+  } {
+  ; Unknown value type
+  "warning: cannot reify unknown value\n" print
+  [ ]
+  } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?!
+} /reify-impl
+
+{ /v v reify-impl reify-impl! } /reify
