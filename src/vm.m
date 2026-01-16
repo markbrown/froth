@@ -88,6 +88,7 @@
 :- import_module int.
 :- import_module operator_table.
 :- import_module operators.
+:- import_module pool.
 :- import_module string.
 
 %-----------------------------------------------------------------------%
@@ -322,14 +323,8 @@ run(Ctx, Env, Context, GenStack, !Store, IP, RP, FP, !SP,
 
 vm_ref(!Stack, !SP, !Pool, !HashTable) :-
     datastack.pop("ref", V, !Stack, !SP),
-    ( if hash_table.search(!.HashTable, V, ExistingIdx) then
-        datastack.push(intval(ExistingIdx), !Stack, !SP)
-    else
-        Idx = array.size(!.Pool),
-        array.resize(Idx + 1, V, !Pool),
-        hash_table.det_insert(V, Idx, !HashTable),
-        datastack.push(intval(Idx), !Stack, !SP)
-    ).
+    pool.deep_ref(V, Idx, !Pool, !HashTable),
+    datastack.push(intval(Idx), !Stack, !SP).
 
 %-----------------------------------------------------------------------%
 % deref: ( int -- value ) Retrieve value from constant pool

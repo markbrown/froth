@@ -69,6 +69,7 @@
 :- import_module map.
 :- import_module operators.
 :- import_module parser.
+:- import_module pool.
 :- import_module string.
 :- import_module values.
 :- import_module vm.
@@ -433,22 +434,10 @@ eval_poke(!Stack, !SP, !Bytecode) :-
 
 eval_ref(!Store, !Stack, !SP, !Pool, !HashTable) :-
     datastack.pop("ref", V, !Stack, !SP),
-    % Check if value is already in the pool (deduplication)
-    ( if hash_table.search(!.HashTable, V, ExistingIdx) then
-        % Already exists, return existing index
-        datastack.push(intval(ExistingIdx), !Stack, !SP)
-    else
-        % New value: add to pool and hash table
-        PP = !.Store ^ es_pool_count,
-        ( if PP < array.size(!.Pool) then
-            array.set(PP, V, !Pool)
-        else
-            array.resize(PP + 1, V, !Pool)
-        ),
-        !:Store = !.Store ^ es_pool_count := PP + 1,
-        hash_table.det_insert(V, PP, !HashTable),
-        datastack.push(intval(PP), !Stack, !SP)
-    ).
+    pool.deep_ref(V, Idx, !Pool, !HashTable),
+    % Update pool count to match pool size (deep_ref may have added multiple entries)
+    !:Store = !.Store ^ es_pool_count := array.size(!.Pool),
+    datastack.push(intval(Idx), !Stack, !SP).
 
 %-----------------------------------------------------------------------%
 % deref: ( int -- value ) Retrieve value from constant pool
