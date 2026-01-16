@@ -43,69 +43,45 @@ Rather than a custom binary format for values, we compile values into reconstruc
 
 ### Sharing Preservation
 
-Shared substructures must be preserved across save/load. We achieve this by modifying `ref` to recursively pool subterms before pooling a value (bottom-up). Reconstruction code uses `deref` to retrieve already-built subterms.
+Shared substructures are preserved via deep-ref: when `ref` is called on a structured value, it recursively pools all subterms first. This ensures reconstruction code can use `deref` to retrieve shared subterms.
 
-Example: `[. 2, . 2, 1,]` (array with two cons lists sharing tail `. 2,`)
+The `ref` operator returns -1 for primitives (int, string, nil) and closurevals (which must be compiled to bytecodevals first). Only structured values (array, map, cons, bytecodeval) get pool indices.
 
-**Deep-ref process:**
+### Reify Function
 
-1. ref `. 2,` → index 0
-2. ref `. 2, 1,` → index 1 (tail already at index 0)
-3. ref array → index 2
+Generates reconstruction bytecode for a value.
 
-**Reconstruction code:**
+**Stack effect:** `( addr start-idx -- next-addr )`
 
-```
-. 2, ref drop           ; index 0
-0 deref 1, ref drop     ; index 1 (reuses tail via deref)
-[0 deref 1 deref] ref drop  ; index 2
-```
+**Process:**
 
-Only structured values (cons, array, map, closure) need pool entries. Primitives (int, string, nil) are emitted inline.
+1. Loop: `idx deref` → if nil, stop; otherwise emit reconstruction code for value, increment idx, repeat
+2. For each subterm, call `ref` to get index: if >= 0 emit `deref`, if -1 emit inline
+3. After reconstructing each value, emit `ref drop` to store it in the pool
 
-### Stage 1: Deep Ref
+The `deref` operator returns nil for out-of-bounds indices, providing loop termination.
 
-Modify `ref` operator to recursively pool structured subterms before pooling the value itself.
+**Per-type emission:**
 
-**Current behavior:** Store value directly, return index (with deduplication).
+| Type | Emit |
+|------|------|
+| intval | `push-int N` |
+| stringval | `push-string ID` |
+| nilval | `op .` |
+| consval | emit tail, emit head, `op ,` |
+| arrayval | `start-array`, emit elements, `end-array` |
+| mapval | `op $`, for each: emit value, `push-int key`, `op idToIdent`, `op :` |
+| bytecodeval | `start-array`, emit context, `end-array`, `push-int addr`, `op close` |
+| termval | see below |
 
-**New behavior (algorithm):**
+**Term emission:**
 
-1. If primitive (int, string, nil) or closureval: return -1 (not pooled)
-2. Search hash table for existing index; return if found
-3. Recurse according to compound type (ignore results, just ensures subterms are pooled):
-   - arrayval: ref each element
-   - mapval: ref each value
-   - consval: ref head and tail
-   - bytecodeval: ref the context array
-   - termval: don't recurse (avoids complexity; terms are syntax)
-4. Add value to hash table, return index
-
-**Why closureval returns -1:** For image serialization, all closurevals must be compiled to bytecodevals first. Returning -1 signals "not suitable for pooling". This is a breaking change for code that refs closurevals directly.
-
-**Testing:**
-
-```
-; Create shared substructure
-. 2, /tail
-tail 1, /list1
-tail 3, /list2
-[list1 list2] ref drop
-
-; Verify tail was pooled with consistent index
-tail ref /idx1
-tail ref /idx2
-idx1 idx2 =  ; 0 (same index, sharing preserved)
-
-; Verify deref retrieves correct value
-idx1 deref tail =  ; 0 (values equal)
-
-; Primitives return -1
-42 ref -1 =  ; 0
-. ref -1 =   ; 0
-
-; Closurevals return -1 (must compile to bytecodeval first)
-{ 1 } ref -1 =  ; 0
-```
-
-This change is self-contained: existing code that refs structured values gets the same index, with subterms also pooled as a side effect. Code that refs primitives or closurevals now gets -1 instead of a pool index.
+| Term | Emit |
+|------|------|
+| identifier(id) | `push-int id`, `op idToIdent` |
+| binder(id) | `push-int id`, `op idToBinder` |
+| apply_term | `push-quoted-apply` |
+| function(terms) | emit term array, `op mkFunc` |
+| generator(terms) | emit term array, `op mkGen` |
+| quoted(term) | emit inner, `op wrap` |
+| value(val) | emit value, `op wrap` |

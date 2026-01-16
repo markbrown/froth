@@ -342,7 +342,8 @@ vm_deref(IP, !Stack, !SP, Pool) :-
             array.lookup(Pool, Idx, Value),
             datastack.push(Value, !Stack, !SP)
         else
-            throw(vm_error(IP, vm_index_out_of_bounds(Idx, array.size(Pool))))
+            % Out of bounds returns nil (sentinel for pool iteration)
+            datastack.push(nilval, !Stack, !SP)
         )
     else
         throw(vm_error(IP, vm_type_error("int", V)))

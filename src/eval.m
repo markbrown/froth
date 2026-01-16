@@ -456,7 +456,8 @@ eval_deref(Store, !Stack, !SP, Pool) :-
             array.lookup(Pool, Idx, Value),
             datastack.push(Value, !Stack, !SP)
         else
-            throw(index_out_of_bounds(Idx, PP))
+            % Out of bounds returns nil (sentinel for pool iteration)
+            datastack.push(nilval, !Stack, !SP)
         )
     else
         throw(type_error("int", V))
