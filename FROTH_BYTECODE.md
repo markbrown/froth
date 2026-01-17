@@ -47,41 +47,6 @@ Shared substructures are preserved via deep-ref: when `ref` is called on a struc
 
 The `ref` operator returns -1 for primitives (int, string, nil) and closurevals (which must be compiled to bytecodevals first). Only structured values (array, map, cons, bytecodeval) get pool indices.
 
-### Reify Function
+### Pool Reification
 
-Generates reconstruction bytecode for a value.
-
-**Stack effect:** `( addr start-idx -- next-addr )`
-
-**Process:**
-
-1. Loop: `idx deref` → if nil, stop; otherwise emit reconstruction code for value, increment idx, repeat
-2. For each subterm, call `ref` to get index: if >= 0 emit `deref`, if -1 emit inline
-3. After reconstructing each value, emit `ref drop` to store it in the pool
-
-The `deref` operator returns nil for out-of-bounds indices, providing loop termination.
-
-**Per-type emission:**
-
-| Type | Emit |
-|------|------|
-| intval | `push-int N` |
-| stringval | `push-string ID` |
-| nilval | `op .` |
-| consval | emit tail, emit head, `op ,` |
-| arrayval | `start-array`, emit elements, `end-array` |
-| mapval | `op $`, for each: emit value, `push-int key`, `op idToIdent`, `op :` |
-| bytecodeval | `start-array`, emit context, `end-array`, `push-int addr`, `op close` |
-| termval | see below |
-
-**Term emission:**
-
-| Term | Emit |
-|------|------|
-| identifier(id) | `push-int id`, `op idToIdent` |
-| binder(id) | `push-int id`, `op idToBinder` |
-| apply_term | `push-quoted-apply` |
-| function(terms) | emit term array, `op mkFunc` |
-| generator(terms) | emit term array, `op mkGen` |
-| quoted(term) | emit inner, `op wrap` |
-| value(val) | emit value, `op wrap` |
+See FROTH_COMPILER.md for the `reify-pool` function and related helpers that generate reconstruction bytecode for the constant pool.

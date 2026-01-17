@@ -30,6 +30,13 @@ This document describes the compiler infrastructure for Froth!, including byteco
 | `make-node` | node | Create appropriate node type for term |
 | `new-quote-node` | node | Create quote node with defaults |
 | `preflight` | preflight | Check for env/import/applyOperator usage |
+| `reify-array` | reify | Emit code to reconstruct an array |
+| `reify-closure` | reify | Emit code to reconstruct a bytecodeval |
+| `reify-cons` | reify | Emit code to reconstruct a cons cell |
+| `reify-map` | reify | Emit code to reconstruct a map |
+| `reify-pool` | reify | Generate reconstruction bytecode for the constant pool |
+| `reify-term` | reify | Emit code to reconstruct a term |
+| `reify-value` | reify | Emit code to push a value |
 | `slots` | slots | Allocate frame slots for function |
 | `codegen` | codegen | Generate bytecode for a function |
 
@@ -496,3 +503,94 @@ env-map 'f @ !                 ; 3 (compiled and executed)
 cache code-map addr env-map 'g compile! /env-map /addr /code-map /cache
 env-map 'g @ !                 ; 10
 ```
+
+## Reify (reify.froth)
+
+Pool reification for image serialization. Generates bytecode that reconstructs the constant pool when executed.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `reify-pool` | `( addr idx -- next-addr )` | Generate reconstruction bytecode for pool entries starting at idx |
+| `reify-value` | `( value addr -- next-addr )` | Emit code to push a value onto the stack |
+| `reify-cons` | `( cons addr -- next-addr )` | Emit code to construct a cons cell |
+| `reify-array` | `( array addr -- next-addr )` | Emit code to construct an array |
+| `reify-map` | `( map addr -- next-addr )` | Emit code to construct a map |
+| `reify-closure` | `( bytecodeval addr -- next-addr )` | Emit code to construct a bytecodeval |
+| `reify-term` | `( term addr -- next-addr )` | Emit code to construct a term value |
+
+### reify-pool
+
+Main entry point for pool reification. Iterates through pool entries starting at `idx`, emitting reconstruction bytecode for each value. Stops when `deref` returns nil (end of pool).
+
+For each pool entry:
+
+1. Dispatch to appropriate reify function based on type
+2. Emit `op ref` and `pop-unused` to store the reconstructed value in the pool
+
+```
+; Add values to pool
+[ 1 2 3 ] ref drop!
+$ 42 'x : ref drop!
+
+; Generate reconstruction code at address 5000
+5000 0 reify-pool! /end-addr
+
+; The generated code, when executed, will reconstruct the pool
+```
+
+### reify-value
+
+Emit code to push a value. If the value is in the pool (ref >= 0), emits `push-int idx`, `op deref`. If the value is a primitive (ref = -1), emits inline code based on type:
+
+- Integer: `push-int N`
+- String: `push-string ID`
+- Nil: `op .`
+
+### reify-cons
+
+Emit code to construct a cons cell:
+
+1. `reify-value` on tail (pushed first)
+2. `reify-value` on head
+3. Emit `op ,`
+
+### reify-array
+
+Emit code to construct an array:
+
+1. Emit `start-array`
+2. For each element: `reify-value`
+3. Emit `end-array`
+
+### reify-map
+
+Emit code to construct a map:
+
+1. Emit `op $` (empty map)
+2. For each key-value pair:
+   - `reify-value` on the value
+   - `push-int key-id`, `op idToIdent` for the key
+   - `op :` to store
+
+### reify-closure
+
+Emit code to construct a bytecodeval. The context array is already in the pool (due to deep-ref), so:
+
+1. Get the context array's pool index
+2. Emit `push-int ctx-idx`, `op deref`
+3. Emit `push-int code-addr`, `op close`
+
+### reify-term
+
+Emit code to construct term values. Dispatches by term type:
+
+| Term Type | Code Emitted |
+|-----------|--------------|
+| identifier | `push-int id`, `op idToIdent` |
+| binder | `push-int id`, `op idToBinder` |
+| apply | `push-quoted-apply` |
+| function | `start-array`, reify each body term, `end-array`, `op mkFunc` |
+| generator | `start-array`, reify each body term, `end-array`, `op mkGen` |
+| quoted | reify inner term, `op wrap` |
+| value(int) | `push-int n`, `op wrap` |
+| value(string) | `push-string id`, `op wrap` |

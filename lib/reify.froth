@@ -1,88 +1,274 @@
-; reify.froth - Convert values to executable term arrays
+; reify.froth - Pool reification for image serialization
 ;
-; reify: ( value -- array )
-;   Returns an array of terms that, when executed, reproduce the value.
+; See FROTH_BYTECODE.md for design documentation.
 ;
-; Usage:
-;   42 reify!                    ; [ '42 ]
-;   42 reify! mkFunc             ; '{ 42 }
-;   $ 42 reify! mkFunc close !   ; 42
+; Generates bytecode that reconstructs the constant pool when executed.
 
-; Cache operator identifiers
-"." intern idToIdent /op-nil
-"," intern idToIdent /op-cons
-"$" intern idToIdent /op-empty
-":" intern idToIdent /op-store
+; Cache instruction codes
+instruction-table 'push-int @ /ocPushInt
+instruction-table 'op @ /ocOp
+instruction-table 'push-string @ /ocPushString
+instruction-table 'start-array @ /ocStartArray
+instruction-table 'end-array @ /ocEndArray
+instruction-table 'push-quoted-apply @ /ocPushQuotedApply
+instruction-table 'pop-unused @ /ocPopUnused
 
-{ /self /v
-  ; Integer - wrap to get quoted value
-  v isInt 0 = { [ v wrap ] } {
-  ; String - wrap to get quoted value
-  v isString 0 = { [ v wrap ] } {
-  ; Nil - produce . operator
-  v isNil 0 = { [ op-nil ] } {
-  ; Cons - reify tail, reify head, then ,
-  v isCons 0 = {
-    v snd self self!
-    v fst self self!
-    concat!
-    [ op-cons ] concat!
+; Cache operator codes
+operator-table '. @ /opNil
+operator-table ', @ /opCons
+operator-table '$ @ /opEmpty
+operator-table ': @ /opStore
+operator-table 'ref @ /opRef
+operator-table 'deref @ /opDeref
+operator-table 'idToIdent @ /opIdToIdent
+operator-table 'idToBinder @ /opIdToBinder
+operator-table 'mkFunc @ /opMkFunc
+operator-table 'mkGen @ /opMkGen
+operator-table 'wrap @ /opWrap
+operator-table 'close @ /opClose
+
+; emit-op: ( opcode addr -- next-addr )
+; Emit an operator instruction
+['emit-all-at 'ocOp]
+{ /addr /opcode [ ocOp opcode ] addr emit-all-at! }
+def-fn! /emit-op
+
+; emit-push-int: ( n addr -- next-addr )
+; Emit push-int instruction
+['emit-all-at 'ocPushInt]
+{ /addr /n [ ocPushInt n ] addr emit-all-at! }
+def-fn! /emit-push-int
+
+; emit-push-string: ( id addr -- next-addr )
+; Emit push-string instruction (id is intern ID)
+['emit-all-at 'ocPushString]
+{ /addr /id [ ocPushString id ] addr emit-all-at! }
+def-fn! /emit-push-string
+
+;-----------------------------------------------------------------------
+; reify-value: ( value addr -- next-addr )
+; Emit code to push a value onto the stack.
+; If value is in pool (ref >= 0), emit deref.
+; If primitive (ref = -1), emit inline.
+
+{ /self /addr /v
+  v ref /idx
+  idx 0 >= {
+    ; Pooled value: emit push-int idx, op deref
+    idx addr emit-push-int! /addr
+    opDeref addr emit-op!
   } {
-  ; Array - reify elements into a generator term
-  v isArray 0 = {
-    ; Collect all terms into a flat array using generator
-    ; Each element reifies to an array of terms; we flatten them
-    [
-      0 v # { /i
-        v i @ self self! /terms  ; reify element → array of terms
-        0 terms # { /j terms j @ j 1 + } times-loop! drop!  ; spread terms
-        i 1 +
-      } times-loop! drop!
-    ] mkGen
-    /g [ g ]  ; wrap generator term in single-element array
-  } {
-  ; Map - produce $ val1 'key1 : val2 'key2 : ...
-  v isMap 0 = {
-    [ op-empty ]
-    v keys { /k
-      v k @ self self! concat!   ; value terms
-      [ k wrap ] concat!         ; quoted key (double-quoted)
-      [ op-store ] concat!       ; : operator
-    } foldl!
-  } {
-  ; Quoted identifier - double-quote it
-  v isIdent 0 = { [ v wrap ] } {
-  ; Quoted binder - double-quote it
-  v isBinder 0 = { [ v wrap ] } {
-  ; Quoted function - double-quote it
-  v isFunc 0 = { [ v wrap ] } {
-  ; Quoted generator - double-quote it
-  v isGen 0 = { [ v wrap ] } {
-  ; Quoted quote - double-quote it
-  v isQuote 0 = { [ v wrap ] } {
-  ; Quoted apply - double-quote it
-  v isApply 0 = { [ v wrap ] } {
-  ; Quoted value - double-quote it
-  v isValue 0 = { [ v wrap ] } {
-  ; Closure - decompose and reconstruct with close
-  v isClosure 0 = {
-    v open /body /env
-    body isFunc 0 = {
-      ; closureval: env is map, body is quoted function
-      env self self!                     ; terms to produce env map
-      [ body wrap ] concat!              ; double-quote the function body
-      [ "close" intern idToIdent ] concat!  ; close operator
+    ; Primitive: emit inline
+    v isInt 0 = {
+      v addr emit-push-int!
     } {
-      ; bytecodeval: env is array, body is int (address)
-      ; Cannot meaningfully reify - return empty with warning
-      "warning: cannot reify bytecode closure\n" print
-      [ ]
+    v isString 0 = {
+      v intern addr emit-push-string!
+    } {
+    v isNil 0 = {
+      opNil addr emit-op!
+    } {
+      ; Should not happen - only primitives return -1
+      "reify-value: unexpected value type\n" print
+      addr
+    } ?! } ?! } ?!
+  } ?!
+} /reify-value-impl
+
+['reify-value-impl] { /addr /v v addr reify-value-impl reify-value-impl! } def-fn! /reify-value
+
+;-----------------------------------------------------------------------
+; reify-cons: ( cons addr -- next-addr )
+; Emit code to construct a cons cell.
+
+{ /self /addr /c
+  ; Tail first (bottom of stack)
+  c snd addr reify-value! /addr
+  ; Then head
+  c fst addr reify-value! /addr
+  ; Emit comma operator
+  opCons addr emit-op!
+} /reify-cons-impl
+
+['reify-cons-impl 'reify-value]
+{ /addr /c c addr reify-cons-impl reify-cons-impl! }
+def-fn! /reify-cons
+
+;-----------------------------------------------------------------------
+; reify-array: ( array addr -- next-addr )
+; Emit code to construct an array.
+
+{ /self /addr /arr
+  ; Emit start-array
+  [ ocStartArray ] addr emit-all-at! /addr
+  ; Emit each element (state is [i addr])
+  [ 0 addr ]
+  arr # { /state
+    state 0 @ /i
+    state 1 @ /addr
+    arr i @ addr reify-value! /addr
+    [ i 1 + addr ]
+  } times-loop!
+  1 @ /addr  ; extract final addr from state
+  ; Emit end-array
+  [ ocEndArray ] addr emit-all-at!
+} /reify-array-impl
+
+['reify-array-impl 'reify-value 'ocStartArray 'ocEndArray 'emit-all-at]
+{ /addr /arr arr addr reify-array-impl reify-array-impl! }
+def-fn! /reify-array
+
+;-----------------------------------------------------------------------
+; reify-map: ( map addr -- next-addr )
+; Emit code to construct a map.
+
+{ /self /addr /m
+  ; Emit empty map operator
+  opEmpty addr emit-op! /addr
+  ; For each key-value pair (state is addr)
+  ; reduce puts (acc elem) on stack, so bind in reverse: /k /addr
+  m keys addr { /k /addr
+    ; Emit value
+    m k @ addr reify-value! /addr
+    ; Emit push-int key-id, op idToIdent
+    k intern addr emit-push-int! /addr
+    opIdToIdent addr emit-op! /addr
+    ; Emit store operator
+    opStore addr emit-op!
+  } reduce!
+} /reify-map-impl
+
+['reify-map-impl 'reify-value 'opEmpty 'opIdToIdent 'opStore 'emit-op 'emit-push-int 'reduce]
+{ /addr /m m addr reify-map-impl reify-map-impl! }
+def-fn! /reify-map
+
+;-----------------------------------------------------------------------
+; reify-closure: ( bytecodeval addr -- next-addr )
+; Emit code to construct a bytecodeval.
+
+{ /self /addr /bv
+  bv open /code-addr /ctx
+  ; Context array is already pooled - get its index
+  ctx ref /ctx-idx
+  ; Emit: push-int ctx-idx, op deref
+  ctx-idx addr emit-push-int! /addr
+  opDeref addr emit-op! /addr
+  ; Emit: push-int code-addr, op close
+  code-addr addr emit-push-int! /addr
+  opClose addr emit-op!
+} /reify-closure-impl
+
+['reify-closure-impl 'opDeref 'opClose 'emit-push-int 'emit-op]
+{ /addr /bv bv addr reify-closure-impl reify-closure-impl! }
+def-fn! /reify-closure
+
+;-----------------------------------------------------------------------
+; reify-term: ( term addr -- next-addr )
+; Emit code to construct a term value.
+
+{ /self /addr /t
+  ; Dispatch by term type
+  t isIdent 0 = {
+    ; identifier: push-int id, op idToIdent
+    t intern addr emit-push-int! /addr
+    opIdToIdent addr emit-op!
+  } {
+  t isBinder 0 = {
+    ; binder: push-int id, op idToBinder
+    t intern addr emit-push-int! /addr
+    opIdToBinder addr emit-op!
+  } {
+  t isApply 0 = {
+    ; apply: push-quoted-apply
+    [ ocPushQuotedApply ] addr emit-all-at!
+  } {
+  t isFunc 0 = {
+    ; function: start-array, reify-term each, end-array, op mkFunc
+    [ ocStartArray ] addr emit-all-at! /addr
+    [ 0 addr ]
+    t # { /state
+      state 0 @ /i
+      state 1 @ /addr
+      t i @ addr self self! /addr
+      [ i 1 + addr ]
+    } times-loop!
+    1 @ /addr
+    [ ocEndArray ] addr emit-all-at! /addr
+    opMkFunc addr emit-op!
+  } {
+  t isGen 0 = {
+    ; generator: start-array, reify-term each, end-array, op mkGen
+    [ ocStartArray ] addr emit-all-at! /addr
+    [ 0 addr ]
+    t # { /state
+      state 0 @ /i
+      state 1 @ /addr
+      t i @ addr self self! /addr
+      [ i 1 + addr ]
+    } times-loop!
+    1 @ /addr
+    [ ocEndArray ] addr emit-all-at! /addr
+    opMkGen addr emit-op!
+  } {
+  t isQuote 0 = {
+    ; quoted: reify-term inner, op wrap
+    t unwrap addr self self! /addr
+    opWrap addr emit-op!
+  } {
+  t isValue 0 = {
+    ; value: depends on inner type
+    t unwrap /inner
+    inner isInt 0 = {
+      ; value(int): push-int n, op wrap
+      inner addr emit-push-int! /addr
+      opWrap addr emit-op!
+    } {
+      ; value(string): push-string id, op wrap
+      inner intern addr emit-push-string! /addr
+      opWrap addr emit-op!
     } ?!
   } {
-  ; Unknown value type
-  "warning: cannot reify unknown value\n" print
-  [ ]
-  } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?! } ?!
-} /reify-impl
+    ; Unknown term type
+    "reify-term: unknown term type\n" print
+    addr
+  } ?! } ?! } ?! } ?! } ?! } ?! } ?!
+} /reify-term-impl
 
-{ /v v reify-impl reify-impl! } /reify
+['reify-term-impl 'emit-push-int 'emit-push-string 'emit-all-at 'emit-op
+ 'opIdToIdent 'opIdToBinder 'opMkFunc 'opMkGen 'opWrap
+ 'ocStartArray 'ocEndArray 'ocPushQuotedApply]
+{ /addr /t t addr reify-term-impl reify-term-impl! }
+def-fn! /reify-term
+
+;-----------------------------------------------------------------------
+; reify-pool: ( addr idx -- next-addr )
+; Generate bytecode to reconstruct the constant pool from index idx.
+; Iterates through pool entries until deref returns nil.
+
+{ /self /idx /addr
+  idx deref /v
+  v isNil 0 = {
+    ; End of pool
+    addr
+  } {
+    ; Dispatch by value type
+    v isCons 0 = { v addr reify-cons! } {
+    v isArray 0 = { v addr reify-array! } {
+    v isMap 0 = { v addr reify-map! } {
+    v isClosure 0 = { v addr reify-closure! } {
+      ; Must be termval
+      v addr reify-term!
+    } ?! } ?! } ?! } ?! /addr
+    ; Emit ref, pop-unused (store in pool and discard)
+    opRef addr emit-op! /addr
+    [ ocPopUnused ] addr emit-all-at! /addr
+    ; Recurse with next index
+    addr idx 1 + self self!
+  } ?!
+} /reify-pool-impl
+
+['reify-pool-impl 'reify-cons 'reify-array 'reify-map 'reify-closure 'reify-term
+ 'opRef 'emit-op 'emit-all-at 'ocPopUnused]
+{ /idx /addr addr idx reify-pool-impl reify-pool-impl! }
+def-fn! /reify-pool
+
