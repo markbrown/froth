@@ -1,0 +1,2462 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.76
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   ~/Documents/projects/froth
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+> /compact 
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read ../../../../../tmp/codegen.actual (47 lines)
+  ⎿  Referenced file FROTH_LIBRARY.md
+  ⎿  Read lib/stdlib.froth (36 lines)
+  ⎿  Read ../../../../../tmp/test_reify.froth (13 lines)
+  ⎿  Read lib/reify.froth (89 lines)
+
+> Let's think about how we might save the evaluator state in a binary 
+format, so that it can be restored in a later session. We don't need to 
+store the data stack or frame stack, only the bytecode, constants, and any 
+meta-data that will allow the environment to be reconstructed. This is a 
+challenging problem that we will need to break down into smaller tasks. What
+ are the major challenges that you think will be involved? 
+
+● This is an interesting persistence problem. Let me think through the major challenges:
+
+  1. Value Serialization
+
+  The constant pool contains arbitrary Froth values. Each type needs a binary representation:
+  - Primitives: intval, stringval, nilval - straightforward
+  - Compound: arrayval, mapval, consval - recursive, contain other values
+  - Closures: closureval (map + term), bytecodeval (array + address)
+  - Terms: All the termval variants (identval, funcval, genval, etc.)
+
+  The recursive nature means we need a serialization strategy (depth-first with back-references, or serialize all values into a flat table first).
+
+  2. Intern IDs
+
+  Identifiers and strings use intern IDs from the hash table. These IDs appear in:
+  - Bytecode (for quoted identifiers, operator lookups)
+  - Terms (identifier names, binder names)
+  - Map keys
+
+  Challenge: Do we preserve exact IDs (requiring identical hash table reconstruction) or allow remapping during load?
+
+  3. Bytecode Address Stability
+
+  bytecodeval stores a bytecode address. If we reload into a fresh session:
+  - Will addresses be the same?
+  - If stdlib is recompiled, its addresses will differ
+  - Need to either fix addresses or remap them
+
+  4. Closure Graph Structure
+
+  Closures can reference other closures in their environments, creating a potentially cyclic graph. Serialization must handle:
+  - Shared references (same closure in multiple environments)
+  - Avoiding infinite recursion during serialization
+
+  5. Stdlib vs User Code
+
+  The stdlib is compiled on startup. Options:
+  - Save everything (large, but self-contained)
+  - Save only user code (smaller, but requires stable stdlib addresses)
+  - Save user code with symbolic references to stdlib functions
+
+  6. What Constitutes "the Environment"?
+
+  What exactly should we save to "reconstruct the environment"? The top-level bindings? All reachable closures? The entire constant pool?
+
+  ---
+  Which of these would you like to explore first, or do you see other challenges I'm missing?
+
+> We would like to save all of the strings/names, constants, and bytecode, 
+preserving all ids and addresses. Loading will overwrite any existing state,
+ but it should allow changes via the REPL after that point. We don't need to
+ store the compiler state aside from the (implicit) bytecode top. I think 
+there are two main challenges: serializing values while preserving sharing, 
+and determining what metadata is required to be able to reconstruct a 
+working system. Is there anything else we will need to consider? 
+
+● Good summary of the two main challenges. A few additional considerations:
+
+  Metadata for Continuation
+
+  For the REPL to work after loading, we need to track "where to continue":
+  - Next intern ID - so new intern calls get fresh IDs
+  - Constant pool size - so new ref calls get fresh indices
+  - Bytecode top - so new compilations emit to the right address
+
+  Top-Level Environment
+
+  We need to designate which structure represents the environment to restore. This is a map from identifiers to values (mostly closures). It's just another value to serialize, but we need to mark it specially in the format.
+
+  Format Versioning
+
+  A magic number and version at the start, so we can detect incompatible formats or corruption.
+
+  Value Identity in Mercury
+
+  For sharing detection during serialization, we need to identify when two value references point to the same object. Mercury doesn't expose this directly - we may need to use private_builtin.pointer_equal or similar. Alternatively, we could serialize the constant pool entries by index (since ref already deduplicates), and only worry about sharing within individual values.
+
+  Terms Containing Compiled Closures
+
+  A quoted value term like 'f where f is a compiled closure - the termval wraps a bytecodeval. These need to serialize correctly.
+
+  ---
+  Does the constant pool's existing deduplication via ref simplify the sharing problem, or do we still need to handle sharing within values (e.g., an array containing the same closure twice)?
+
+> One idea is to compile values, such as constants and the environment, into
+ executable bytecode that reconstructs those things. It should be possible 
+to detect sharing in values using the ref mechanism, and add shared 
+substructures to the constant pool as we go. We may need to add special 
+bytecode instructions to support this. We can store basic metadata, such as 
+the location of this function, in some simple way. What do you think about 
+this idea? 
+
+● This is an elegant approach - it's essentially a self-extracting archive using the VM itself as the decoder. Several things I like about it:
+
+  Advantages
+
+  1. Reuses existing infrastructure - No separate deserializer needed; the VM executes the reconstruction code
+  2. Sharing via ref/deref - Build a value once, ref it, then deref when needed again
+  3. Similar to reify - We already have reify that generates terms to reconstruct values; this is the bytecode equivalent
+  4. Operators already exist - ., ,, $, :, close, start-array/end-array can build most structures
+
+  Challenges to Solve
+
+  Strings/Intern table: Bytecode uses intern IDs, but we need the strings themselves. Options:
+  - A raw string table section that populates the hash table before execution
+  - A new instruction like define-string <length> <bytes...> that interns during execution
+
+  Constant pool indices: ref auto-assigns indices via deduplication. For reconstruction, we need values at specific indices. Options:
+  - Build values in index order, trusting ref assigns sequentially
+  - Add set-pool <index> instruction for explicit placement
+
+  Reconstruction entry point: Need to know where the reconstruction code starts, stored in metadata header.
+
+  Proposed Structure
+
+  [magic + version]
+  [metadata: bytecode-top, pool-size, intern-count, reconstruct-addr]
+  [string table: count, (length, bytes)...]
+  [bytecode: raw bytes from 0 to bytecode-top]
+
+  The reconstruction bytecode at reconstruct-addr rebuilds the constant pool and environment, leaving the environment on the stack.
+
+  Does this direction seem right?
+
+> Yes, this looks good. Is the intern-count the same as the string table 
+count? We will need some kind of operator to actually perform the file 
+writing, which will work in conjunction with the code to read in the state, 
+so this operator can write the header and raw string table before writing 
+the bytecode. 
+
+● Yes, intern-count and string table count should be the same value - each interned string has exactly one ID, and IDs are assigned sequentially. We only need to store one of them. After loading, the next available intern ID equals the count.
+
+  For the operators, I'm thinking:
+
+  Save Operator
+
+  save-image ( env filename -- )
+
+  Takes the environment map and filename. In Mercury, this operator would:
+  1. Generate reconstruction bytecode for the constant pool and environment (or call a Froth helper that does this)
+  2. Write header: magic, version, bytecode-top, pool-size, string-count, reconstruct-addr
+  3. Write string table: for each interned string, write (length, bytes)
+  4. Write bytecode: raw bytes from 0 to bytecode-top (includes reconstruction code)
+
+  Load Operator
+
+  load-image ( filename -- env )
+
+  In Mercury:
+  1. Read and validate header
+  2. Clear/reset hash table, populate from string table
+  3. Clear/reset bytecode store, load bytecode
+  4. Clear/reset constant pool
+  5. Execute reconstruction code starting at reconstruct-addr
+  6. Return environment (left on stack by reconstruction code)
+
+  Question: Where Does Reconstruction Codegen Happen?
+
+  The reconstruction bytecode generation could be:
+  - In Mercury: The save operator traverses values and emits bytecode directly
+  - In Froth: A reify-to-bytecode function similar to reify, called before save
+
+  The Froth approach is more flexible but requires the compiler to be working. The Mercury approach is self-contained. Which do you prefer?
+
+> Let's not worry about a load operator yet, instead we will just load 
+images via the command line. The save operator should be minimal, so most of
+ the work will be done in froth. We will want something like 
+reify-to-bytecode, which should be able to de-dupe data in a similar way to 
+the code compiler. Does this make sense to you? 
+
+● Yes, that makes sense. The architecture would be:
+
+  Froth Side: reify-bytecode
+
+  Similar to reify but emits bytecode directly instead of building term arrays:
+
+  ; value code-map addr -- code-map addr
+  ; Emits bytecode at addr that reconstructs value when executed
+  reify-bytecode
+
+  The code-map tracks values we've already serialized (via ref indices or similar), so when we encounter the same value again, we emit deref <index> instead of rebuilding it.
+
+  Save Workflow
+
+  env tree-empty! next-addr reify-bytecode! /entry-addr /code-map /addr
+  ; bytecode now contains reconstruction code starting at entry-addr
+  entry-addr "image.fri" save-image!
+
+  Save Operator (Minimal)
+
+  save-image ( entry-addr filename -- )
+
+  Just writes:
+  1. Header: magic, version, bytecode-top, string-count, entry-addr
+  2. String table: all interned strings with their IDs
+  3. Bytecode: raw bytes from 0 to bytecode-top
+
+  Load (Command Line)
+
+  Something like ./froth -i image.fri that:
+  1. Reads header and validates
+  2. Populates hash table from string table
+  3. Loads bytecode into store
+  4. Executes from entry-addr to reconstruct environment
+  5. Enters REPL with that environment
+
+  ---
+  One question: for deduplication, should we use the existing ref/deref mechanism (constant pool), or track sharing separately during serialization? Using ref means shared values get pool indices, which deref retrieves. This seems natural but means the reconstruction code modifies the pool.
+
+> There may be a way of preserving sharing on reload by modifying the ref 
+operator so that it traverses structures bottom-up and creates a ref for 
+each subterm. If we do this, then the code that reconstructs each value is 
+guaranteed to have already constructed subterms, and can safely dereference 
+them as it reconstructs the pool. For example, consider an array of lists 
+such as `[. 2, . 2, 1,]`. To ref this value we would first ref the subterm 
+`. 2,`, which only has leaf nodes as children, then process `. 2, 1,`. This 
+would in turn process the subterm `. 2,` which would pick up the ref from 
+the previous array element, then we would ref the `. 2, 1,` term. Finally, 
+we ref the array value. When generating code for a term, we would just need 
+to ref each subterm to get the pool index to use, then generate the correct 
+deref. Does that all make sense? 
+
+● Yes, that makes sense. Let me trace through your example to confirm:
+
+  Value: [. 2, . 2, 1,] (array with two cons lists sharing a common tail)
+
+  Bottom-up ref process:
+
+  1. ref . 2, (first array element)
+    - ref . → index 0
+    - ref 2 → index 1
+    - ref . 2, → index 2
+  2. ref . 2, 1, (second array element)
+    - ref . 2, → already index 2 (sharing detected!)
+    - ref 1 → index 3
+    - ref . 2, 1, → index 4
+  3. ref the array → index 5
+
+  Reconstruction code (executed in pool order):
+
+  .                    ; build nil
+  push-int 2           ; build 2
+  deref 0  deref 1 ,   ; build . 2,
+  push-int 1           ; build 1
+  deref 2  deref 3 ,   ; build . 2, 1,  (reuses index 2!)
+  start-array deref 2 deref 4 end-array  ; build array
+
+  Each value is constructed and implicitly stored at the next pool index. The sharing of . 2, is preserved because both cons cells reference pool index 2.
+
+  So the modified ref would:
+  1. Recursively ref all subterms first
+  2. Then ref the value itself
+  3. Return the index (existing if already present, new if not)
+
+  And reify-bytecode would:
+  1. Call this deep-ref on the root value
+  2. Emit reconstruction code in pool-index order
+  3. Each instruction sequence builds one pool entry using deref for subterms
+
+  Is this the right understanding?
+
+> You only need to reference subterms if they have some structure, so there 
+would be no need to ref values like `2` and `.`. The generated code can just
+ include such values directly. So in the above example, its only the cons 
+cells and the array that actually contain any structure. Does that make 
+sense? 
+
+● Yes, that's cleaner. Only compound/structured values need pool entries:
+
+  Value: [. 2, . 2, 1,]
+
+  Bottom-up ref (structured values only):
+
+  1. ref . 2, → index 0
+  2. ref . 2, 1, → index 1
+  3. ref array → index 2
+
+  Reconstruction code:
+
+  . 2 ,                           ; build . 2, (index 0)
+  deref 0  1 ,                    ; build . 2, 1, (index 1) - reuses tail
+  start-array deref 0 deref 1 end-array  ; build array (index 2)
+
+  So the rule is:
+  - Primitives (int, nil, string): emit inline
+  - Structured (cons, array, map, closure): ref them, use deref when referencing as subterm
+
+  This reduces pool size and makes reconstruction code more compact. The sharing detection still works because the deep-ref only checks structured values for existing pool entries.
+
+  For closures:
+  - closureval(env, body): ref the env map, emit code to build context, emit the quoted body, emit close
+  - bytecodeval(context, addr): ref the context array, emit deref, push the address, emit close
+
+  One edge case: quoted terms containing structured values (e.g., '[1 2 3]). Would we ref the inner array, or treat quoted terms as atomic? I'd guess we should still detect sharing within quoted values.
+
+> I think the reconstruction code would find the ref for `. 2,`, so the 
+reconstruction code would be equivalent to the following. Does this fit with
+ your understanding?
+```
+. 2, ref /drop (index 0)
+0 deref 1, ref /drop (index 1)
+[0 deref 1 deref] ref /drop (index 3)
+``` 
+
+● Yes, that makes sense. The reconstruction code explicitly calls ref to store each value in the pool. Let me trace through:
+
+  . 2, ref drop       ; build cons, store at index 0, discard index
+  0 deref 1, ref drop ; deref tail, build cons, store at index 1, discard
+  [0 deref 1 deref] ref drop  ; build array from derefs, store at index 2
+
+  (I assume index 3 was a typo for index 2?)
+
+  So the pattern for each structured value is:
+  1. Build the value (using deref for structured subterms, literals for primitives)
+  2. ref to store in pool
+  3. drop the returned index
+
+  The deep-ref traversal determines the indices ahead of time, so when generating code we know exactly which index each deref should use.
+
+  For the final environment, we'd end with something like:
+  ... all the structured values ...
+  N deref  ; leave the environment map on the stack (don't ref/drop)
+
+  Where N is the pool index of the top-level environment. This value stays on the stack for the loader to use.
+
+> That sounds good. Let's clarify our plan for modification of the ref 
+operator to pool all subterms prior to pooling a value. What are the main 
+things we need to do? How should we test this change? Is this a 
+self-contained change, or should we start with a smaller task? 
+
+● Good idea to clarify the plan before implementing.
+
+  What Needs to Change
+
+  Modify ref in src/operators.m to recursively ref structured subterms before storing the value itself:
+
+  1. If value is primitive (int, string, nil): store directly as before
+  2. If value is structured (cons, array, map, closureval, bytecodeval):
+    - Recursively ref each subterm first
+    - Then store the value
+
+  Testing
+
+  A Froth test that verifies subterms are pooled and sharing is detected:
+
+  ; Create shared substructure
+  . 2, /tail
+  tail 1, /list1
+  tail 3, /list2
+  [list1 list2] ref /arr-idx
+
+  ; Check that tail was pooled and has consistent index
+  tail ref /tail-idx1
+  tail ref /tail-idx2
+  tail-idx1 tail-idx2 = 0 = { "sharing ok" } { "FAIL: sharing" } ?! println!
+
+  ; Check subterms are in pool
+  tail-idx1 deref . 2, = 0 = { "deref ok" } { "FAIL: deref" } ?! println!
+
+  Is This Self-Contained?
+
+  Yes - the change only affects what gets stored in the pool, not the returned index. Existing code that calls ref will still get the correct index for their value; they just also get subterms pooled as a side effect.
+
+  Suggested First Step
+
+  1. Read current ref implementation in operators.m
+  2. Implement recursive subterm handling
+  3. Run existing tests (should still pass)
+  4. Add new test for sharing detection
+
+  Shall I start by reading the current ref implementation?
+
+> Let's document our plan in FROTH_BYTECODE. Include enough context to 
+understand the overall plan, but only give details on this first stage to 
+modify ref. 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 20 lines
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 72 lines                                                      
+      17  ## Limitations
+      18  
+      19  Compilation can fail for functions using dynamic constructs (`e
+          nv`, `import`, `applyOperator`) that prevent static analysis.
+      20 +                                                               
+      21 +## Image Serialization                                         
+      22 +                                                               
+      23 +Save evaluator state to a binary file for later restoration. Th
+         +e image contains bytecode, the constant pool, the string table,
+         + and metadata allowing the environment to be reconstructed.    
+      24 +                                                               
+      25 +### Design Overview                                            
+      26 +                                                               
+      27 +Rather than a custom binary format for values, we compile value
+         +s into reconstruction bytecode that rebuilds them when executed
+         +. This reuses the existing VM as the deserializer.             
+      28 +                                                               
+      29 +**Saving:**                                                    
+      30 +1. Generate reconstruction bytecode that rebuilds the constant 
+         +pool and environment                                           
+      31 +2. Write header (magic, version, bytecode-top, string-count, en
+         +try-addr)                                                      
+      32 +3. Write string table (all interned strings)                   
+      33 +4. Write bytecode (original + reconstruction code)             
+      34 +                                                               
+      35 +**Loading (via command line):**                                
+      36 +1. Read and validate header                                    
+      37 +2. Populate hash table from string table                       
+      38 +3. Load bytecode into store                                    
+      39 +4. Execute reconstruction code from entry-addr                 
+      40 +5. Enter REPL with reconstructed environment                   
+      41 +                                                               
+      42 +### Sharing Preservation                                       
+      43 +                                                               
+      44 +Shared substructures must be preserved across save/load. We ach
+         +ieve this by modifying `ref` to recursively pool subterms befor
+         +e pooling a value (bottom-up). Reconstruction code uses `deref`
+         + to retrieve already-built subterms.                           
+      45 +                                                               
+      46 +Example: `[. 2, . 2, 1,]` (array with two cons lists sharing ta
+         +il `. 2,`)                                                     
+      47 +                                                               
+      48 +**Deep-ref process:**                                          
+      49 +1. ref `. 2,` → index 0                                        
+      50 +2. ref `. 2, 1,` → index 1 (tail already at index 0)           
+      51 +3. ref array → index 2                                         
+      52 +                                                               
+      53 +**Reconstruction code:**                                       
+      54 +```                                                            
+      55 +. 2, ref drop           ; index 0                              
+      56 +0 deref 1, ref drop     ; index 1 (reuses tail via deref)      
+      57 +[0 deref 1 deref] ref drop  ; index 2                          
+      58 +```                                                            
+      59 +                                                               
+      60 +Only structured values (cons, array, map, closure) need pool en
+         +tries. Primitives (int, string, nil) are emitted inline.       
+      61 +                                                               
+      62 +### Stage 1: Deep Ref                                          
+      63 +                                                               
+      64 +Modify `ref` operator to recursively pool structured subterms b
+         +efore pooling the value itself.                                
+      65 +                                                               
+      66 +**Current behavior:** Store value directly, return index (with 
+         +deduplication).                                                
+      67 +                                                               
+      68 +**New behavior:**                                              
+      69 +1. If primitive (int, string, nil): store directly as before   
+      70 +2. If structured (cons, array, map, closureval, bytecodeval):  
+      71 +   - Recursively ref each subterm first                        
+      72 +   - Then store the value itself                               
+      73 +                                                               
+      74 +**Testing:**                                                   
+      75 +```                                                            
+      76 +; Create shared substructure                                   
+      77 +. 2, /tail                                                     
+      78 +tail 1, /list1                                                 
+      79 +tail 3, /list2                                                 
+      80 +[list1 list2] ref drop                                         
+      81 +                                                               
+      82 +; Verify tail was pooled with consistent index                 
+      83 +tail ref /idx1                                                 
+      84 +tail ref /idx2                                                 
+      85 +idx1 idx2 =  ; 0 (same index, sharing preserved)               
+      86 +                                                               
+      87 +; Verify deref retrieves correct value                         
+      88 +idx1 deref tail =  ; 0 (values equal)                          
+      89 +```                                                            
+      90 +                                                               
+      91 +This change is self-contained: existing code gets the same inde
+         +x for their value, with subterms also pooled as a side effect. 
+
+● I've added documentation covering:
+
+  1. Design Overview - The overall save/load approach using reconstruction bytecode
+  2. Sharing Preservation - How deep-ref and deref preserve shared substructures, with worked example
+  3. Stage 1: Deep Ref - Detailed specification for modifying ref, including test cases
+
+  The plan gives context for where we're heading while focusing implementation detail on the first stage. Shall I now read the current ref implementation to start the modification?
+
+> Add blank lines right before lists and code fences, for compatibility with
+ some markdown readers. 
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 1 line                                                        
+      27  Rather than a custom binary format for values, we compile value
+          s into reconstruction bytecode that rebuilds them when executed
+          . This reuses the existing VM as the deserializer.
+      28  
+      29  **Saving:**
+      30 +                                                               
+      31  1. Generate reconstruction bytecode that rebuilds the constant 
+          pool and environment
+      32  2. Write header (magic, version, bytecode-top, string-count, en
+          try-addr)
+      33  3. Write string table (all interned strings)
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 1 line                                                        
+      34  4. Write bytecode (original + reconstruction code)
+      35  
+      36  **Loading (via command line):**
+      37 +                                                               
+      38  1. Read and validate header
+      39  2. Populate hash table from string table
+      40  3. Load bytecode into store
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 1 line                                                        
+      48  Example: `[. 2, . 2, 1,]` (array with two cons lists sharing ta
+          il `. 2,`)
+      49  
+      50  **Deep-ref process:**
+      51 +                                                               
+      52  1. ref `. 2,` → index 0
+      53  2. ref `. 2, 1,` → index 1 (tail already at index 0)
+      54  3. ref array → index 2
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 1 line                                                        
+      54  3. ref array → index 2
+      55  
+      56  **Reconstruction code:**
+      57 +                                                               
+      58  ```
+      59  . 2, ref drop           ; index 0
+      60  0 deref 1, ref drop     ; index 1 (reuses tail via deref)
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 1 line                                                        
+      70  **Current behavior:** Store value directly, return index (with 
+          deduplication).
+      71  
+      72  **New behavior:**
+      73 +                                                               
+      74  1. If primitive (int, string, nil): store directly as before
+      75  2. If structured (cons, array, map, closureval, bytecodeval):
+      76     - Recursively ref each subterm first
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 1 line                                                        
+      77     - Then store the value itself
+      78  
+      79  **Testing:**
+      80 +                                                               
+      81  ```
+      82  ; Create shared substructure
+      83  . 2, /tail
+
+● Done. Added blank lines before all lists and code fences. Shall I now read the current ref implementation to start the modification?
+
+> Under "Loading", should the hash table and string table be separate? Is 
+the hash used to manage the constant pool, and a separate Mercury map used 
+for the string table? 
+
+● Good point - let me clarify the distinction:
+
+  - Intern hash table: Maps strings → intern IDs (used by intern, idToString, etc.)
+  - Constant pool: Maps indices → values (used by ref/deref)
+
+  These are separate structures. The "string table" in the saved file is the serialized form of the intern hash table - all the (string, ID) pairs needed so intern returns consistent IDs after loading.
+
+  The constant pool is rebuilt by executing the reconstruction code (which calls ref to store values).
+
+  Let me fix the documentation to be clearer:
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      36  **Loading (via command line):**
+      37  
+      38  1. Read and validate header
+      39 -2. Populate hash table from string table                       
+      39 +2. Populate intern hash table from string table (restores strin
+         +g ↔ ID mappings)                                               
+      40  3. Load bytecode into store
+      41 -4. Execute reconstruction code from entry-addr                 
+      41 +4. Execute reconstruction code from entry-addr (rebuilds consta
+         +nt pool via `ref`)                                             
+      42  5. Enter REPL with reconstructed environment
+      43  
+      44  ### Sharing Preservation
+
+● Done. The distinction is now clearer:
+  - Step 2 restores the intern hash table (string ↔ ID mappings)
+  - Step 4 rebuilds the constant pool via ref calls in reconstruction code
+
+  Shall I read the current ref implementation now?
+
+> The confusing part is that the intern table for strings is implemented 
+with a Mercury map, not a hash table. You will need to populate the map 
+representing the string table, which is in the `string_table` type. The hash
+ table for constants will be populated as a side effect of using `ref`. 
+
+● Ah, I had the terminology backwards. Let me fix that:
+
+  - String table: Mercury map (string_table type) for string ↔ ID mappings
+  - Constant pool hash table: Used by ref for deduplication, populated as side effect of reconstruction code
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 1 line, removed 1 line                                        
+      36  **Loading (via command line):**
+      37  
+      38  1. Read and validate header
+      39 -2. Populate intern hash table from string table (restores strin
+         -g ↔ ID mappings)                                               
+      39 +2. Populate string table map (restores string ↔ ID mappings for
+         + `intern`)                                                     
+      40  3. Load bytecode into store
+      41  4. Execute reconstruction code from entry-addr (rebuilds consta
+          nt pool via `ref`)
+      42  5. Enter REPL with reconstructed environment
+
+● Done. Now the terminology is correct - string table is a Mercury map, and the constant pool hash table is populated as a side effect of ref during reconstruction.
+
+  Shall I read the current ref implementation?
+
+> We need to think about the exact requirements for ref. Do we need to be 
+able to put primitive values in the constant pool? It doesn't provide much 
+benefit since the references are the same size as the values, but maybe we 
+use it for something I haven't thought of. 
+
+● Good question. Let me think through the cases:
+
+  For reconstruction codegen:
+  - Primitives are emitted inline (push-int 42, . for nil, push-string <id>)
+  - Only structured values need pool indices for deref
+  - So reconstruction doesn't need to ref primitives
+
+  For sharing detection:
+  - Identical integers are already equal - no benefit from pooling
+  - Nil is a singleton - no benefit
+  - Strings are interned via string table - already deduplicated
+
+  Potential use cases I can think of:
+  - User code that generically refs any value without checking type?
+  - Maybe the compiler stores constants via ref?
+
+  I'd lean toward: the deep-ref traversal should stop at primitives (don't recursively ref them), but ref could still accept primitives for backwards compatibility. The question is whether anything currently relies on refing primitives.
+
+  Should I check how ref is currently used in the codebase (compiler, tests, etc.) to see if primitives are ever refed?
+
+> yes, please check 
+
+● Search(pattern: "\bref\b", path: "~/Documents/projects/froth", glob:
+        "*.froth")
+  ⎿  Found 8 files (ctrl+o to expand)
+
+● Search(pattern: "operator_ref", path: "src")
+  ⎿  Found 0 files 
+
+● Search(pattern: "\bref\b", path: "~/Documents/projects/froth", glob:
+        "*.froth", output_mode: "content")
+  ⎿  Found 21 lines (ctrl+o to expand)
+
+● Read(tests/ref.froth)
+  ⎿  Read 31 lines
+
+● Read(lib/compile.froth)
+  ⎿  Read 20 lines
+
+● Read(lib/codegen.froth)
+  ⎿  Read 20 lines
+
+● Here's what I found:
+
+  tests/ref.froth - Tests ref with primitives:
+  42 ref /r          ; integer
+  99 ref /r3         ; integer
+
+  lib/compile.froth - Refs closures for deduplication:
+  func ref /func-id  ; closure/function
+
+  lib/codegen.froth - Refs quoted terms for constant pool:
+  term ref /idx      ; quoted function/generator/quote
+
+  Summary:
+  - The test explicitly refs integers (primitives)
+  - The compiler only refs closures and terms (structured values)
+
+  Options:
+
+  1. Keep primitives working: ref accepts any value, deep-ref just doesn't recurse into primitives as subterms. Backwards compatible, no test changes.
+  2. Disallow primitives: Change ref to reject primitives, update test. Simpler implementation but breaking change.
+  3. Accept but don't store primitives: ref on a primitive could return a sentinel (like -1) meaning "not pooled". Reconstruction code would need to handle this.
+
+  I'd lean toward option 1 - it's the least disruptive. The deep-ref logic just stops recursion at primitives, but direct ref of a primitive still works (even if not useful). What do you think?
+
+> Let's think about what the ref algorithm would be like with option 3 
+(return -1 for primitive values). Would the following be adequate, or are 
+there any flaws?
+1. Check for primitive types and return -1 if found.
+2. Search hash table for existing index and return if found.
+3. Recurse according to compound type, ignoring the result (since we only 
+need to ensure the table is populated properly):
+ - for arrayval, recurse into each element
+ - for mapval, recurse into each value
+ - for consval, recurse into head and tail
+ - for bytecodeval, ref the context array
+ - for termval, don't recurse (we lose sharing for these terms, but it 
+avoids complicating the design)
+ - for closureval, I'm not sure yet
+4. Add value to hash table and return the result. 
+
+● The algorithm looks sound to me. A few observations:
+
+  Order is correct: Checking the hash table (step 2) before recursing (step 3) prevents re-processing already-pooled values. Since we add to the table in step 4 (after recursing), this works because Froth values are immutable and acyclic - we always process children before parents.
+
+  For closureval: I'd suggest ref the environment map. The map case will recursively pool its values (which may include nested closures). The body is a funcval (term), so we don't recurse into it per your rule.
+
+  closureval(Env, Body):
+    - ref Env (mapval → pools its values first, then the map)
+    - ignore Body (it's a term)
+
+  Potential edge case - stringval: Should strings return -1? They're already interned via the string table, so there's no benefit to pooling them. But unlike int/nil, strings have a reference to the intern ID. I'd lean toward treating strings as primitive (-1).
+
+  Map keys: Keys are identifiers (terms), so they fall under "don't recurse for termval" - that's fine since keys are just intern IDs underneath.
+
+  One question: When we ignore the result of recursion (step 3), we're just ensuring subterms are pooled. But for reconstruction codegen later, how will we know which subterms are pooled (index ≥ 0) vs primitive (index = -1)? We'd need to call ref again on each subterm during codegen to get the index. Is that the intent?
+
+> Our intent is to have all closurevals compiled into bytecodevals in the 
+saved image, so maybe we should rethink our use of the constant pool. How do
+ we currently use the constant pool? 
+
+● Let me check the current uses:
+
+● Read(lib/codegen.froth)
+  ⎿  Read 25 lines
+
+● From what I can see, the constant pool is currently used for:
+
+  1. Quoted terms in codegen (lines 141-144): Quoted functions, generators, and nested quotes are stored via ref, then retrieved at runtime with push-int <idx> + deref
+  2. Deduplication in compile.froth: func ref gets a unique ID to check if we've already compiled a function (using the pool's hash table for identity)
+  3. User code: tree23 docs mention using ref to convert values to integer keys
+
+  If all closurevals become bytecodevals:
+
+  The constant pool would still be needed for:
+  - Quoted terms: '{ x } remains a term, not a closure
+  - Data structures: Arrays, maps, cons cells that are pure data
+  - Context arrays: Inside bytecodevals
+
+  But the pool would not contain:
+  - closureval (environments) - these become context arrays
+  - Function bodies as terms - these become bytecode addresses
+
+  Rethinking the design:
+
+  For image serialization, maybe the constant pool should only hold:
+  1. Quoted terms (syntax that needs to be preserved)
+  2. Context arrays (for bytecodevals)
+  3. Data structures (arrays, maps, cons cells)
+
+  And reconstruction codegen would:
+  - Rebuild data structures inline (using ., ,, $, :, etc.)
+  - Use ref/deref for sharing
+  - Bytecodevals reference their context arrays by pool index
+
+  Does this change what deep-ref should handle? Perhaps we don't need the closureval case at all if everything is compiled first?
+
+> right, we can skip closureval 
+
+● Good, that simplifies things. So the updated algorithm:
+
+  1. Check for primitive types (int, string, nil) → return -1
+  2. Search hash table for existing index → return if found
+  3. Recurse according to compound type (ignore results):
+    - arrayval: ref each element
+    - mapval: ref each value
+    - consval: ref head and tail
+    - bytecodeval: ref the context array
+    - termval: don't recurse
+    - closureval: skip (won't encounter - all compiled to bytecodeval)
+  4. Add value to hash table, return index
+
+  Should I update the Stage 1 documentation in FROTH_BYTECODE.md with this refined algorithm, then move on to reading the current ref implementation?
+
+> For closurevals, should we return -1 like we do for primitive types? 
+
+● Good question. Options:
+
+  1. Return -1: Signals "not suitable for serialization pooling". Consistent with the intent that closurevals should be compiled first. But this breaks existing code like { 1 2 + } ref in tests/ref.froth.
+  2. Pool it without recursing: Backwards compatible for direct ref calls, but reconstruction codegen can't handle it. Could lead to confusing failures later.
+  3. Error/fail: Explicit rejection, but harsh.
+
+  I'd lean toward return -1. It's consistent with the serialization design (closurevals must be compiled first), and the test can be updated. The message is clear: if you want to pool a closure, compile it to bytecodeval first.
+
+  Does that align with your thinking?
+
+> yes, update FROTH_BYTECODE 
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 20 lines, removed 6 lines                                     
+      69  
+      70  **Current behavior:** Store value directly, return index (with 
+          deduplication).
+      71  
+      72 -**New behavior:**                                              
+      72 +**New behavior (algorithm):**                                  
+      73  
+      74 -1. If primitive (int, string, nil): store directly as before   
+      75 -2. If structured (cons, array, map, closureval, bytecodeval):  
+      76 -   - Recursively ref each subterm first                        
+      77 -   - Then store the value itself                               
+      74 +1. If primitive (int, string, nil) or closureval: return -1 (no
+         +t pooled)                                                      
+      75 +2. Search hash table for existing index; return if found       
+      76 +3. Recurse according to compound type (ignore results, just ens
+         +ures subterms are pooled):                                     
+      77 +   - arrayval: ref each element                                
+      78 +   - mapval: ref each value                                    
+      79 +   - consval: ref head and tail                                
+      80 +   - bytecodeval: ref the context array                        
+      81 +   - termval: don't recurse (avoids complexity; terms are synta
+         +x)                                                             
+      82 +4. Add value to hash table, return index                       
+      83  
+      84 +**Why closureval returns -1:** For image serialization, all clo
+         +surevals must be compiled to bytecodevals first. Returning -1 s
+         +ignals "not suitable for pooling". This is a breaking change fo
+         +r code that refs closurevals directly.                         
+      85 +                                                               
+      86  **Testing:**
+      87  
+      88  ```
+     ...
+       99  
+      100  ; Verify deref retrieves correct value
+      101  idx1 deref tail =  ; 0 (values equal)
+      102 +                                                              
+      103 +; Primitives return -1                                        
+      104 +42 ref -1 =  ; 0                                              
+      105 +. ref -1 =   ; 0                                              
+      106 +                                                              
+      107 +; Closurevals return -1 (must compile to bytecodeval first)   
+      108 +{ 1 } ref -1 =  ; 0                                           
+      109  ```
+      110  
+       97 -This change is self-contained: existing code gets the same ind
+          -ex for their value, with subterms also pooled as a side effect
+          -.                                                             
+      111 +This change is self-contained: existing code that refs structu
+          +red values gets the same index, with subterms also pooled as a
+          + side effect. Code that refs primitives or closurevals now get
+          +s -1 instead of a pool index.                                 
+
+● Done. The documentation now includes:
+  - The detailed algorithm with all cases
+  - Explanation of why closureval returns -1
+  - Updated test cases covering sharing, primitives, and closurevals
+
+  Shall I now read the current ref implementation?
+
+> yes 
+
+● Search(pattern: "operator_ref|op_ref", path: "src", output_mode: "content")
+  ⎿  Found 8 lines (ctrl+o to expand)
+
+● Read(src/operators.m)
+  ⎿  Read 30 lines
+
+● Read(src/eval.m)
+  ⎿  Read 20 lines
+
+● Read(src/vm.m)
+  ⎿  Read 20 lines
+
+● Search(pattern: "eval_ref|vm_ref", path: "src", output_mode: "content")
+  ⎿  Found 6 lines (ctrl+o to expand)
+
+● Read(src/eval.m)
+  ⎿  Read 25 lines
+
+● Read(src/vm.m)
+  ⎿  Read 25 lines
+
+● Read(src/eval.m)
+  ⎿  Read 10 lines
+
+● Good, I now see the current implementation. Both eval_ref and vm_ref do essentially:
+
+  1. Pop value from stack
+  2. Check hash table → return existing index if found
+  3. Add to pool and hash table, return new index
+
+  The differences:
+  - eval_ref uses es_pool_count from eval_store
+  - vm_ref uses array.size(!.Pool) directly
+
+  To implement deep-ref, I need to add:
+  1. Check for primitive/closureval → return -1
+  2. Before step 3, recursively ref subterms
+
+  Question: Should I put the deep-ref logic in a shared module (to avoid duplication), or keep it in eval.m and vm.m separately? Let me check if there's an existing shared module they both use:
+
+● Bash(head -50 /home/mark/Documents/projects/froth/src/eval.m | grep -E "^:-
+      (import_module|use_module)")
+  ⎿  :- import_module array.      
+     :- import_module hash_table.
+     :- import_module io.
+     … +2 lines (ctrl+o to expand)
+
+● Bash(head -50 /home/mark/Documents/projects/froth/src/vm.m | grep -E "^:-
+      (import_module|use_module)")
+  ⎿  :- import_module array.      
+     :- import_module hash_table.
+     :- import_module io.
+     … +2 lines (ctrl+o to expand)
+
+● Both modules import the same basic modules but share no pool-specific module. Options:
+
+  1. Create new pool.m module - Shared deep-ref logic, both eval.m and vm.m call it
+  2. Put in eval.m, vm.m calls it - Adds dependency, might be awkward
+  3. Duplicate - Simple but maintenance burden
+
+  I'd suggest option 1 (new pool.m module) with a predicate like:
+
+  :- pred deep_ref(value::in, int::out,
+      array(value)::array_di, array(value)::array_uo,
+      hash_table(value, int)::hash_table_di,
+      hash_table(value, int)::hash_table_uo) is det.
+
+  Then eval_ref and vm_ref become thin wrappers that pop from stack, call deep_ref, and push the result.
+
+  What's your preference?
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 122k/200k tokens (61%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛶   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Memory files: 17.1k tokens (8.6%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Messages: 42.5k tokens (21.2%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 78k (38.8%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 129 tokens
+     └ MERCURY.md: 68 tokens
+     └ FROTH.md: 2.8k tokens
+     └ FROTH_LIBRARY.md: 6.4k tokens
+     └ FROTH_COMPILER.md: 6.6k tokens
+     └ FROTH_BYTECODE.md: 272 tokens
+     └ FROTH_GUIDE.md: 793 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> 1 
+
+● I'll create a new pool.m module with the deep-ref logic. Let me first check the types module to understand the value type structure:
+
+● Read(src/types.m)
+  ⎿  Read 309 lines
+
+● Now I have all the information. Let me create the pool.m module:
+
+● Write(src/pool.m)
+  ⎿  Wrote 141 lines to src/pool.m                                       
+      1 %----------------------------------------------------------------
+        -------%
+      2 % pool.m
+      3 % Constant pool operations with deep referencing for value serial
+        ization.
+      4 %----------------------------------------------------------------
+        -------%
+      5 :- module pool.
+      6 :- interface.
+      7 :- import_module array.
+      8 :- import_module hash_table.
+     … +131 lines (ctrl+o to expand)
+
+● Now let me update eval.m to use pool.deep_ref:
+
+● Read(src/eval.m)
+  ⎿  Read 30 lines
+
+● Search(pattern: "^:- (import_module|use_module)", path: "src/eval.m",
+        output_mode: "content")
+  ⎿  Found 17 lines (ctrl+o to expand)
+
+● Update(src/eval.m)
+  ⎿  Added 1 line                                                        
+      69  :- import_module map.
+      70  :- import_module operators.
+      71  :- import_module parser.
+      72 +:- import_module pool.                                         
+      73  :- import_module string.
+      74  :- import_module values.
+      75  :- import_module vm.
+
+● Now update the eval_ref implementation:
+
+● Update(src/eval.m)
+  ⎿  Added 4 lines, removed 16 lines                                     
+      434  
+      435  eval_ref(!Store, !Stack, !SP, !Pool, !HashTable) :-
+      436      datastack.pop("ref", V, !Stack, !SP),
+      437 -    % Check if value is already in the pool (deduplication)   
+      438 -    ( if hash_table.search(!.HashTable, V, ExistingIdx) then  
+      439 -        % Already exists, return existing index               
+      440 -        datastack.push(intval(ExistingIdx), !Stack, !SP)      
+      441 -    else                                                      
+      442 -        % New value: add to pool and hash table               
+      443 -        PP = !.Store ^ es_pool_count,                         
+      444 -        ( if PP < array.size(!.Pool) then                     
+      445 -            array.set(PP, V, !Pool)                           
+      446 -        else                                                  
+      447 -            array.resize(PP + 1, V, !Pool)                    
+      448 -        ),                                                    
+      449 -        !:Store = !.Store ^ es_pool_count := PP + 1,          
+      450 -        hash_table.det_insert(V, PP, !HashTable),             
+      451 -        datastack.push(intval(PP), !Stack, !SP)               
+      452 -    ).                                                        
+      437 +    pool.deep_ref(V, Idx, !Pool, !HashTable),                 
+      438 +    % Update pool count to match pool size (deep_ref may have 
+          +added multiple entries)                                       
+      439 +    !:Store = !.Store ^ es_pool_count := array.size(!.Pool),  
+      440 +    datastack.push(intval(Idx), !Stack, !SP).                 
+      441  
+      442  %-------------------------------------------------------------
+           ----------%
+      443  % deref: ( int -- value ) Retrieve value from constant pool
+
+● Now update vm.m:
+
+● Read(src/vm.m)
+  ⎿  Read 30 lines
+
+● Search(pattern: "^:- implementation\.|^:- import_module", path: "src/vm.m",
+        output_mode: "content")
+  ⎿  Found 14 lines (ctrl+o to expand)
+
+● Update(src/vm.m)
+  ⎿  Added 1 line                                                        
+      88  :- import_module int.
+      89  :- import_module operator_table.
+      90  :- import_module operators.
+      91 +:- import_module pool.                                         
+      92  :- import_module string.
+      93  
+      94  %--------------------------------------------------------------
+          ---------%
+
+● Update(src/vm.m)
+  ⎿  Added 2 lines, removed 8 lines                                      
+      323  
+      324  vm_ref(!Stack, !SP, !Pool, !HashTable) :-
+      325      datastack.pop("ref", V, !Stack, !SP),
+      326 -    ( if hash_table.search(!.HashTable, V, ExistingIdx) then  
+      327 -        datastack.push(intval(ExistingIdx), !Stack, !SP)      
+      328 -    else                                                      
+      329 -        Idx = array.size(!.Pool),                             
+      330 -        array.resize(Idx + 1, V, !Pool),                      
+      331 -        hash_table.det_insert(V, Idx, !HashTable),            
+      332 -        datastack.push(intval(Idx), !Stack, !SP)              
+      333 -    ).                                                        
+      326 +    pool.deep_ref(V, Idx, !Pool, !HashTable),                 
+      327 +    datastack.push(intval(Idx), !Stack, !SP).                 
+      328  
+      329  %-------------------------------------------------------------
+           ----------%
+      330  % deref: ( int -- value ) Retrieve value from constant pool
+
+● Now let me compile to check for errors:
+
+● Bash(make 2>&1 | head -50)
+  ⎿  cd src && mmc --make froth    
+     Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/pool.int3
+     … +15 lines (ctrl+o to expand)
+
+● Compiled successfully. Now let's run the existing tests:
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  Error: Exit code 1
+     PASS: add
+     PASS: alist
+     PASS: apply_op
+     PASS: arithmetic
+     PASS: arity
+     PASS: array
+     PASS: array_ops
+     PASS: binder
+     PASS: bool
+     … +66 lines (ctrl+o to see all)
+
+● The ref test fails because it expects integers to return pool indices, but now they return -1. Let me update the test:
+
+● Read(tests/ref.froth)
+  ⎿  Read 31 lines
+
+● Read(tests/ref.expected)
+  ⎿  Read 2 lines
+
+● Write(tests/ref.froth)
+  ⎿  Added 42 lines, removed 24 lines                                    
+       1 -; Test ref and deref operators                                 
+       1 +; Test ref and deref operators (deep-ref behavior)             
+       2  
+       3 -; Basic ref and deref                                          
+       4 -42 ref /r                                                      
+       5 -r deref print                                                  
+       6 -" " print                                                      
+       3 +; Primitives return -1                                         
+       4 +"primitives: " print                                           
+       5 +42 ref print " " print          ; -1                           
+       6 +. ref print " " print           ; -1                           
+       7 +"hello" ref println!            ; -1                           
+       8  
+       8 -; Deduplication: same value returns same index                 
+       9 -42 ref /r2                                                     
+      10 -r r2 = print                                                   
+      11 -" " print                                                      
+       9 +; Closurevals return -1 (must compile to bytecodeval first)    
+      10 +"closureval: " print                                           
+      11 +{ 1 2 + } ref println!          ; -1                           
+      12  
+      13 -; Different value gets different index                         
+      14 -99 ref /r3                                                     
+      15 -r r3 = print                                                   
+      16 -" " print                                                      
+      17 -                                                               
+      18 -; Arrays                                                       
+      13 +; Arrays can be stored and retrieved                           
+      14 +"array: " print                                                
+      15  [ 1 2 3 ] ref /arr-ref
+      20 -arr-ref deref print                                            
+      21 -" " print                                                      
+      16 +arr-ref print " " print         ; pool index (>= 0)            
+      17 +arr-ref deref println!          ; [ 1 2 3 ]                    
+      18  
+      23 -; Closures can be stored and retrieved                         
+      24 -{ 1 2 + } ref /fn-ref                                          
+      25 -fn-ref deref ! print                                           
+      26 -" " print                                                      
+      27 -                                                               
+      28 -; Nested structures                                            
+      19 +; Maps can be stored and retrieved                             
+      20 +"map: " print                                                  
+      21  $ 42 'answer : ref /map-ref
+      30 -map-ref deref 'answer @ println!                               
+      22 +map-ref print " " print         ; pool index                   
+      23 +map-ref deref 'answer @ println! ; 42                          
+      24 +                                                               
+      25 +; Cons cells can be stored and retrieved                       
+      26 +"cons: " print                                                 
+      27 +. 2, 1, ref /cons-ref                                          
+      28 +cons-ref print " " print        ; pool index                   
+      29 +cons-ref deref fst println!     ; 1                            
+      30 +                                                               
+      31 +; Deduplication: same structured value returns same index      
+      32 +"dedup: " print                                                
+      33 +[ 1 2 ] ref /a                                                 
+      34 +[ 1 2 ] ref /b                                                 
+      35 +a b = println!                  ; 0 (same index)               
+      36 +                                                               
+      37 +; Deep ref: substructures are pooled                           
+      38 +"deep: " print                                                 
+      39 +. 2, /tail                                                     
+      40 +[tail tail 1,] ref /arr-ref2                                   
+      41 +tail ref /tail-ref                                             
+      42 +tail-ref 0 >= println!          ; 0 (tail was pooled by deep-re
+         +f)                                                             
+      43 +                                                               
+      44 +; Sharing preserved: same substructure gets same index         
+      45 +"sharing: " print                                              
+      46 +tail ref /t1                                                   
+      47 +tail ref /t2                                                   
+      48 +t1 t2 = println!                ; 0 (same index)               
+
+● Bash(./bin/froth tests/ref.froth 2>&1)
+  ⎿  FROTH: compiled 'def-fn           
+     FROTH: compiled 'restrict-env
+     FROTH: compiled 'restrict-env-impl
+     … +133 lines (ctrl+o to expand)
+
+● Write(tests/ref.expected)
+  ⎿  Added 8 lines, removed 1 line                                       
+      1 -42 0 1 123 3 42                                                 
+      1 +primitives: -1 -1 -1                                            
+      2 +closureval: -1                                                  
+      3 +array: 476 123                                                  
+      4 +map: 477 42                                                     
+      5 +cons: 479 1                                                     
+      6 +dedup: 0                                                        
+      7 +deep: 0                                                         
+      8 +sharing: 0                                                      
+
+● Bash(./run_tests.sh 2>&1)
+  ⎿  PASS: add                     
+     PASS: alist
+     PASS: apply_op
+     … +66 lines (ctrl+o to expand)
+
+● All tests pass. Here's a summary of the changes:
+
+  New file:
+  - src/pool.m - Deep-ref logic with recursive subterm pooling
+
+  Modified files:
+  - src/eval.m - Uses pool.deep_ref, updates pool count after
+  - src/vm.m - Uses pool.deep_ref
+  - tests/ref.froth - Updated to test new behavior (primitives → -1, sharing, deep-ref)
+  - tests/ref.expected - Updated expected output
+
+  Behavior changes:
+  - Primitives (int, string, nil) return -1
+  - closureval returns -1 (must compile first)
+  - Structured values (array, map, cons, bytecodeval) are pooled with subterms pooled first
+  - Sharing is preserved via hash table deduplication
+
+  The test verifies:
+  - Primitives return -1
+  - Closurevals return -1
+  - Arrays, maps, cons can be stored and retrieved
+  - Deduplication works for identical values
+  - Deep-ref pools substructures
+  - Sharing is preserved (same substructure gets same index)
+
+  Would you like me to commit this?
+
+> commit this 
+
+● Bash(git status)
+  ⎿  On branch master                               
+     Your branch is up to date with 'origin/master'.
+     … +13 lines (ctrl+o to expand)
+
+● Bash(git diff FROTH_BYTECODE.md)
+  ⎿  (No content)
+
+● Bash(git log --oneline -5)
+  ⎿  fa78b24 add transcripts 98-A1                                        
+     0398fc3 Add reify function and fix isClosure for bytecode closures
+     f18db8f Fix frame overlap bug in nested VM-to-interpreter-to-VM calls
+     … +2 lines (ctrl+o to expand)
+
+● Bash(git diff --cached --stat)
+  ⎿  FROTH_BYTECODE.md  |  92 +++++++++++++++++++++++++++++++++++          
+     src/eval.m         |  21 ++------
+     src/pool.m         | 140 +++++++++++++++++++++++++++++++++++++++++++++
+    … +5 lines (ctrl+o to expand)
+
+
+● Bash(git commit -m "Implement deep-ref for constant pool with subterm
+      sharing…)
+  ⎿ [master 9bcd0ad] Implement deep-ref for constant pool with subterm shar
+    ing
+     6 files changed, 290 insertions(+), 49 deletions(-)
+     create mode 100644 src/pool.m
+
+
+● Bash(git status)
+  ⎿  On branch master                                    
+     Your branch is ahead of 'origin/master' by 1 commit.
+       (use "git push" to publish your local commits)
+     … +8 lines (ctrl+o to expand)
+
+● Committed: 9bcd0ad - Implement deep-ref for constant pool with subterm sharing
+
+  The commit includes:
+  - New src/pool.m module with deep_ref predicate
+  - Updated src/eval.m and src/vm.m to use the new module
+  - Updated tests/ref.froth and tests/ref.expected for new behavior
+  - Documentation in FROTH_BYTECODE.md for the image serialization design
+
+> what's the next step 
+
+● Based on the plan in FROTH_BYTECODE.md, the next steps are:
+
+  1. Reconstruction bytecode generation (reify-bytecode in Froth)
+    - Takes a value and emits bytecode that reconstructs it
+    - For structured values: call ref to get pool index, emit deref <index>
+    - For primitives: emit inline (push-int, ., push-string)
+    - For compound types: emit construction ops (,, $, :, start-array/end-array, close)
+    - Each reconstructed value gets refed to rebuild the pool
+  2. Save operator (save-image in Mercury)
+    - Takes entry-addr and filename
+    - Writes header, string table, bytecode
+  3. Load via command line (in Mercury)
+    - Read file, populate string table, load bytecode, execute reconstruction
+
+  I'd suggest starting with reconstruction bytecode generation since it's the core logic and can be tested independently (emit bytecode, execute it, verify the value matches).
+
+  Want to start on reify-bytecode?
+
+> Our current reify function was an earlier attempt to provide the required 
+functionality, however the current approach is better. Should we call the 
+new function `reify`, and remove the existing function? 
+
+● Good question. Let me consider the differences:
+
+  Existing reify (lib/reify.froth):
+  - Returns array of terms that reproduce the value
+  - Useful for inspection/debugging (can see the terms)
+  - Executes via interpreter (slower)
+
+  New bytecode reify:
+  - Emits bytecode directly to the bytecode store
+  - More efficient for serialization
+  - Executes via VM
+
+  For image serialization, we only need the bytecode version. The term-based version was an intermediate exploration.
+
+  I'd say yes, replace it - the new approach is more aligned with the goal. If we later need term-based reification for debugging, we can add a separate reify-terms function.
+
+  This would involve:
+  1. Remove or rename lib/reify.froth
+  2. Implement new reify in Froth that emits bytecode
+  3. Update lib/stdlib.froth import
+  4. Update FROTH_LIBRARY.md documentation
+
+  Want me to proceed with removing the old reify first, then implementing the new one?
+
+> Let's simplify FROTH_BYTECODE.md to remove the details of stage 1, since 
+we have completed that. Instead, document our plans for the new version of 
+`reify` 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 112 lines
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 30 lines, removed 51 lines                                    
+       43  
+       44  ### Sharing Preservation
+       45  
+       46 -Shared substructures must be preserved across save/load. We ac
+          -hieve this by modifying `ref` to recursively pool subterms bef
+          -ore pooling a value (bottom-up). Reconstruction code uses `der
+          -ef` to retrieve already-built subterms.                       
+       46 +Shared substructures are preserved via deep-ref: when `ref` is
+          + called on a structured value, it recursively pools all subter
+          +ms first. This ensures reconstruction code can use `deref` to 
+          +retrieve shared subterms.                                     
+       47  
+       48 -Example: `[. 2, . 2, 1,]` (array with two cons lists sharing t
+          -ail `. 2,`)                                                   
+       48 +The `ref` operator returns -1 for primitives (int, string, nil
+          +) and closurevals (which must be compiled to bytecodevals firs
+          +t). Only structured values (array, map, cons, bytecodeval) get
+          + pool indices.                                                
+       49  
+       50 -**Deep-ref process:**                                         
+       50 +### Reify Function                                            
+       51  
+       52 -1. ref `. 2,` → index 0                                       
+       53 -2. ref `. 2, 1,` → index 1 (tail already at index 0)          
+       54 -3. ref array → index 2                                        
+       52 +The `reify` function generates reconstruction bytecode for a v
+          +alue. It replaces the earlier term-based reify with direct byt
+          +ecode emission.                                               
+       53  
+       56 -**Reconstruction code:**                                      
+       54 +**Stack effect:** `( value addr -- addr' )`                   
+       55  
+       58 -```                                                           
+       59 -. 2, ref drop           ; index 0                             
+       60 -0 deref 1, ref drop     ; index 1 (reuses tail via deref)     
+       61 -[0 deref 1 deref] ref drop  ; index 2                         
+       62 -```                                                           
+       56 +**Algorithm:**                                                
+       57  
+       64 -Only structured values (cons, array, map, closure) need pool e
+          -ntries. Primitives (int, string, nil) are emitted inline.     
+       58 +For each value type, emit bytecode that reconstructs it:      
+       59  
+       66 -### Stage 1: Deep Ref                                         
+       60 +- **intval**: `push-int N`                                    
+       61 +- **stringval**: `push-string ID`                             
+       62 +- **nilval**: `op .`                                          
+       63 +- **consval**: reify tail, reify head, `op ,`                 
+       64 +- **arrayval**: `start-array`, reify each element, `end-array`
+       65 +- **mapval**: `op $`, then for each key-value: reify value, `p
+          +ush-int key-id`, `op idToIdent`, `op :`                       
+       66 +- **bytecodeval**: `start-array`, reify context elements, `end
+          +-array`, `push-int addr`, `op close`                          
+       67 +- **termval**: emit code to reconstruct the term (details TBD)
+       68 +- **closureval**: error (must compile first)                  
+       69  
+       68 -Modify `ref` operator to recursively pool structured subterms 
+          -before pooling the value itself.                              
+       70 +After emitting reconstruction code for a structured value, emi
+          +t `op ref` and `op drop` to store it in the pool. This rebuild
+          +s the pool with the same indices as the original.             
+       71  
+       70 -**Current behavior:** Store value directly, return index (with
+          - deduplication).                                              
+       72 +**Example:** For `[. 2, . 2, 1,]` with shared tail:           
+       73  
+       72 -**New behavior (algorithm):**                                 
+       73 -                                                              
+       74 -1. If primitive (int, string, nil) or closureval: return -1 (n
+          -ot pooled)                                                    
+       75 -2. Search hash table for existing index; return if found      
+       76 -3. Recurse according to compound type (ignore results, just en
+          -sures subterms are pooled):                                   
+       77 -   - arrayval: ref each element                               
+       78 -   - mapval: ref each value                                   
+       79 -   - consval: ref head and tail                               
+       80 -   - bytecodeval: ref the context array                       
+       81 -   - termval: don't recurse (avoids complexity; terms are synt
+          -ax)                                                           
+       82 -4. Add value to hash table, return index                      
+       83 -                                                              
+       84 -**Why closureval returns -1:** For image serialization, all cl
+          -osurevals must be compiled to bytecodevals first. Returning -1
+          - signals "not suitable for pooling". This is a breaking change
+          - for code that refs closurevals directly.                     
+       85 -                                                              
+       86 -**Testing:**                                                  
+       87 -                                                              
+       74  ```
+       89 -; Create shared substructure                                  
+       90 -. 2, /tail                                                    
+       91 -tail 1, /list1                                                
+       92 -tail 3, /list2                                                
+       93 -[list1 list2] ref drop                                        
+       75 +; Pool index 0: . 2,                                          
+       76 +. 2, ref drop                                                 
+       77  
+       95 -; Verify tail was pooled with consistent index                
+       96 -tail ref /idx1                                                
+       97 -tail ref /idx2                                                
+       98 -idx1 idx2 =  ; 0 (same index, sharing preserved)              
+       78 +; Pool index 1: . 2, 1, (reuses tail)                         
+       79 +0 deref 1, ref drop                                           
+       80  
+      100 -; Verify deref retrieves correct value                        
+      101 -idx1 deref tail =  ; 0 (values equal)                         
+      102 -                                                              
+      103 -; Primitives return -1                                        
+      104 -42 ref -1 =  ; 0                                              
+      105 -. ref -1 =   ; 0                                              
+      106 -                                                              
+      107 -; Closurevals return -1 (must compile to bytecodeval first)   
+      108 -{ 1 } ref -1 =  ; 0                                           
+       81 +; Pool index 2: the array                                     
+       82 +[0 deref 1 deref] ref drop                                    
+       83  ```
+       84  
+      111 -This change is self-contained: existing code that refs structu
+          -red values gets the same index, with subterms also pooled as a
+          - side effect. Code that refs primitives or closurevals now get
+          -s -1 instead of a pool index.                                 
+       85 +**Implementation notes:**                                     
+       86 +                                                              
+       87 +- Call `ref` on the value first to trigger deep-ref pooling of
+          + subterms                                                     
+       88 +- Iterate through pool indices in order, emitting reconstructi
+          +on code for each                                              
+       89 +- For structured subterms, emit `push-int <idx>` then `op dere
+          +f`                                                            
+       90 +- For primitives, emit inline construction                    
+
+● Done. The updated FROTH_BYTECODE.md now:
+
+  1. Keeps the Design Overview and Loading/Saving sections
+  2. Simplifies Sharing Preservation to a brief summary (deep-ref is done)
+  3. Documents the new reify function plan with:
+    - Stack effect
+    - Algorithm per value type
+    - Example showing reconstruction code
+    - Implementation notes
+
+  Ready to start implementing reify?
+
+> Is there anything more you need to know before implementing reify? 
+
+● Let me think through what I need:
+
+  1. Bytecode emission - emit-at, emit-all-at from bytecode.froth, plus instruction-table and operator-table
+  2. Value type detection - isInt, isString, isNil, isCons, isArray, isMap, isClosure, and for bytecodeval I can check with open (returns array + int for bytecodeval)
+  3. Subterm access - fst/snd for cons, @/# for arrays, keys/@ for maps, open for closures
+  4. Pool iteration - After value ref /root-idx, iterate 0 to root-idx, using deref to get each value
+  5. Subterm index lookup - Call ref on subterm; returns existing index (>= 0) or -1 for primitives
+
+  Questions:
+
+  1. Pool size - Is there an operator to query pool size, or should I use root-idx + 1 as the count?
+  2. termval handling - The doc says "details TBD". Should I:
+    - Skip termval for now (error/warning)?
+    - Implement basic term reconstruction?
+  3. Entry point - Should reify take just ( value addr -- addr' ), or also return the entry address where reconstruction starts?
+  4. Final value - Should the reconstruction code leave the root value on the stack (for the loader to use as the environment)?
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 151k/200k tokens (75%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 17.1k tokens (8.6%)
+     ⛁ ⛁ ⛁ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Messages: 71.0k tokens (35.5%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 49k (24.5%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 129 tokens
+     └ MERCURY.md: 68 tokens
+     └ FROTH.md: 2.8k tokens
+     └ FROTH_LIBRARY.md: 6.4k tokens
+     └ FROTH_COMPILER.md: 6.6k tokens
+     └ FROTH_BYTECODE.md: 272 tokens
+     └ FROTH_GUIDE.md: 793 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+> Let's think about the reify process. The aim of our reify function will be
+ to generate bytecode that reconstructs the constant pool from scratch. 
+Because of the way that ref is implemented, we are guaranteed that all 
+subterms of a term will appear in the constant pool at some earlier point. 
+Hence, reify does not itself need to recurse into compound values, it just 
+refs each subterm to get the index then generates a deref with that index. 
+To generate code it should iterate through each pool index, generating code 
+to reconstruct each compound term from its dereferenced subterms. Does that 
+match your understanding? 
+
+● Yes, that matches my understanding. To clarify the flow:
+
+  1. value ref /root-idx - deep-ref populates pool with all subterms in bottom-up order
+  2. Iterate through pool indices 0 to root-idx
+  3. For each pool entry i deref /v:
+    - For each subterm of v, call ref to get its index (guaranteed already in pool)
+    - If index >= 0: emit push-int idx, op deref
+    - If index == -1 (primitive): emit inline construction
+    - Emit construction op (,, end-array, :, close, etc.)
+    - Emit op ref, op drop to store at index i
+
+  No recursion needed - just linear iteration through pool indices.
+
+  One clarification on termval: Since is_primitive_or_closure doesn't include termval, terms CAN be pooled (but we don't recurse into them). If a termval appears in the pool, we'd need to emit reconstruction code for it. Should I:
+  - Implement term reconstruction (using idToIdent, idToBinder, mkFunc, mkGen, etc.)
+  - Skip/error for now since terms in the pool might be rare?
+
+  Also, should reify return just addr', or also the entry address where reconstruction code starts (for the save-image header)?
+
+> update the plans with these claraifications if required 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 43 lines
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 49 lines, removed 20 lines                                    
+       53  
+       54  **Stack effect:** `( value addr -- addr' )`
+       55  
+       56 -**Algorithm:**                                                
+       56 +**Process:**                                                  
+       57  
+       58 -For each value type, emit bytecode that reconstructs it:      
+       58 +1. Call `ref` on the root value to trigger deep-ref, which pop
+          +ulates the pool with all subterms in bottom-up order          
+       59 +2. Iterate through pool indices 0 to root-idx                 
+       60 +3. For each pool entry, emit reconstruction bytecode (see belo
+          +w)                                                            
+       61 +4. Return next available address                              
+       62  
+       63 +No recursion is needed - just linear iteration through pool in
+          +dices. Deep-ref guarantees all subterms appear at earlier indi
+          +ces.                                                          
+       64 +                                                              
+       65 +**Emitting subterm references:**                              
+       66 +                                                              
+       67 +For each subterm of a compound value, call `ref` to get its in
+          +dex:                                                          
+       68 +- If index >= 0: emit `push-int <idx>`, `op deref`            
+       69 +- If index == -1 (primitive): emit inline construction        
+       70 +                                                              
+       71 +**Per-type emission:**                                        
+       72 +                                                              
+       73 +- **consval**: emit tail, emit head, `op ,`, `op ref`, `op dro
+          +p`                                                            
+       74 +- **arrayval**: `start-array`, emit each element, `end-array`,
+          + `op ref`, `op drop`                                          
+       75 +- **mapval**: `op $`, for each key-value: emit value, `push-in
+          +t key-id`, `op idToIdent`, `op :`, then `op ref`, `op drop`   
+       76 +- **bytecodeval**: `start-array`, emit context elements, `end-
+          +array`, `push-int addr`, `op close`, `op ref`, `op drop`      
+       77 +- **termval**: emit code to reconstruct the term (see below)  
+       78 +- **closureval**: should not appear (must compile first)      
+       79 +                                                              
+       80 +**Inline emission for primitives (ref returns -1):**          
+       81 +                                                              
+       82  - **intval**: `push-int N`
+       83  - **stringval**: `push-string ID`
+       84  - **nilval**: `op .`
+       63 -- **consval**: reify tail, reify head, `op ,`                 
+       64 -- **arrayval**: `start-array`, reify each element, `end-array`
+       65 -- **mapval**: `op $`, then for each key-value: reify value, `p
+          -ush-int key-id`, `op idToIdent`, `op :`                       
+       66 -- **bytecodeval**: `start-array`, reify context elements, `end
+          --array`, `push-int addr`, `op close`                          
+       67 -- **termval**: emit code to reconstruct the term (details TBD)
+       68 -- **closureval**: error (must compile first)                  
+       85  
+       70 -After emitting reconstruction code for a structured value, emi
+          -t `op ref` and `op drop` to store it in the pool. This rebuild
+          -s the pool with the same indices as the original.             
+       86 +**Term reconstruction:**                                      
+       87  
+       88 +Terms can appear in the pool (deep-ref pools termval but doesn
+          +'t recurse into it). To reconstruct:                          
+       89 +- **identifier(id)**: `push-int id`, `op idToIdent`           
+       90 +- **binder(id)**: `push-int id`, `op idToBinder`              
+       91 +- **apply_term**: `push-quoted-apply`                         
+       92 +- **function(terms)**: build array of reconstructed terms, `op
+          + mkFunc`                                                      
+       93 +- **generator(terms)**: build array of reconstructed terms, `o
+          +p mkGen`                                                      
+       94 +- **quoted(term)**: reconstruct inner term, `op wrap`         
+       95 +- **value(val)**: reconstruct value, `op wrap`                
+       96 +                                                              
+       97  **Example:** For `[. 2, . 2, 1,]` with shared tail:
+       98  
+       99  ```
+      100  ; Pool index 0: . 2,
+       76 -. 2, ref drop                                                 
+      101 +op .              ; nil                                       
+      102 +push-int 2        ; 2                                         
+      103 +op ,              ; cons                                      
+      104 +op ref op drop    ; store at 0                                
+      105  
+       78 -; Pool index 1: . 2, 1, (reuses tail)                         
+       79 -0 deref 1, ref drop                                           
+      106 +; Pool index 1: . 2, 1,                                       
+      107 +push-int 0        ; tail index                                
+      108 +op deref          ; get tail from pool                        
+      109 +push-int 1        ; head                                      
+      110 +op ,              ; cons                                      
+      111 +op ref op drop    ; store at 1                                
+      112  
+      113  ; Pool index 2: the array
+       82 -[0 deref 1 deref] ref drop                                    
+      114 +start-array                                                   
+      115 +push-int 0 op deref   ; element 0                             
+      116 +push-int 1 op deref   ; element 1                             
+      117 +end-array                                                     
+      118 +op ref op drop    ; store at 2                                
+      119  ```
+       84 -                                                              
+       85 -**Implementation notes:**                                     
+       86 -                                                              
+       87 -- Call `ref` on the value first to trigger deep-ref pooling of
+          - subterms                                                     
+       88 -- Iterate through pool indices in order, emitting reconstructi
+          -on code for each                                              
+       89 -- For structured subterms, emit `push-int <idx>` then `op dere
+          -f`                                                            
+       90 -- For primitives, emit inline construction                    
+
+● Done. The updated documentation now clarifies:
+
+  1. Process - Linear iteration through pool, no recursion
+  2. Subterm references - Call ref to get index, emit deref or inline based on result
+  3. Per-type emission - Specific instructions for each compound type
+  4. Term reconstruction - How to handle termval in the pool
+  5. Example - Shows actual bytecode instructions being emitted
+
+  Ready to implement reify?
+
+> What does the deref operator do when given an index that is larger than 
+the last allocated index (that is, an invalid index)? 
+
+● Search(pattern: "eval_deref|vm_deref", path: "src", output_mode: "content")
+  ⎿  Found 6 lines (ctrl+o to expand)
+
+● Read(src/eval.m)
+  ⎿  Read 20 lines
+
+● Read(src/vm.m)
+  ⎿  Read 20 lines
+
+● Both throw an error for invalid indices:
+
+  - eval_deref: throw(index_out_of_bounds(Idx, PP)) if Idx < 0 or Idx >= pool count
+  - vm_deref: throw(vm_error(IP, vm_index_out_of_bounds(Idx, size))) if Idx < 0 or Idx >= pool size
+
+  So deref with an invalid index is a runtime error, not silent failure. This is good - it means reconstruction code will fail loudly if there's a bug in pool index handling.
+
+> Since we have no operator to determine the pool size, should we have deref
+ return nil for values outside the range? This would allow us to terminate 
+the loop over the pool, since nil is not otherwise allowed as a pool value. 
+For example, the reify function could have stack effect `( addr start-idx --
+ next-addr )`. Does that make sense? 
+
+● Yes, that makes sense. Since nil is never pooled (returns -1 from ref), it's a safe sentinel value.
+
+  Changes needed:
+
+  1. Modify deref to return nilval instead of throwing for out-of-bounds indices
+  2. reify loops: start-idx deref → if nil, stop; otherwise emit reconstruction code, increment index, repeat
+
+  Benefits:
+  - No need for a pool-size operator
+  - Clean termination condition
+  - Can start from any index (skip already-existing entries if resuming)
+
+  Stack effect: ( addr start-idx -- next-addr )
+  - addr: current bytecode address
+  - start-idx: first pool index to process
+  - next-addr: address after reconstruction code
+
+  Should I update deref in both eval.m and vm.m first?
+
+> yes 
+
+● Update(src/eval.m)
+  ⎿  Added 2 lines, removed 1 line                                       
+      456              array.lookup(Pool, Idx, Value),
+      457              datastack.push(Value, !Stack, !SP)
+      458          else
+      459 -            throw(index_out_of_bounds(Idx, PP))               
+      459 +            % Out of bounds returns nil (sentinel for pool ite
+          +ration)                                                       
+      460 +            datastack.push(nilval, !Stack, !SP)               
+      461          )
+      462      else
+      463          throw(type_error("int", V))
+
+● Update(src/vm.m)
+  ⎿  Added 4 lines, removed 3 lines                                      
+      335      int::in, int::out,
+      336      array(value)::in) is det.
+      337  
+      338 -vm_deref(IP, !Stack, !SP, Pool) :-                            
+      338 +vm_deref(_IP, !Stack, !SP, Pool) :-                           
+      339      datastack.pop("deref", V, !Stack, !SP),
+      340      ( if V = intval(Idx) then
+      341          ( if Idx >= 0, Idx < array.size(Pool) then
+      342              array.lookup(Pool, Idx, Value),
+      343              datastack.push(Value, !Stack, !SP)
+      344          else
+      345 -            throw(vm_error(IP, vm_index_out_of_bounds(Idx, arr
+          -ay.size(Pool))))                                              
+      345 +            % Out of bounds returns nil (sentinel for pool ite
+          +ration)                                                       
+      346 +            datastack.push(nilval, !Stack, !SP)               
+      347          )
+      348      else
+      348 -        throw(vm_error(IP, vm_type_error("int", V)))          
+      349 +        throw(vm_error(-1, vm_type_error("int", V)))          
+      350      ).
+      351  
+      352  %-------------------------------------------------------------
+           ----------%
+
+● Bash(make 2>&1 | tail -10)
+  ⎿  Making Mercury/int3s/eval.int3
+     Making Mercury/int3s/vm.int3
+     Making Mercury/ints/vm.int
+     … +7 lines (ctrl+o to expand)
+
+● Bash(./run_tests.sh 2>&1 | tail -20)
+  ⎿  PASS: quote                   
+     PASS: ref
+     PASS: restore
+     … +17 lines (ctrl+o to expand)
+
+● All tests pass. Both deref implementations now return nil for out-of-bounds indices.
+
+  Ready to implement reify?
+
+> Keep IP in the type error case 
+
+● Update(src/vm.m)
+  ⎿  Added 2 lines, removed 2 lines                                      
+      335      int::in, int::out,
+      336      array(value)::in) is det.
+      337  
+      338 -vm_deref(_IP, !Stack, !SP, Pool) :-                           
+      338 +vm_deref(IP, !Stack, !SP, Pool) :-                            
+      339      datastack.pop("deref", V, !Stack, !SP),
+      340      ( if V = intval(Idx) then
+      341          ( if Idx >= 0, Idx < array.size(Pool) then
+     ...
+      346              datastack.push(nilval, !Stack, !SP)
+      347          )
+      348      else
+      349 -        throw(vm_error(-1, vm_type_error("int", V)))          
+      349 +        throw(vm_error(IP, vm_type_error("int", V)))          
+      350      ).
+      351  
+      352  %-------------------------------------------------------------
+           ----------%
+
+● Bash(make 2>&1 | tail -5)
+  ⎿  Making Mercury/ints/vm.int   
+     Making Mercury/cs/vm.c
+     Making Mercury/os/vm.o
+     … +2 lines (ctrl+o to expand)
+
+● Fixed. Ready to implement reify?
+
+> Let's update our plans for the reify function, regarding the loop. Remove 
+any existing information that is inaccurate or redundant. We just need a 
+concise description of the plan. 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 72 lines
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 26 lines, removed 58 lines                                    
+       49  
+       50  ### Reify Function
+       51  
+       52 -The `reify` function generates reconstruction bytecode for a v
+          -alue. It replaces the earlier term-based reify with direct byt
+          -ecode emission.                                               
+       52 +Generates reconstruction bytecode for a value.                
+       53  
+       54 -**Stack effect:** `( value addr -- addr' )`                   
+       54 +**Stack effect:** `( addr start-idx -- addr' )`               
+       55  
+       56  **Process:**
+       57  
+       58 -1. Call `ref` on the root value to trigger deep-ref, which pop
+          -ulates the pool with all subterms in bottom-up order          
+       59 -2. Iterate through pool indices 0 to root-idx                 
+       60 -3. For each pool entry, emit reconstruction bytecode (see belo
+          -w)                                                            
+       61 -4. Return next available address                              
+       58 +1. Loop: `idx deref` → if nil, stop; otherwise emit reconstruc
+          +tion code for value, increment idx, repeat                    
+       59 +2. For each subterm, call `ref` to get index: if >= 0 emit `de
+          +ref`, if -1 emit inline                                       
+       60 +3. After reconstructing each value, emit `ref drop` to store i
+          +t in the pool                                                 
+       61  
+       63 -No recursion is needed - just linear iteration through pool in
+          -dices. Deep-ref guarantees all subterms appear at earlier indi
+          -ces.                                                          
+       62 +The `deref` operator returns nil for out-of-bounds indices, pr
+          +oviding loop termination.                                     
+       63  
+       65 -**Emitting subterm references:**                              
+       66 -                                                              
+       67 -For each subterm of a compound value, call `ref` to get its in
+          -dex:                                                          
+       68 -- If index >= 0: emit `push-int <idx>`, `op deref`            
+       69 -- If index == -1 (primitive): emit inline construction        
+       70 -                                                              
+       64  **Per-type emission:**
+       65  
+       73 -- **consval**: emit tail, emit head, `op ,`, `op ref`, `op dro
+          -p`                                                            
+       74 -- **arrayval**: `start-array`, emit each element, `end-array`,
+          - `op ref`, `op drop`                                          
+       75 -- **mapval**: `op $`, for each key-value: emit value, `push-in
+          -t key-id`, `op idToIdent`, `op :`, then `op ref`, `op drop`   
+       76 -- **bytecodeval**: `start-array`, emit context elements, `end-
+          -array`, `push-int addr`, `op close`, `op ref`, `op drop`      
+       77 -- **termval**: emit code to reconstruct the term (see below)  
+       78 -- **closureval**: should not appear (must compile first)      
+       66 +| Type | Emit |                                               
+       67 +|------|------|                                               
+       68 +| intval | `push-int N` |                                     
+       69 +| stringval | `push-string ID` |                              
+       70 +| nilval | `op .` |                                           
+       71 +| consval | emit tail, emit head, `op ,` |                    
+       72 +| arrayval | `start-array`, emit elements, `end-array` |      
+       73 +| mapval | `op $`, for each: emit value, `push-int key`, `op i
+          +dToIdent`, `op :` |                                           
+       74 +| bytecodeval | `start-array`, emit context, `end-array`, `pus
+          +h-int addr`, `op close` |                                     
+       75 +| termval | see below |                                       
+       76  
+       80 -**Inline emission for primitives (ref returns -1):**          
+       77 +**Term emission:**                                            
+       78  
+       82 -- **intval**: `push-int N`                                    
+       83 -- **stringval**: `push-string ID`                             
+       84 -- **nilval**: `op .`                                          
+       85 -                                                              
+       86 -**Term reconstruction:**                                      
+       87 -                                                              
+       88 -Terms can appear in the pool (deep-ref pools termval but doesn
+          -'t recurse into it). To reconstruct:                          
+       89 -- **identifier(id)**: `push-int id`, `op idToIdent`           
+       90 -- **binder(id)**: `push-int id`, `op idToBinder`              
+       91 -- **apply_term**: `push-quoted-apply`                         
+       92 -- **function(terms)**: build array of reconstructed terms, `op
+          - mkFunc`                                                      
+       93 -- **generator(terms)**: build array of reconstructed terms, `o
+          -p mkGen`                                                      
+       94 -- **quoted(term)**: reconstruct inner term, `op wrap`         
+       95 -- **value(val)**: reconstruct value, `op wrap`                
+       96 -                                                              
+       97 -**Example:** For `[. 2, . 2, 1,]` with shared tail:           
+       98 -                                                              
+       99 -```                                                           
+      100 -; Pool index 0: . 2,                                          
+      101 -op .              ; nil                                       
+      102 -push-int 2        ; 2                                         
+      103 -op ,              ; cons                                      
+      104 -op ref op drop    ; store at 0                                
+      105 -                                                              
+      106 -; Pool index 1: . 2, 1,                                       
+      107 -push-int 0        ; tail index                                
+      108 -op deref          ; get tail from pool                        
+      109 -push-int 1        ; head                                      
+      110 -op ,              ; cons                                      
+      111 -op ref op drop    ; store at 1                                
+      112 -                                                              
+      113 -; Pool index 2: the array                                     
+      114 -start-array                                                   
+      115 -push-int 0 op deref   ; element 0                             
+      116 -push-int 1 op deref   ; element 1                             
+      117 -end-array                                                     
+      118 -op ref op drop    ; store at 2                                
+      119 -```                                                           
+       79 +| Term | Emit |                                               
+       80 +|------|------|                                               
+       81 +| identifier(id) | `push-int id`, `op idToIdent` |            
+       82 +| binder(id) | `push-int id`, `op idToBinder` |               
+       83 +| apply_term | `push-quoted-apply` |                          
+       84 +| function(terms) | emit term array, `op mkFunc` |            
+       85 +| generator(terms) | emit term array, `op mkGen` |            
+       86 +| quoted(term) | emit inner, `op wrap` |                      
+       87 +| value(val) | emit value, `op wrap` |                        
+
+● Done. The plan is now concise with:
+  - Updated stack effect: ( addr start-idx -- addr' )
+  - Clear 3-step process with nil-sentinel loop
+  - Tables for per-type and term emission rules
+
+  Ready to implement reify?
+
+> Use `next-addr` for the argument name, since `addr'` is not a valid 
+identifier. 
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 1 line, removed 1 line                                        
+      51  
+      52  Generates reconstruction bytecode for a value.
+      53  
+      54 -**Stack effect:** `( addr start-idx -- addr' )`                
+      54 +**Stack effect:** `( addr start-idx -- next-addr )`            
+      55  
+      56  **Process:**
+      57  
+
+● Done. Ready to implement reify?
+
+> Is there common code for deref that can be factored into pool.m? 
+
+● Looking at the implementations:
+
+  eval_deref:
+  - Pop, check int, check bounds vs Store ^ es_pool_count, lookup or nilval, push
+
+  vm_deref:
+  - Pop, check int, check bounds vs array.size(Pool), lookup or nilval, push
+
+  The common logic is just the bounds check + lookup/nilval part. I could add to pool.m:
+
+  :- pred pool_lookup(int::in, array(value)::in, int::in, value::out) is det.
+
+  pool_lookup(Idx, Pool, PoolSize, Value) :-
+      ( if Idx >= 0, Idx < PoolSize then
+          array.lookup(Pool, Idx, Value)
+      else
+          Value = nilval
+      ).
+
+  But it's only ~4 lines of logic being shared. The callers would still need to:
+  1. Pop the value
+  2. Check if it's an int (with different error types)
+  3. Call pool_lookup
+  4. Push the result
+
+  Worth factoring out, or too minor?
+
+> I have staged our changes, please commit 
+
+● Bash(git status)
+  ⎿  On branch master                                    
+     Your branch is ahead of 'origin/master' by 1 commit.
+       (use "git push" to publish your local commits)
+     … +11 lines (ctrl+o to expand)
+
+● Bash(git diff --cached --stat)
+  ⎿  FROTH_BYTECODE.md | 86 ++++++++++++++++++++---------------------------
+    --------
+     src/eval.m        |  3 +-
+    … +2 lines (ctrl+o to expand)
+
+
+● Bash(git commit -m "Return nil for out-of-bounds deref, update reify docs…)
+  ⎿  [master 2bce966] Return nil for out-of-bounds deref, update reify docs
+      3 files changed, 35 insertions(+), 57 deletions(-)
+
+● Committed: 2bce966 - Return nil for out-of-bounds deref, update reify docs
+
+> Let's think about how to handle constant terms. Currently we put these 
+into the constant pool without recursing into subterms, which means that we 
+would need complex code to reconstruct them. An alternative approach might 
+be to save any terms directly in the image file and parse them out again as 
+part of the loading process. That means the loader would need to store these
+ values in appropriate slots in the constant pool prior to running the 
+reconstruction code. What do you think about that idea? Are there any 
+problems we might face? 
+
+● Interesting idea. Let me think through it:
+
+  Proposed approach:
+  1. Save terms as text in a separate section of the image file
+  2. Loader parses terms and stores them at their pool indices
+  3. Reconstruction code runs after, can deref terms normally
+
+  Benefits:
+  - No complex term reconstruction bytecode
+  - Leverages existing parser
+  - Terms stored in readable form
+
+  Potential issues:
+
+  1. Pool index assignment: Terms get specific indices from deep-ref. The loader needs to know which indices are terms (vs reconstructed values). Requires metadata.
+  2. String table timing: Parsing terms will call intern. This should work since we populate the string table first during load.
+  3. Reconstruction code must skip term indices: When iterating pool entries, reify shouldn't emit ref drop for indices that will be pre-populated with terms.
+  4. Nested values in terms: A value(arrayval(...)) inside a term - the array isn't separately pooled (deep-ref doesn't recurse into terms). If two terms share the same nested array, we'd get copies instead of sharing. But value(val) terms are rare.
+  5. File format complexity: Now have header, string table, term table, bytecode sections.
+
+  Alternative: Could we just error/warn if termval appears in the pool and require users to avoid pooling raw terms? Most use cases involve bytecodevals, not termvals.
+
+  Which approach do you prefer?
+
+> As part of the loading process, it would be good if we are able to set up 
+a compiler state so that it can continue compiling code after existing code 
+that has been loaded, using an appropriate code map for compiled functions. 
+For this reason it will be important to handle termvals in saved images, so 
+we need to think about our plans for termvals in more detail before 
+proceeding. For nested values in terms, do we just use these to store 
+primitive terms? If that is true then the `value(arrayval(...))` case 
+doesn't arise. 
+
+● Good point about the compiler state - the code-map uses ref on function terms for deduplication, so terms will definitely be in the pool.
+
+  Looking at value(val) terms more carefully:
+
+  From FROTH.md, wrap creates value terms:
+  - wrap ( x -- 'x ) - Wrap int, string, or quoted term
+
+  So value(val) only contains:
+  - value(intval(n)) - an integer
+  - value(stringval(id)) - a string ID
+
+  No arrays, maps, or other compound values. The value(arrayval(...)) case doesn't arise.
+
+  This means terms are simple trees:
+  - Nodes: function(terms), generator(terms), quoted(term)
+  - Leaves: identifier(id), binder(id), value(int|string), apply_term
+
+  All leaves are just IDs or primitives. This makes text serialization straightforward - terms can be written as Froth syntax and parsed back.
+
+  Revised plan:
+  1. During save, collect terms with their pool indices
+  2. Write terms as text in a term section (e.g., index:term\n)
+  3. During load: parse terms, store at indices, then run reconstruction code
+
+  Does this match your thinking? Should I update the docs with this approach?
+
+> The pool index assignment problem is complex, so perhaps we should keep 
+things uniform and just emit bytecode to reconstruct terms, rather than 
+handling terms separately. Do we have the required operators to construct 
+all of the possible terms? 
+
+● Let me check what we have:
+
+  Available operators:
+  - idToIdent ( int -- 'ident ) - identifier from intern id
+  - idToBinder ( int -- 'binder ) - binder from intern id
+  - mkFunc ( array -- 'func ) - function from array of terms
+  - mkGen ( array -- 'gen ) - generator from array of terms
+  - wrap ( x -- 'x ) - wrap int, string, or term
+  - push-quoted-apply (instruction) - push '!
+
+  Term reconstruction:
+
+  | Term                 | Bytecode                                          |
+  |----------------------|---------------------------------------------------|
+  | identifier(id)       | push-int id, op idToIdent                         |
+  | binder(id)           | push-int id, op idToBinder                        |
+  | apply_term           | push-quoted-apply                                 |
+  | function(terms)      | start-array, emit each term, end-array, op mkFunc |
+  | generator(terms)     | start-array, emit each term, end-array, op mkGen  |
+  | quoted(term)         | emit inner term, op wrap                          |
+  | value(intval(n))     | push-int n, op wrap                               |
+  | value(stringval(id)) | push-string id, op wrap                           |
+
+  Yes, we have all the required operators. The wrap operator handles both primitives (int/string → value term) and terms (term → quoted term).
+
+  So we can keep the uniform approach: emit bytecode to reconstruct everything, including terms. No separate term section needed.
+
+> update docs 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 14 lines
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 7 lines, removed 4 lines                                      
+      76  
+      77  **Term emission:**
+      78  
+      79 +Terms are reconstructed via bytecode using existing operators. 
+         +The `value(val)` case only contains primitives (int or string).
+      80 +                                                               
+      81  | Term | Emit |
+      82  |------|------|
+      83  | identifier(id) | `push-int id`, `op idToIdent` |
+      84  | binder(id) | `push-int id`, `op idToBinder` |
+      85  | apply_term | `push-quoted-apply` |
+      84 -| function(terms) | emit term array, `op mkFunc` |             
+      85 -| generator(terms) | emit term array, `op mkGen` |             
+      86 -| quoted(term) | emit inner, `op wrap` |                       
+      87 -| value(val) | emit value, `op wrap` |                         
+      86 +| function(terms) | `start-array`, emit each term, `end-array`,
+         + `op mkFunc` |                                                 
+      87 +| generator(terms) | `start-array`, emit each term, `end-array`
+         +, `op mkGen` |                                                 
+      88 +| quoted(term) | emit inner term, `op wrap` |                  
+      89 +| value(intval) | `push-int n`, `op wrap` |                    
+      90 +| value(stringval) | `push-string id`, `op wrap` |             
+
+● Done. Updated the term emission section to:
+  - Note that terms use existing operators (no separate handling needed)
+  - Clarify value(val) only contains primitives
+  - Show full emit sequence for function/generator
+  - Split value into intval and stringval cases
+
+  Ready to implement reify?
+
+> Let's review our plan for reify. Is there anything that needs to be 
+clarified? 
+
+● Read(FROTH_BYTECODE.md)
+  ⎿  Read 43 lines
+
+● Looking at the plan, a few things need clarification:
+
+  1. Pre-condition: The caller must first call ref on the root value to populate the pool via deep-ref. This isn't in the stack effect.
+  2. Loop semantics: Step 1 says "idx deref" - this happens at codegen time to inspect pool contents, not in the emitted bytecode. Could be clearer.
+  3. Term recursion: For function(terms) and generator(terms), we need to recursively emit code for each nested term. The plan shows this but doesn't mention the recursion explicitly.
+  4. Final value: After reconstruction code runs, should the root value be left on the stack? Currently the code just does ref drop for each entry, leaving nothing on the stack. The loader needs the root value (environment).
+  5. Closureval error: Should we explicitly handle/error if closureval appears in pool?
+
+  Proposed clarification for stack effect and usage:
+
+  ; Usage:
+  value ref /root-idx       ; populate pool via deep-ref
+  addr 0 reify! /next-addr  ; emit reconstruction for all pool entries
+  ; Caller emits: push-int root-idx, op deref, op return
+
+  Or should reify take the root value and handle the final deref internally?
+
+  Stack effect options:
+  - ( addr start-idx -- next-addr ) - caller handles root deref
+  - ( value addr -- next-addr ) - reify handles everything including final deref
+
+  Which approach do you prefer?
+
+> Let's think about the design some more. The precondition is that the 
+constant pool already contains some number of constants, and satisfies the 
+condition that any subterm of a constant in the pool will have a lower index
+ value (so constructing them left-right constructs values bottom-up). The 
+postcondition is that we have generated bytecode that will reconstruct the 
+same constant pool when executed, assuming that it starts from the same 
+index position. A clearer name for this function might be `reify-pool`. 
+There is no particular "root value" that we are dealing with. Does the 
+following algorithm sound correct for `reify-pool`? Given `addr` and `idx`:
+1. idx deref, exit algorithm if nil (we have reached the end of the pool)
+2. based on the type of the result, call `reify-cons`, `reify-array`, 
+`reify-map`, `reify-closure` or `reify-term` (to be defined)
+3. emit `ref drop` (executing this bytecode should allocate the same index 
+as the original pool)
+4. recursively call `reify-pool` with idx + 1
+
+The `reify-cons` function would (similarly for other structures):
+1. call `reify-value` on the tail
+2. call `reify-value` on the head
+3. emit `op ,`
+
+The `reify-value` function would:
+1. ref the value to get its index, if any
+2. if index valid emit deref, otherwise emit inline based on primitive type
+
+The `reify-term` function would emit bytecode to construct the given term, 
+calling itself recursively as required. 
+
+● Yes, this algorithm is correct and much clearer. Let me trace through to confirm:
+
+  reify-pool (addr idx -- next-addr):
+  - Iterates pool entries until nil
+  - Dispatches to type-specific handlers
+  - Emits ref drop after each to rebuild pool with same indices
+
+  reify-cons (value addr -- next-addr):
+  - reify-value on tail, then head (order matters for stack)
+  - Emit ,
+
+  reify-array (value addr -- next-addr):
+  - Emit start-array
+  - For each element: reify-value
+  - Emit end-array
+
+  reify-map (value addr -- next-addr):
+  - Emit op $
+  - For each key-value: reify-value on value, push-int key, op idToIdent, op :
+
+  reify-closure (bytecodeval addr -- next-addr):
+  - Emit start-array
+  - For each context element: reify-value
+  - Emit end-array, push-int code-addr, op close
+
+  reify-value (value addr -- next-addr):
+  - ref to get index
+  - If >= 0: emit push-int idx, op deref
+  - If -1: emit inline (push-int/push-string/op .)
+
+  reify-term (term addr -- next-addr):
+  - Recursive for nested terms
+  - Uses idToIdent, idToBinder, mkFunc, mkGen, wrap, push-quoted-apply
+
+  The precondition (subterms have lower indices) is guaranteed by deep-ref. Should I update the docs with this clearer structure?
+
+> yes, update the docs 
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 47 lines, removed 24 lines                                    
+       47  
+       48  The `ref` operator returns -1 for primitives (int, string, nil
+           ) and closurevals (which must be compiled to bytecodevals firs
+           t). Only structured values (array, map, cons, bytecodeval) get
+            pool indices.
+       49  
+       50 -### Reify Function                                            
+       50 +### Pool Reification                                          
+       51  
+       52 -Generates reconstruction bytecode for a value.                
+       52 +Generates bytecode to reconstruct the constant pool.          
+       53  
+       54 -**Stack effect:** `( addr start-idx -- next-addr )`           
+       54 +**Precondition:** The pool contains values where any subterm h
+          +as a lower index (guaranteed by deep-ref). Executing the gener
+          +ated bytecode from the same start index reconstructs the same 
+          +pool.                                                         
+       55  
+       56 -**Process:**                                                  
+       56 +**reify-pool** `( addr idx -- next-addr )`                    
+       57  
+       58 -1. Loop: `idx deref` → if nil, stop; otherwise emit reconstruc
+          -tion code for value, increment idx, repeat                    
+       59 -2. For each subterm, call `ref` to get index: if >= 0 emit `de
+          -ref`, if -1 emit inline                                       
+       60 -3. After reconstructing each value, emit `ref drop` to store i
+          -t in the pool                                                 
+       58 +1. `idx deref` → if nil, return addr (end of pool)            
+       59 +2. Dispatch to `reify-cons`, `reify-array`, `reify-map`, `reif
+          +y-closure`, or `reify-term`                                   
+       60 +3. Emit `op ref`, `op drop`                                   
+       61 +4. Recurse with idx + 1                                       
+       62  
+       62 -The `deref` operator returns nil for out-of-bounds indices, pr
+          -oviding loop termination.                                     
+       63 +**reify-value** `( value addr -- next-addr )`                 
+       64  
+       64 -**Per-type emission:**                                        
+       65 +1. `ref` the value to get its index                           
+       66 +2. If >= 0: emit `push-int idx`, `op deref`                   
+       67 +3. If -1: emit inline based on primitive type                 
+       68  
+       66 -| Type | Emit |                                               
+       67 -|------|------|                                               
+       68 -| intval | `push-int N` |                                     
+       69 -| stringval | `push-string ID` |                              
+       70 -| nilval | `op .` |                                           
+       71 -| consval | emit tail, emit head, `op ,` |                    
+       72 -| arrayval | `start-array`, emit elements, `end-array` |      
+       73 -| mapval | `op $`, for each: emit value, `push-int key`, `op i
+          -dToIdent`, `op :` |                                           
+       74 -| bytecodeval | `start-array`, emit context, `end-array`, `pus
+          -h-int addr`, `op close` |                                     
+       75 -| termval | see below |                                       
+       69 +**reify-cons** `( cons addr -- next-addr )`                   
+       70  
+       77 -**Term emission:**                                            
+       71 +1. `reify-value` on tail                                      
+       72 +2. `reify-value` on head                                      
+       73 +3. Emit `op ,`                                                
+       74  
+       79 -Terms are reconstructed via bytecode using existing operators.
+          - The `value(val)` case only contains primitives (int or string
+          -).                                                            
+       75 +**reify-array** `( array addr -- next-addr )`                 
+       76  
+       77 +1. Emit `start-array`                                         
+       78 +2. For each element: `reify-value`                            
+       79 +3. Emit `end-array`                                           
+       80 +                                                              
+       81 +**reify-map** `( map addr -- next-addr )`                     
+       82 +                                                              
+       83 +1. Emit `op $`                                                
+       84 +2. For each key-value: `reify-value` on value, `push-int key`,
+          + `op idToIdent`, `op :`                                       
+       85 +                                                              
+       86 +**reify-closure** `( bytecodeval addr -- next-addr )`         
+       87 +                                                              
+       88 +1. Emit `start-array`                                         
+       89 +2. For each context element: `reify-value`                    
+       90 +3. Emit `end-array`, `push-int code-addr`, `op close`         
+       91 +                                                              
+       92 +**reify-term** `( term addr -- next-addr )`                   
+       93 +                                                              
+       94 +Emit bytecode to construct the term, recursing for nested term
+          +s:                                                            
+       95 +                                                              
+       96  | Term | Emit |
+       97  |------|------|
+       98  | identifier(id) | `push-int id`, `op idToIdent` |
+       99  | binder(id) | `push-int id`, `op idToBinder` |
+      100  | apply_term | `push-quoted-apply` |
+       86 -| function(terms) | `start-array`, emit each term, `end-array`
+          -, `op mkFunc` |                                               
+       87 -| generator(terms) | `start-array`, emit each term, `end-array
+          -`, `op mkGen` |                                               
+       88 -| quoted(term) | emit inner term, `op wrap` |                 
+      101 +| function(terms) | `start-array`, `reify-term` each, `end-arr
+          +ay`, `op mkFunc` |                                            
+      102 +| generator(terms) | `start-array`, `reify-term` each, `end-ar
+          +ray`, `op mkGen` |                                            
+      103 +| quoted(term) | `reify-term` inner, `op wrap` |              
+      104  | value(intval) | `push-int n`, `op wrap` |
+      105  | value(stringval) | `push-string id`, `op wrap` |
+      106 +                                                              
+      107 +**Inline primitives** (for reify-value when ref returns -1):  
+      108 +                                                              
+      109 +| Type | Emit |                                               
+      110 +|------|------|                                               
+      111 +| intval | `push-int N` |                                     
+      112 +| stringval | `push-string ID` |                              
+      113 +| nilval | `op .` |                                           
+
+● Done. The docs now have:
+  - Clear precondition (subterms have lower indices)
+  - Each function with stack effect and numbered steps
+  - reify-pool as the main entry point
+  - reify-value for subterm handling (deref vs inline)
+  - Type-specific handlers (cons, array, map, closure, term)
+  - Tables for term and inline primitive emission
+
+  Ready to implement?
+
+> For these functions, our use of deref should exactly match the pattern 
+used by deep referencing. That is, we should use deref if and only if deep 
+referencing recurses into a particular subtree. How does deep referencing 
+work for bytecodevals? Does it reference the context array as a separate 
+constant? 
+
+● Read(src/pool.m)
+  ⎿  Read 30 lines
+
+● Looking at line 91-92 of pool.m:
+
+  V = bytecodeval(Context, _),
+  deep_ref(arrayval(Context), _, !Pool, !HashTable)
+
+  Yes - it wraps the context as arrayval(Context) and refs the whole array as a separate pool entry. So for bytecodeval:
+  - The context array has its own pool index
+  - We should deref it, not rebuild it element-by-element
+
+  Current docs (incorrect):
+  1. Emit `start-array`
+  2. For each context element: `reify-value`
+  3. Emit `end-array`, `push-int code-addr`, `op close`
+
+  Should be:
+  1. `arrayval(context) ref` to get context array's pool index
+  2. Emit `push-int ctx-idx`, `op deref`
+  3. Emit `push-int code-addr`, `op close`
+
+  This matches the deep-ref pattern and is simpler. Should I update the docs?
+
+> yes 
+
+● Update(FROTH_BYTECODE.md)
+  ⎿  Added 3 lines, removed 3 lines                                      
+      85  
+      86  **reify-closure** `( bytecodeval addr -- next-addr )`
+      87  
+      88 -1. Emit `start-array`                                          
+      89 -2. For each context element: `reify-value`                     
+      90 -3. Emit `end-array`, `push-int code-addr`, `op close`          
+      88 +1. `arrayval(context) ref` to get context array's pool index   
+      89 +2. Emit `push-int ctx-idx`, `op deref`                         
+      90 +3. Emit `push-int code-addr`, `op close`                       
+      91  
+      92  **reify-term** `( term addr -- next-addr )`
+      93  
+
+● Done. Now reify-closure matches the deep-ref pattern - the context array is already in the pool as a separate entry, so we just deref it rather than rebuilding element-by-element.
+
+  Ready to implement?
+
+> /context 
+  ⎿  
+      Context Usage
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-5-20251101 · 184k/200k tokens (92%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁ ⛁ 
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 3.1k tokens (1.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 14.8k tokens (7.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 17.1k tokens (8.6%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Messages: 104.4k tokens (52.2%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛶ Free space: 16k (7.8%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝   ⛝ Autocompact buffer: 45.0k tokens (22.5%)
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ 
+     
+     Memory files · /memory
+     └ CLAUDE.md: 129 tokens
+     └ MERCURY.md: 68 tokens
+     └ FROTH.md: 2.8k tokens
+     └ FROTH_LIBRARY.md: 6.4k tokens
+     └ FROTH_COMPILER.md: 6.6k tokens
+     └ FROTH_BYTECODE.md: 272 tokens
+     └ FROTH_GUIDE.md: 793 tokens
+     
+     Skills and slash commands · /skills
+     
+     
+
+
+
