@@ -41,7 +41,7 @@ operator-table 'deref @ /opDeref
  'ocEnterFrame 'ocLeaveFrame
  'ocStartArray 'ocEndArray 'opClose 'opDeref 'ocTailCall 'ocCall
  'ocSaveContextPtr 'ocRestoreContextPtr 'ocSaveReturnPtr 'ocRestoreReturnPtr
- 'foldl 'reduce 'drop 'or 'and] {
+ 'foldl 'reduce 'drop 'or 'and 'get-or] {
   /term-fn /seq-fn /max-slots /node /need-enter /code /addr
   node 'term @ /term
   term isValue {
@@ -151,13 +151,13 @@ operator-table 'deref @ /opDeref
     node 'func-addr @ /nested-addr
 
     ; Get outer scope maps (set by boundness and slots passes)
-    node 'outer-bound-vars-map in { node 'outer-bound-vars-map @ } { $ } ?! /outer-bound
-    node 'outer-free-vars-map in { node 'outer-free-vars-map @ } { $ } ?! /outer-free
+    node 'outer-bound-vars-map $ get-or! /outer-bound
+    node 'outer-free-vars-map $ get-or! /outer-free
 
     ; Build context array at runtime: [start-array, push each captured var, end-array]
     ; The nested function's free-vars-array tells us what to capture (already in slot order)
     ; For each captured var, check if it's bound or free in OUTER scope
-    node 'free-vars-array in { node 'free-vars-array @ } { [] } ?! /nested-free-array
+    node 'free-vars-array [] get-or! /nested-free-array
 
     nested-free-array # 0 = {
       ; No captures - just push empty array and address
@@ -206,7 +206,7 @@ operator-table 'deref @ /opDeref
   } {
   term isApply {
     ; Apply - check node for tail call flag
-    node 'is-tail-call in { node 'is-tail-call @ } { 1 } ?! {
+    node 'is-tail-call 1 get-or! {
       ; Tail call (is-tail-call=0) - emit tail-call
       addr code ocTailCall , need-enter
     } {
@@ -288,14 +288,13 @@ operator-table 'deref @ /opDeref
 ; Walks body left-to-right, collects bytecode, emits at addr.
 ; func-node contains 'term (the function) and analysis data.
 ; Stores 'func-addr in node before returning.
-['codegen-seq-impl 'codegen-term-impl 'lfoldr 'emit-all-at 'ocReturn 'foldl 'make-node] { /func-node /addr
+['codegen-seq-impl 'codegen-term-impl 'lfoldr 'emit-all-at 'ocReturn 'foldl 'make-node 'get-or] { /func-node /addr
   ; Extract the function term from the node
   func-node 'term @ /func
 
   ; Extract analysis info from func-node (or create empty defaults)
-  ; 'in' returns 0 if found, 1 if not found
   ; Check both if 'body exists AND has content
-  func-node 'body in { func-node 'body @ } { [] } ?! /maybe-body
+  func-node 'body [] get-or! /maybe-body
   maybe-body # 0 = {
     ; No body-nodes or empty - create array of nodes (one per term)
     [ func { make-node! } foldl! ]
@@ -305,10 +304,10 @@ operator-table 'deref @ /opDeref
 
   ; Extract frame info
   ; max-slots: number of frame slots needed (default 0)
-  func-node 'max-slots in { func-node 'max-slots @ } { 0 } ?! /max-slots
+  func-node 'max-slots 0 get-or! /max-slots
   ; needs-frame: 0 if frame needed, 1 if not (default 1 = no frame)
   ; need-enter: inverse of needs-frame (0 = need to emit enter-frame, 1 = already done/not needed)
-  func-node 'needs-frame in { func-node 'needs-frame @ } { 1 } ?! /need-enter
+  func-node 'needs-frame 1 get-or! /need-enter
 
   ; Collect bytecode for each term in function body
   ; codegen-seq-impl returns (addr' code') where code' is a cons list (reversed)
@@ -318,10 +317,9 @@ operator-table 'deref @ /opDeref
 
   ; Check if last term is a tail call by looking at its node
   ; If so, don't emit return (tail-call handles the return)
-  ; Only apply nodes have 'is-tail-call, so check with 'in first
   body-nodes # 0 > {
     body-nodes body-nodes # 1 - @ /last-node
-    last-node 'is-tail-call in { last-node 'is-tail-call @ } { 1 } ?!
+    last-node 'is-tail-call 1 get-or!
   } { 1 } ?! /last-is-tail
   last-is-tail { body-code } { body-code ocReturn , } ?! /final-code
 

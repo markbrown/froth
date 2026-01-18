@@ -2,7 +2,7 @@
 ; compile-func runs boundness -> liveness -> slots -> codegen
 
 ; Safety check: ensure compiled library code doesn't overlap with test addresses
-froth-bytecode-top 24000 < { } { "ERROR: froth-bytecode-top >= 24000, test addresses may conflict" println! } ?!
+froth-state 'addr @ 24000 < { } { "ERROR: froth-state 'addr @ >= 24000, test addresses may conflict" println! } ?!
 
 ; Helper to dump bytecode from start to end
 { /self /end /start
@@ -13,40 +13,43 @@ froth-bytecode-top 24000 < { } { "ERROR: froth-bytecode-top >= 24000, test addre
 } /dump-impl
 { /end /start start end dump-impl dump-impl! } /dump-bytecode
 
+; Initialize state for tests
+$ tree-empty! 'code-map : 24000 'addr : /state
+
 ; Test 1: Simple integers
-tree-empty! 24000 '{ 1 2 3 } compile-func! /node /next-addr /code-map
+state '{ 1 2 3 } compile-func! /node /state
 node 'func-addr @ /func-addr
-"func-addr=" print func-addr print " next-addr=" print next-addr println!
+"func-addr=" print func-addr print " next-addr=" print state 'addr @ println!
 
 ; Show bytecode (should be: 0 1 0 2 0 3 2)
 ; push-int=0, return=2
 "bytecode: " print
-func-addr next-addr dump-bytecode!
+func-addr state 'addr @ dump-bytecode!
 nl!
 
 ; Test 2: With string
-code-map next-addr '{ 42 "hello" } compile-func! /node2 /next-addr2 /code-map2
+state '{ 42 "hello" } compile-func! /node2 /state
 node2 'func-addr @ /func-addr2
-"func-addr2=" print func-addr2 print " next-addr2=" print next-addr2 println!
+"func-addr2=" print func-addr2 print " next-addr2=" print state 'addr @ println!
 
 "bytecode2: " print
-func-addr2 next-addr2 dump-bytecode!
+func-addr2 state 'addr @ dump-bytecode!
 nl!
 
 ; Test 3: With operator
-code-map2 next-addr2 '{ 1 2 + } compile-func! /node3 /next-addr3 /code-map3
+state '{ 1 2 + } compile-func! /node3 /state
 node3 'func-addr @ /func-addr3
-"func-addr3=" print func-addr3 print " next-addr3=" print next-addr3 println!
+"func-addr3=" print func-addr3 print " next-addr3=" print state 'addr @ println!
 
 ; Should be: 0 1 0 2 1 2 2
 ; push-int=0, op=1, +=2, return=2
 "bytecode3: " print
-func-addr3 next-addr3 dump-bytecode!
+func-addr3 state 'addr @ dump-bytecode!
 nl!
 
 ; Test 4: Quoted terms (test execution, not bytecode, to avoid intern ID dependency)
 "quoted terms: " print
-code-map3 next-addr3 '{ 'x '/y '! '42 '"hi" } compile-func! /node4 /next-addr4 /code-map4
+state '{ 'x '/y '! '42 '"hi" } compile-func! /node4 /state
 node4 'func-addr @ /func-addr4
 [] func-addr4 close ! /r5 /r4 /r3 /r2 /r1
 r1 write " " print
@@ -57,14 +60,14 @@ r5 write nl!
 
 ; Test 5: Context variables (free variables)
 ; Function with two free variables: x and y
-code-map4 next-addr4 '{ x y + } compile-func! /node5 /next-addr5 /code-map5
+state '{ x y + } compile-func! /node5 /state
 node5 'func-addr @ /func-addr5
-"func-addr5=" print func-addr5 print " next-addr5=" print next-addr5 println!
+"func-addr5=" print func-addr5 print " next-addr5=" print state 'addr @ println!
 
 ; Bytecode should be: push-context 0, push-context 1, op +, return
 ; push-context=4, op=1, +=2, return=2
 "bytecode5: " print
-func-addr5 next-addr5 dump-bytecode!
+func-addr5 state 'addr @ dump-bytecode!
 nl!
 
 ; Execute with context [10 20] - should return 30
@@ -74,10 +77,10 @@ nl!
 ; Test 6: Bound variable - simple binder with usage
 ; { /x x } should emit: enter-frame 1, pop-local 0, push-local 0, leave-frame 1, return
 ; Instruction codes: enter-frame=8, pop-local=7, push-local=6, leave-frame=9, return=2
-code-map5 next-addr5 '{ /x x } compile-func! /node6 /next-addr6 /code-map6
+state '{ /x x } compile-func! /node6 /state
 node6 'func-addr @ /func6-addr
 "bytecode6: " print
-func6-addr next-addr6 dump-bytecode!
+func6-addr state 'addr @ dump-bytecode!
 nl!
 
 ; Execute with context [] and arg 42 - should return 42
@@ -87,10 +90,10 @@ nl!
 ; Test 7: Dead binder
 ; { /x 99 } should emit: pop-unused, push-int 99, return
 ; Instruction codes: pop-unused=5, push-int=0, return=2
-code-map6 next-addr6 '{ /x 99 } compile-func! /node7 /next-addr7 /code-map7
+state '{ /x 99 } compile-func! /node7 /state
 node7 'func-addr @ /func7-addr
 "bytecode7: " print
-func7-addr next-addr7 dump-bytecode!
+func7-addr state 'addr @ dump-bytecode!
 nl!
 
 ; Execute with arg 42 (discarded) - should return 99
@@ -99,10 +102,10 @@ nl!
 
 ; Test 8: Multiple binders with addition
 ; { /x /y x y + } should emit: enter-frame 2, pop-local 0, pop-local 1, push-local 0, push-local 1, op +, leave-frame 2, return
-code-map7 next-addr7 '{ /x /y x y + } compile-func! /node8 /next-addr8 /code-map8
+state '{ /x /y x y + } compile-func! /node8 /state
 node8 'func-addr @ /func8-addr
 "bytecode8: " print
-func8-addr next-addr8 dump-bytecode!
+func8-addr state 'addr @ dump-bytecode!
 nl!
 
 ; Execute with args 10 and 3 - should return 13 (10 + 3)
@@ -111,7 +114,7 @@ nl!
 
 ; Test 9: Nested function with no captures
 ; { { 42 } } should emit: nested func first, then outer builds empty context and closes
-code-map8 next-addr8 '{ { 42 } } compile-func! /node9 /next-addr9 /code-map9
+state '{ { 42 } } compile-func! /node9 /state
 node9 'func-addr @ /func9-addr
 ; Find nested func addr from body
 node9 'body @ 0 @ 'func-addr @ /nested9-addr
@@ -119,7 +122,7 @@ node9 'body @ 0 @ 'func-addr @ /nested9-addr
 nested9-addr func9-addr dump-bytecode!  ; nested function code
 nl!
 "bytecode9 (outer func area): " print
-func9-addr next-addr9 dump-bytecode!  ; outer function code
+func9-addr state 'addr @ dump-bytecode!  ; outer function code
 nl!
 
 ; Execute: should return a closure that returns 42
@@ -129,14 +132,14 @@ println!
 
 ; Test 10: Nested function capturing bound variable
 ; { /x { x } } - inner captures x from outer's frame
-code-map9 next-addr9 '{ /x { x } } compile-func! /node10 /next-addr10 /code-map10
+state '{ /x { x } } compile-func! /node10 /state
 node10 'func-addr @ /func10-addr
 node10 'body @ 1 @ 'func-addr @ /nested10-addr
 "bytecode10 (nested area): " print
 nested10-addr func10-addr dump-bytecode!
 nl!
 "bytecode10 (outer area): " print
-func10-addr next-addr10 dump-bytecode!
+func10-addr state 'addr @ dump-bytecode!
 nl!
 
 ; Execute: pass 99 to outer, get closure, call it - should return 99
@@ -146,7 +149,7 @@ println!
 
 ; Test 11: Nested function capturing free variable from outer
 ; Outer has free var y, nested captures it
-code-map10 next-addr10 '{ y { y } } compile-func! /node11 /next-addr11 /code-map11
+state '{ y { y } } compile-func! /node11 /state
 node11 'func-addr @ /func11-addr
 node11 'body @ 1 @ 'func-addr @ /nested11-addr
 "bytecode11 (nested area): " print
@@ -160,7 +163,7 @@ println!
 
 ; Test 12: Nested function capturing multiple vars (one bound, one free)
 ; { /x { x y + } } where y is free in outer
-code-map11 next-addr11 '{ /x { x y + } } compile-func! /node12 /next-addr12 /code-map12
+state '{ /x { x y + } } compile-func! /node12 /state
 node12 'func-addr @ /func12-addr
 
 ; Execute with arg 10 and context [5] (y=5) - nested should compute x+y = 10+5 = 15
@@ -169,35 +172,35 @@ node12 'func-addr @ /func12-addr
 println!
 
 ; Test 13: Simple generator
-code-map12 next-addr12 '{ [ 1 2 3 ] } compile-func! /node13 /next-addr13 /code-map13
+state '{ [ 1 2 3 ] } compile-func! /node13 /state
 node13 'func-addr @ /func13-addr
 
 "generator test: " print
 [] func13-addr close ! writeln!
 
 ; Test 14: Generator with outer bound variable
-code-map13 next-addr13 '{ /x [ x x 1 + x 2 + ] } compile-func! /node14 /next-addr14 /code-map14
+state '{ /x [ x x 1 + x 2 + ] } compile-func! /node14 /state
 node14 'func-addr @ /func14-addr
 
 "generator bound var test: " print
 10 [] func14-addr close ! writeln!
 
 ; Test 15: Generator with free variable
-code-map14 next-addr14 '{ [ y y 1 + ] } compile-func! /node15 /next-addr15 /code-map15
+state '{ [ y y 1 + ] } compile-func! /node15 /state
 node15 'func-addr @ /func15-addr
 
 "generator free var test: " print
 [7] func15-addr close ! writeln!
 
 ; Test 16: Nested function inside generator
-code-map15 next-addr15 '{ [ { 42 } ] } compile-func! /node16 /next-addr16 /code-map16
+state '{ [ { 42 } ] } compile-func! /node16 /state
 node16 'func-addr @ /func16-addr
 
 "generator with nested func test: " print
 [] func16-addr close ! 0 @ ! println!
 
 ; Test 17: Quoted function, generator, nested quote (via constant pool)
-code-map16 next-addr16 '{ '{ 1 } '[ 2 ] ''x } compile-func! /node17 /next-addr17 /code-map17
+state '{ '{ 1 } '[ 2 ] ''x } compile-func! /node17 /state
 node17 'func-addr @ /func17-addr
 
 "quoted complex terms test: " print
@@ -207,18 +210,18 @@ r1 write " " print r2 write " " print r3 writeln!
 ; Test 18: Tail call
 ; Function { f! } should emit: push-context 0 (f), tail-call (17)
 ; No return instruction since we end with tail-call
-code-map17 next-addr17 '{ f! } compile-func! /node18 /next-addr18 /code-map18
+state '{ f! } compile-func! /node18 /state
 node18 'func-addr @ /func18-addr
 
 "tail call bytecode: " print
-func18-addr next-addr18 dump-bytecode!
+func18-addr state 'addr @ dump-bytecode!
 nl!
 
 ; Verify: push-context=5, slot=0, tail-call=18
 func18-addr peek 5 = { "push-context ok" } { "ERROR: expected push-context" } ?! println!
 func18-addr 1 + peek 0 = { "slot 0 ok" } { "ERROR: expected slot 0" } ?! println!
 func18-addr 2 + peek 18 = { "tail-call ok" } { "ERROR: expected tail-call" } ?! println!
-next-addr18 func18-addr - 3 = { "length ok" } { "ERROR: expected length 3" } ?! println!
+state 'addr @ func18-addr - 3 = { "length ok" } { "ERROR: expected length 3" } ?! println!
 
 ; Test 19: Non-tail call (middle of function)
 ; { f! 1 } should emit:
@@ -232,11 +235,11 @@ next-addr18 func18-addr - 3 = { "length ok" } { "ERROR: expected length 3" } ?! 
 ;   leave-frame 1
 ;   push-int 1
 ;   return
-code-map18 next-addr18 '{ f! 1 } compile-func! /node19 /next-addr19 /code-map19
+state '{ f! 1 } compile-func! /node19 /state
 node19 'func-addr @ /func19-addr
 
 "non-tail call bytecode: " print
-func19-addr next-addr19 dump-bytecode!
+func19-addr state 'addr @ dump-bytecode!
 nl!
 
 ; Verify key instructions are present
@@ -256,6 +259,7 @@ instruction-table 'push-context @ /ocPushContext
 instruction-table 'tail-call @ /ocTailCall
 
 ; Emit inner function: push-int 42, return
+state 'addr @ /next-addr19
 [ocPushInt 42 ocReturn] next-addr19 emit-all-at! /after-inner
 next-addr19 /inner-addr
 
@@ -281,14 +285,17 @@ inner-bv! println!
 "tail call execution test: " print
 outer-bv! println!
 
+; Update state with new addr
+state after-outer 'addr : /state
+
 ; Test 21: Non-tail call execution
 ; Compile a simple function that returns 10
-code-map19 after-outer '{ 10 } compile-func! /ret10-node /after-ret10 /ret10-code-map
+state '{ 10 } compile-func! /ret10-node /state
 ret10-node 'func-addr @ /ret10-addr
 [] ret10-addr close /ret10-bv
 
 ; Compile { f! 1 + } where f is in context slot 0
-ret10-code-map after-ret10 '{ f! 1 + } compile-func! /func21-node /after-func21 /func21-code-map
+state '{ f! 1 + } compile-func! /func21-node /state
 func21-node 'func-addr @ /func21-addr
 
 ; Create bytecodeval with context containing ret10-bv
@@ -300,12 +307,12 @@ func21-bv! println!
 
 ; Test 22: Multiple non-tail calls
 ; Compile { 5 }
-func21-code-map after-func21 '{ 5 } compile-func! /ret5-node /after-ret5 /ret5-code-map
+state '{ 5 } compile-func! /ret5-node /state
 ret5-node 'func-addr @ /ret5-addr
 [] ret5-addr close /ret5-bv
 
 ; Compile { f! g! + } where f and g are in context
-ret5-code-map after-ret5 '{ f! g! + } compile-func! /func22-node /after-func22 /func22-code-map
+state '{ f! g! + } compile-func! /func22-node /state
 func22-node 'func-addr @ /func22-addr
 
 ; Create bytecodeval with context [ret10-bv, ret5-bv]
@@ -317,11 +324,11 @@ func22-bv! println!
 
 ; Test 23: Non-tail call with bound variable
 ; Compile { /x f! x + } where f returns 100
-func22-code-map after-func22 '{ 100 } compile-func! /ret100-node /after-ret100 /ret100-code-map
+state '{ 100 } compile-func! /ret100-node /state
 ret100-node 'func-addr @ /ret100-addr
 [] ret100-addr close /ret100-bv
 
-ret100-code-map after-ret100 '{ /x f! x + } compile-func! /func23-node /after-func23 /func23-code-map
+state '{ /x f! x + } compile-func! /func23-node /state
 func23-node 'func-addr @ /func23-addr
 
 [ret100-bv] func23-addr close /func23-bv

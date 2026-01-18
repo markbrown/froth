@@ -31,6 +31,7 @@ The standard library (`lib/stdlib.froth`) loads automatically unless `-n` is giv
 | `flatten` | array | Flatten nested arrays |
 | `foldl` | array | Apply fn to elements left-to-right |
 | `foldr` | array | Apply fn to elements right-to-left |
+| `get-or` | map | Get value or return default |
 | `lconcat` | list | Concatenate two lists |
 | `lfoldl` | list | Apply fn head-to-tail |
 | `lfoldr` | list | Apply fn tail-to-head |
@@ -221,6 +222,7 @@ Map utilities.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
+| `get-or` | `( map 'key default -- value )` | Get value or return default if key absent |
 | `restrict` | `( map keys -- map )` | Restrict map to only keys in array |
 | `transform-values` | `( map fn -- map )` | Transform each value in map using fn |
 | `merge` | `( map1 map2 -- map )` | Merge maps, map2 values take precedence |
@@ -229,6 +231,8 @@ Map utilities.
 
 ```
 $ 1 'a : 2 'b : 3 'c : /m
+m 'a 0 get-or!                 ; 1 (found)
+m 'z 0 get-or!                 ; 0 (not found, returns default)
 m ['a 'c] restrict!            ; $ 1 'a : 3 'c :
 m { 2 * } transform-values!    ; $ 2 'a : 4 'b : 6 'c :
 $ 1 'a : 2 'b : $ 3 'b : 4 'c : merge!  ; $ 1 'a : 3 'b : 4 'c :

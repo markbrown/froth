@@ -1,6 +1,6 @@
 ; compile.froth - Compiler orchestration
 
-; compile-term-impl: (code-map addr term shadowed-ops seq-fn term-fn func-fn -- code-map addr node)
+; compile-term-impl: (state term shadowed-ops seq-fn term-fn func-fn -- state node)
 ; Build a node for a single term.
 ; Recurses into nested functions and generators.
 ; shadowed-ops: set of operators that are shadowed by binders in outer scope
@@ -21,7 +21,7 @@
   } ?! } ?!
 } def-fn! /compile-term-impl
 
-; compile-seq-impl: (code-map addr terms idx shadowed-ops seq-fn term-fn func-fn -- code-map addr body-arr)
+; compile-seq-impl: (state terms idx shadowed-ops seq-fn term-fn func-fn -- state body-arr)
 ; Process terms from idx to end (left-to-right).
 ; Uses list accumulation internally, converts to array at idx=0.
 ; Tracks binders that shadow operator names and passes them to nested functions.
@@ -54,35 +54,31 @@
   idx 0 = { /list [ list { } lfoldl! ] } { } ?!
 } def-fn! /compile-seq-impl
 
-; compile-func-impl: (code-map addr func shadowed-ops seq-fn term-fn func-fn -- code-map addr func-node)
+; compile-func-impl: (state func shadowed-ops seq-fn term-fn func-fn -- state func-node)
 ; Build the node tree for a function and run analysis passes.
 ; Checks code-map for existing node (deduplication via ref ID).
 ; shadowed-ops: set of operators shadowed by binders in outer scope
-['make-node 'tree-get 'tree-set 'boundness 'liveness 'slots 'codegen] { /func-fn /term-fn /seq-fn /shadowed-ops /func /addr
-  /code-map  ; pop to check cache
+['make-node 'tree-get 'tree-set 'boundness 'liveness 'slots 'codegen] { /func-fn /term-fn /seq-fn /shadowed-ops /func /state
+  state 'code-map @ /code-map
   func ref /func-id
   code-map func-id tree-get! {
     ; In cache (tree-get returned 0): return cached node
     /cached-node
-    code-map addr cached-node
+    state cached-node
   } {
     ; Not in cache (tree-get returned 1): build node, run passes, add to cache
-    ; "compile-func: " print func write " at " print addr print "\n" print
-    ; seq-fn returns (code-map addr body) - leave code-map and addr on stack
+    ; seq-fn returns (state body) - leave state on stack
     ; Pass shadowed-ops to seq-fn so nested functions know about outer shadowed operators
-    code-map addr func 0 shadowed-ops seq-fn term-fn func-fn seq-fn! /body
-    ; Stack: new-code-map new-addr
-    ; Store outer-shadowed-ops on func-node for boundness to use
-    func make-node! body 'body : shadowed-ops 'outer-shadowed-ops : boundness! liveness! slots! codegen!
-    ; Stack: new-code-map final-addr func-node
-    /func-node /final-addr
-    ; Stack: new-code-map
-    func-id func-node tree-set! final-addr func-node
-    ; Stack: updated-code-map final-addr func-node
+    state func 0 shadowed-ops seq-fn term-fn func-fn seq-fn! /body /state
+    ; Run analysis passes
+    state 'addr @ func make-node! body 'body : shadowed-ops 'outer-shadowed-ops : boundness! liveness! slots! codegen! /func-node /final-addr
+    ; Update state with new addr and code-map
+    state 'code-map @ func-id func-node tree-set! /new-code-map
+    state new-code-map 'code-map : final-addr 'addr : func-node
   } ?!
 } def-fn! /compile-func-impl
 
-; compile-func: (code-map addr func -- code-map addr func-node)
+; compile-func: (state func -- state func-node)
 ; Build the node tree for a function and run all compiler passes.
 ; Pipeline: boundness -> liveness -> slots -> codegen
 ; Recurses into nested functions to build complete analyzed nodes with bytecode.
@@ -91,47 +87,46 @@
   $ compile-seq-impl compile-term-impl compile-func-impl compile-func-impl!
 } def-fn! /compile-func
 
-; compile-closure-impl: (cache code-map addr closureval name self -- cache code-map addr bytecodeval)
+; compile-closure-impl: (state closureval name self -- state bytecodeval)
 ; Compile a closure to bytecode. Recursively compiles captured closures.
 ; Uses cache to avoid recompiling the same closure.
-{ /self /name /closureval /addr /code-map /cache
-  cache name closureval cache-get! {
+{ /self /name /closureval /state
+  state 'cache @ name closureval cache-get! {
     ; Found in cache (cache-get returned 0)
     /bytecodeval
-    cache code-map addr bytecodeval
+    state bytecodeval
   } {
     ; Not found (cache-get returned 1)
     "FROTH: compiled " print name writeln!
     closureval open /body /env
 
     ; Compile the function body
-    ; cache stays on stack, compile-func doesn't touch it
-    cache code-map addr body compile-func! /func-node /addr /code-map /cache
+    state body compile-func! /func-node /state
 
     ; Get free vars array (with default if not present)
-    func-node 'free-vars-array in { func-node 'free-vars-array @ } { [] } ?! /free-vars
+    func-node 'free-vars-array [] get-or! /free-vars
 
     ; Process free vars, building context
-    ; Thread (cache code-map addr ctx-list) through foldl
-    cache code-map addr .
-    free-vars { /var-name /ctx-list /addr /code-map /cache
+    ; Thread (state ctx-list) through foldl
+    state .
+    free-vars { /var-name /ctx-list /state
       env var-name @ /value
       value isClosure {
         value open /vbody /venv
         vbody isFunc {
           ; Uncompiled closureval - recursively compile
-          cache code-map addr value var-name self self!
-          /compiled /addr /code-map /cache
-          cache code-map addr ctx-list compiled ,
+          state value var-name self self!
+          /compiled /state
+          state ctx-list compiled ,
         } {
           ; Already compiled (bytecodeval) - use as-is
-          cache code-map addr ctx-list value ,
+          state ctx-list value ,
         } ?!
       } {
         ; Not a closure - use as-is
-        cache code-map addr ctx-list value ,
+        state ctx-list value ,
       } ?!
-    } foldl! /ctx-list /addr /code-map /cache
+    } foldl! /ctx-list /state
 
     ; Convert context list to array (lfoldr reverses the cons list back to slot order)
     [ ctx-list { } lfoldr! ] /context
@@ -140,21 +135,22 @@
     context func-node 'func-addr @ close /bytecodeval
 
     ; Update cache and return
-    cache name closureval bytecodeval cache-set! code-map addr bytecodeval
+    state 'cache @ name closureval bytecodeval cache-set! /cache
+    state cache 'cache : bytecodeval
   } ?!
 } /compile-closure-impl
 
-; compile-named-closure: (cache code-map addr closureval name -- cache code-map addr bytecodeval)
+; compile-named-closure: (state closureval name -- state bytecodeval)
 ; Compile a closure to bytecode with caching.
 { compile-closure-impl compile-closure-impl! } /compile-named-closure
 
-; compile: (cache code-map addr env-map name -- cache code-map addr env-map)
+; compile: (state env-map name -- state env-map)
 ; Look up identifier in env-map, compile it, and update env-map with the result.
-{ /name /env-map /addr /code-map /cache
+{ /name /env-map /state
   env-map name @ /closureval
-  cache code-map addr closureval name compile-named-closure!
-  /bytecodeval /addr /code-map /cache
-  cache code-map addr env-map bytecodeval name :
+  state closureval name compile-named-closure!
+  /bytecodeval /state
+  state env-map bytecodeval name :
 } /compile
 
 ; Remove impl functions

@@ -10,9 +10,10 @@ This document describes the compiler infrastructure for Froth!, including byteco
 | `cache-empty` | cache | Create an empty cache |
 | `cache-get` | cache | Look up key under identifier |
 | `cache-set` | cache | Store key-value pair under identifier |
-| `compile` | compile | Compile a binding in an env-map |
+| `compile` | compile | Compile a binding in an env-map using state |
 | `compile-func` | compile | Build node tree, run analysis passes, and generate bytecode |
 | `compile-named-closure` | compile | Compile a closure to bytecode with caching |
+| `empty-state` | state | Create an empty compiler state |
 | `disasm` | disasm | Disassemble n instructions at address |
 | `disasm-one` | disasm | Disassemble one instruction at address |
 | `emit-all-at` | bytecode | Write array to bytecode store |
@@ -130,13 +131,13 @@ Bytecode disassembler for debugging compiled code.
 
 ```
 ; Compile a function and disassemble it
-tree-empty! 0 '{ 1 2 + } compile-func! /node /addr /code-map
+$ tree-empty! 'code-map : 0 'addr : '{ 1 2 + } compile-func! /node /state
 node 'func-addr @ 4 disasm!
 ; Output:
-; 2000: push-int 1
-; 2002: push-int 2
-; 2004: op 2 (+)
-; 2006: return
+; 0: push-int 1
+; 2: push-int 2
+; 4: op 2 (+)
+; 6: return
 ```
 
 ## Cache (cache.froth)
@@ -342,22 +343,22 @@ Takes the function-node from `liveness` and adds slot allocation information.
 Slots are allocated on-demand and reused when freed. Binder slots are freed at the variable's last use. Register save slots are allocated once at the first call that needs them and reused by subsequent calls. Closures get their own frame (slots start at 0), while generators share the outer frame.
 
 ```
-tree-empty! 0 '{/x x} compile-func! /node /addr /code-map
+$ tree-empty! 'code-map : 0 'addr : '{/x x} compile-func! /node drop!
 node 'max-slots @               ; 1 - one slot needed
 node 'body @ 0 @ 'slot @        ; 0 - binder gets slot 0
 node 'body @ 1 @ 'slot @        ; 0 - reference uses slot 0
 
-tree-empty! 0 '{/x x /y y} compile-func! /node /addr /code-map
+$ tree-empty! 'code-map : 0 'addr : '{/x x /y y} compile-func! /node drop!
 node 'max-slots @               ; 1 - slot 0 reused for y
 
-tree-empty! 0 '{/x {/y y} x} compile-func! /node /addr /code-map
+$ tree-empty! 'code-map : 0 'addr : '{/x {/y y} x} compile-func! /node drop!
 node 'max-slots @               ; 1 - outer needs 1 slot
 node 'body @ 1 @ 'max-slots @   ; 1 - closure needs 1 slot
 
-tree-empty! 0 '{/x /y [/z z] y x} compile-func! /node /addr /code-map
+$ tree-empty! 'code-map : 0 'addr : '{/x /y [/z z] y x} compile-func! /node drop!
 node 'max-slots @               ; 3 - generator uses slot 2 for z
 
-tree-empty! 0 '{/x x x * f! 1 +} compile-func! /node /addr /code-map
+$ tree-empty! 'code-map : 0 'addr : '{/x x x * f! 1 +} compile-func! /node drop!
 node 'max-slots @               ; 1 - slot 0 reused for RP save
 node 'body @ 5 @ 'rp-save-slot @ ; 0 - apply saves RP to slot 0
 ```
@@ -394,15 +395,33 @@ Supports:
 
 ```
 ; Compile a simple function
-tree-empty! 0 '{ 1 2 3 } compile-func! /node /addr /code-map
-addr node codegen! /node /next-addr
+$ tree-empty! 'code-map : 0 'addr : '{ 1 2 3 } compile-func! /node /state
 node 'func-addr @              ; bytecode entry point
 ; Emits: push-int 1 push-int 2 push-int 3 return
 
 ; Compile with bound variables
-tree-empty! 0 '{ /x x } compile-func! /node /addr /code-map
-addr node codegen! /node /next-addr
+$ tree-empty! 'code-map : 0 'addr : '{ /x x } compile-func! /node /state
 ; Emits: enter-frame 1 pop-local 0 push-local 0 leave-frame 1 return
+```
+
+## State (state.froth)
+
+Compiler state encapsulation. The compiler threads a state map through all compilation functions.
+
+| Name | Stack Effect | Description |
+|------|--------------|-------------|
+| `empty-state` | `( -- state )` | Create an empty compiler state |
+
+The state is a map with three fields:
+
+- `'cache`: Compilation cache (from `cache-empty`)
+- `'code-map`: Tree23 for function deduplication
+- `'addr`: Next available bytecode address
+
+```
+empty-state! /state            ; create fresh state
+state 'addr @                  ; read current address
+state 100 'addr :              ; update address field
 ```
 
 ## Compile (compile.froth)
@@ -411,16 +430,17 @@ Compiler orchestration. Builds the node tree and runs all analysis passes.
 
 | Name | Stack Effect | Description |
 |------|--------------|-------------|
-| `compile` | `( cache code-map addr env-map name -- cache code-map addr env-map )` | Compile a binding in env-map |
-| `compile-func` | `( code-map addr func -- code-map addr func-node )` | Compile a function |
-| `compile-named-closure` | `( cache code-map addr closureval name -- cache code-map addr bytecodeval )` | Compile a closure to bytecode |
+| `compile` | `( state env-map name -- state env-map )` | Compile a binding in env-map |
+| `compile-func` | `( state func -- state func-node )` | Compile a function |
+| `compile-named-closure` | `( state closureval name -- state bytecodeval )` | Compile a closure to bytecode |
 
-Takes a quoted function and returns a fully analyzed function-node. Recursively compiles nested functions before the outer function, so each function's analysis can assume nested functions are already complete.
+All functions take a state map and return an updated state. `compile-func` takes a quoted function and returns a fully analyzed function-node. Recursively compiles nested functions before the outer function, so each function's analysis can assume nested functions are already complete.
 
-- `code-map`: Tree23 for deduplication (maps function ref IDs to analyzed nodes)
-- `addr`: Next available bytecode address (threaded through for future codegen)
-- `func`: Quoted function to compile
-- `func-node`: Fully analyzed node with boundness, liveness, and slots info
+State fields used by each function:
+
+- `compile-func`: Uses `'code-map` and `'addr`
+- `compile-named-closure`: Uses `'cache`, `'code-map`, and `'addr`
+- `compile`: Uses all state fields
 
 The compilation pipeline for each function:
 
@@ -433,13 +453,13 @@ The compilation pipeline for each function:
 Nested functions are compiled bottom-up: when processing a nested function term, `compile-func` recursively compiles it before continuing with the outer function. This means the analysis passes don't need to recurse into nested functions - they just read the already-computed results.
 
 ```
-tree-empty! 0 '{ /x x } compile-func! /node /addr /code-map
+$ tree-empty! 'code-map : 0 'addr : '{ /x x } compile-func! /node /state
 node 'max-slots @              ; 1
 node 'body @ 0 @ 'slot @       ; 0 (binder slot)
 node 'body @ 1 @ 'slot @       ; 0 (reference slot)
 
 ; Nested functions are compiled first
-tree-empty! 0 '{ /x { x } } compile-func! /node /addr /code-map
+$ tree-empty! 'code-map : 0 'addr : '{ /x { x } } compile-func! /node /state
 node 'body @ 1 @ 'free-vars-map @  ; $ 0 'x : (nested func captured x)
 ```
 
@@ -447,9 +467,7 @@ node 'body @ 1 @ 'free-vars-map @  ; $ 0 'x : (nested func captured x)
 
 Compiles a closureval to a bytecodeval, recursively compiling any captured closures.
 
-- `cache`: Cache for compiled closures (from `cache-empty!`)
-- `code-map`: Tree23 for function deduplication
-- `addr`: Next available bytecode address
+- `state`: Compiler state (uses `'cache`, `'code-map`, `'addr`)
 - `closureval`: The closure to compile
 - `name`: Quoted identifier for cache lookup
 - `bytecodeval`: The compiled closure (array + bytecode address)
@@ -468,27 +486,25 @@ The function:
 ```
 ; Simple closure
 { 1 2 + } /f
-cache-empty! tree-empty! 0 f 'f compile-named-closure! /bv /addr /code-map /cache
+empty-state! f 'f compile-named-closure! /bv /state
 bv!                            ; 3
 
 ; Closure capturing another closure (recursive compilation)
 { 10 } /g
 { g! 1 + } /f
-cache-empty! tree-empty! 0 f 'f compile-named-closure! /bv /addr /code-map /cache
+empty-state! f 'f compile-named-closure! /bv /state
 bv!                            ; 11 (g is compiled automatically)
 
-; Cache reuse
-cache code-map addr f 'f compile-named-closure! /bv2 /addr2 /code-map /cache
-addr addr2 =                   ; 0 (same address, cache hit)
+; Cache reuse (state contains previously compiled closures)
+state f 'f compile-named-closure! /bv2 /state2
+state 'addr @ state2 'addr @ = ; 0 (same address, cache hit)
 ```
 
 ### compile
 
 Convenience wrapper that looks up a binding in an env-map, compiles it, and updates the map.
 
-- `cache`: Cache for compiled closures
-- `code-map`: Tree23 for function deduplication
-- `addr`: Next available bytecode address
+- `state`: Compiler state (uses all fields)
 - `env-map`: Map from identifiers to closures
 - `name`: Quoted identifier to compile
 
@@ -497,10 +513,10 @@ Convenience wrapper that looks up a binding in an env-map, compiles it, and upda
 { 10 } /g
 $ f 'f : g 'g : /env-map
 
-cache-empty! tree-empty! 0 env-map 'f compile! /env-map /addr /code-map /cache
+empty-state! env-map 'f compile! /env-map /state
 env-map 'f @ !                 ; 3 (compiled and executed)
 
-cache code-map addr env-map 'g compile! /env-map /addr /code-map /cache
+state env-map 'g compile! /env-map /state
 env-map 'g @ !                 ; 10
 ```
 
