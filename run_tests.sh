@@ -34,7 +34,12 @@ for test_file in "$TESTS_DIR"/*.froth; do
         pass=$((pass + 1))
     else
         echo "FAIL: $test_name"
-        errors="$errors\n=== $test_name ===\nExpected:\n$expected\nActual:\n$actual\n"
+        # Store diff for later display
+        actual_file=$(mktemp)
+        printf '%s\n' "$actual" > "$actual_file"
+        diff_output=$(diff -u "$expected_file" "$actual_file" | tail -n +3) || true
+        rm -f "$actual_file"
+        errors="$errors\n=== $test_name ===\n$diff_output\n"
         fail=$((fail + 1))
     fi
 done
